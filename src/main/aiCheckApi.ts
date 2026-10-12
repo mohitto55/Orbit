@@ -5,6 +5,7 @@ import path from 'path'
 import type { Ctx } from '../core/workspace'
 import { cleanEnv } from '../core/terminal'
 import { decideFinding, lastCheckAt, listAiChecks, runAiCheck, type AgentRunner, type CheckAgent } from '../core/aicheck'
+import { resolveRequest } from '../core/drift'
 
 const TIMEOUT_MS = 10 * 60 * 1000
 
@@ -82,6 +83,10 @@ export function createAiCheckApi(deps: { send: (channel: string, payload: unknow
     },
     async aiLastCheckAt() {
       return lastCheckAt(await need())
+    },
+    /** IR-F08: 변경 요청을 반영 완료 또는 반려로 닫는다. */
+    async requestResolve(id: string, status: 'done' | 'rejected', note?: string) {
+      return resolveRequest(await need(), id, status, note)
     },
     /** DR-F08: 점검 항목을 받아들이거나 무시한다. */
     async aiDecide(checkId: string, findingId: string, accept: boolean) {

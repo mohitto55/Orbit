@@ -3,7 +3,7 @@ id: dom-domain-modeling
 kind: domain
 title: 도메인
 subdomainType: Core
-version: 5
+version: 6
 status: draft
 ---
 
@@ -31,7 +31,6 @@ status: draft
 | ChangeSet | 저장 1회의 기록. 변경 크기, 요약, 출처, 바뀐 항목 |  |
 | 경로 표기 | 상위부터 이어 쓴 이름 (`주문 › 고객`) | 이름이 겹칠 때 구분용. 식별자는 아니다 |
 | 폐기됨 | 더 쓰지 않지만 이력 보존을 위해 남긴 도메인 |  |
-| 변경 요청 | 도메인에 반영해 달라고 들어온 요청. 사람이 반영하면 요청의 출처와 함께 변경 기록이 남는다 | 도메인이 받아서 반영한다 |
 
 ## 하지 않는 것
 

@@ -17,8 +17,8 @@ export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification
 
 const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드' },
-  { id: 'domains', label: '도메인', badge: (d) => d.pendingRequests },
-  { id: 'reviews', label: '변경 검토', badge: (d) => d.pendingReviews },
+  { id: 'domains', label: '도메인' },
+  { id: 'reviews', label: '변경 검토', badge: (d) => d.pendingReviews + d.pendingRequests },
   { id: 'tasks', label: '할 일', badge: (d) => d.inbox + d.dueTasks.length },
   { id: 'verification', label: '테스트', badge: (d) => d.lastRun?.failed ?? 0 },
   { id: 'drift', label: '도메인 점검', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },

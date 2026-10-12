@@ -5,11 +5,35 @@ import type { ChangeSet, Decision } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
 import { MdViewer } from '../Markdown'
 import DiffView from './DiffView'
+import Requests from './Requests'
 
 const LAYER: Record<string, string> = { spec: '기능 명세 표', design: '설계', test: '테스트' }
 const KIND: Record<string, string> = { domain: '도메인', spec: '기능 명세 표', design: '설계' }
 
-export default function Reviews({ refreshKey, reloadBadges, go }: PageProps) {
+/** 변경 검토: 변경에 대해 사람이 결정할 것을 모은다. 변경 요청(바깥 → 도메인)과 확인할 문서(도메인 → 아래). */
+export default function Reviews(props: PageProps) {
+  const [requests] = useLoad(() => api.listRequests(), [props.refreshKey])
+  const [pending] = useLoad(() => api.pendingItems(), [props.refreshKey])
+  const reqCount = (requests ?? []).filter((r) => r.status === 'pending').length
+  const [tab, setTab] = useState<'requests' | 'docs' | null>(null)
+  const current = tab ?? (reqCount > 0 || !(pending?.length ?? 0) ? 'requests' : 'docs')
+  return (
+    <div className="drift-page">
+      <div className="tabs drift-tabs">
+        <button className={current === 'requests' ? 'on' : ''} onClick={() => setTab('requests')}>
+          변경 요청 {reqCount > 0 && <span className="count">{reqCount}</span>}
+        </button>
+        <button className={current === 'docs' ? 'on' : ''} onClick={() => setTab('docs')}>
+          확인할 문서 {(pending?.length ?? 0) > 0 && <span className="count">{pending!.length}</span>}
+        </button>
+      </div>
+      {current === 'requests' ? <Requests {...props} /> : <ImpactReviews {...props} />}
+    </div>
+  )
+}
+
+/** 도메인 → 아래: 위 층이 크게 바뀌어 확인할 아래 문서 */
+function ImpactReviews({ refreshKey, reloadBadges, go }: PageProps) {
   const [pending, reload] = useLoad(() => api.pendingItems(), [refreshKey])
   const [reviews] = useLoad(() => api.listReviews(), [refreshKey])
   const [docs] = useLoad(() => api.docIndex(), [refreshKey])

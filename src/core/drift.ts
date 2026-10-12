@@ -47,7 +47,9 @@ export interface DomainRequest {
   excerpt: string
   note?: string
   source: string
-  status: 'pending' | 'done'
+  status: 'pending' | 'done' | 'rejected'
+  /** 반영·반려할 때 남긴 메모 */
+  resolution?: string
   created: string
   file: string
 }
@@ -229,9 +231,11 @@ export async function listRequests(ctx: Ctx): Promise<DomainRequest[]> {
   return out
 }
 
-export async function resolveRequest(ctx: Ctx, id: string): Promise<void> {
+/** IR-F08: 변경 요청을 반영 완료(done) 또는 반려(rejected)로 닫는다. */
+export async function resolveRequest(ctx: Ctx, id: string, status: 'done' | 'rejected' = 'done', note = ''): Promise<void> {
   const req = (await listRequests(ctx)).find((r) => r.id === id)
   if (!req) throw new Error(`변경 요청을 찾을 수 없습니다: ${id}`)
+  if (req.status !== 'pending') throw new Error('이미 처리한 변경 요청입니다')
   const { data, content } = await readMd(req.file)
-  await writeMd(req.file, { ...data, status: 'done' }, content)
+  await writeMd(req.file, { ...data, status, resolvedAt: nowIso(), ...(note ? { resolution: note } : {}) }, content)
 }
