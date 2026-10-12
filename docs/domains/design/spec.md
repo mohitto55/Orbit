@@ -1,14 +1,14 @@
 ---
 id: spec-design
 kind: spec
-title: Design 기능 명세
+title: 설계 기능 명세
 basedOn:
   - { ref: dom-design, version: 1 }
 version: 1
 status: draft
 ---
 
-# Design 기능 명세
+# 설계 기능 명세
 
 기능을 어떻게 만들지 설계한다. 기능별 설계와 시스템 공통 설계를 구분한다. (3층)
 

@@ -1,14 +1,14 @@
 ---
 id: spec-task
 kind: spec
-title: Task 기능 명세
+title: 할 일 기능 명세
 basedOn:
   - { ref: dom-task, version: 1 }
 version: 1
 status: draft
 ---
 
-# Task 기능 명세
+# 할 일 기능 명세
 
 나중에 할 일을 작업 유형과 시기를 붙여 보관하고, 때가 되면 다시 알려준다. (P2 해결)
 
@@ -20,8 +20,8 @@ status: draft
 | TK-F04 | Inbox 정리 알림 | 분류되지 않은 할 일이 쌓이지 않게 한다 | AC1: 설정 시각에 Inbox 항목이 있으면 알림이 뜬다<br>AC2: 항목이 없으면 알리지 않는다 | 초안 |
 | TK-F05 | 시기 도래 알림 | 해야 할 때를 놓치지 않는다 | AC1: 기한이 지난 Task가 알림과 함께 첫 화면 상단에 표시된다<br>AC2: 트리거 조건(명세 활성, 도메인 변경, 다른 Task 완료)이 충족되면 같은 방식으로 표시된다 | 초안 |
 | TK-F06 | 목록과 재검토 | 미뤄둔 일을 주기적으로 다시 본다 | AC1: 시기별·유형별·도메인별로 묶어 볼 수 있다<br>AC2: 주 1회 `나중`·`언젠가` Task 재검토 목록이 표시된다 | 초안 |
-| TK-F07 | 상태 변경 | 진행 상황을 기록한다 | AC1: 상태는 대기 → 진행 → 완료 / 취소다<br>AC2: 완료 시 도메인 로직이 바뀌었는지 묻고, "예"면 Domain Modeling에 변경 요청을 보낸다 | 초안 |
-| TK-F08 | 자동 생성 | 다른 도메인에서 생긴 할 일을 받는다 | AC1: Impact Review 보류·테스트 수정 필요 시 `spec-sync`/`design-sync`/`test` Task가 생성된다<br>AC2: Verification에서 `test`/`bug` Task가 생성된다<br>AC3: Drift에서 고른 할 일이 Inbox 항목으로 들어온다 | 초안 |
+| TK-F07 | 상태 변경 | 진행 상황을 기록한다 | AC1: 상태는 대기 → 진행 → 완료 / 취소다<br>AC2: 완료 시 도메인 로직이 바뀌었는지 묻고, "예"면 도메인에 변경 요청을 보낸다 | 초안 |
+| TK-F08 | 자동 생성 | 다른 도메인에서 생긴 할 일을 받는다 | AC1: 확인표시 보류·테스트 수정 필요 시 `spec-sync`/`design-sync`/`test` Task가 생성된다<br>AC2: 테스트에서 `test`/`bug` Task가 생성된다<br>AC3: 작업 대화에서 고른 할 일이 Inbox 항목으로 들어온다 | 초안 |
 | TK-F09 | GitHub Issue 연동 | 저장소의 이슈와 할 일을 맞춘다 | AC1: Task로 Issue를 만들면 Task에 Issue 번호가 기록된다<br>AC2: 연결된 Issue가 닫히면 Task 완료를 제안한다 | 초안 |
 
 ## 용어

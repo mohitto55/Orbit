@@ -1,14 +1,14 @@
 ---
 id: spec-knowledge-graph
 kind: spec
-title: Knowledge Graph 기능 명세
+title: 관계도 기능 명세
 basedOn:
   - { ref: dom-knowledge-graph, version: 1 }
 version: 1
 status: draft
 ---
 
-# Knowledge Graph 기능 명세
+# 관계도 기능 명세
 
 모든 문서를 노드로, 문서 사이 관계를 링크로 관리하고 그래프로 보여준다.
 

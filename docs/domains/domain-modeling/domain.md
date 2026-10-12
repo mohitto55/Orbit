@@ -1,13 +1,13 @@
 ---
 id: dom-domain-modeling
 kind: domain
-title: Domain Modeling
+title: 도메인
 subdomainType: Core
-version: 2
+version: 3
 status: draft
 ---
 
-# Domain Modeling
+# 도메인
 
 > 해결 문제: P1
 
@@ -25,25 +25,25 @@ status: draft
 | 하위 도메인 | 상위 도메인이 정확히 하나인 도메인 |  |
 | 상위 도메인 (parent) | 하위 도메인이 속한 도메인. 하나뿐이다 |  |
 | 도메인 유형 | `Core` / `Supporting` / `Generic`. 전략적 중요도 |  |
-| 개념 (Concept) | 도메인 안의 Entity / Value Object / Aggregate / Event / Policy / Term. 정확히 한 도메인에 속한다 | Term은 이 도메인 안에서만 유효한 용어. 프로젝트 전반 용어는 Knowledge |
+| 개념 (Concept) | 도메인 안의 Entity / Value Object / Aggregate / Event / Policy / Term. 정확히 한 도메인에 속한다 | Term은 이 도메인 안에서만 유효한 용어. 프로젝트 전반 용어는 지식 |
 | 버전 | 도메인 문서의 정수 버전. 저장할 때마다 1 오른다 | 개념에는 버전이 없다 |
-| 변경 크기 | `큰 변경`(규칙·구조 변경, 이동) / `작은 변경`(설명 보강, 오타) | 큰 변경만 Impact Review를 시작한다 |
+| 변경 크기 | `큰 변경`(규칙·구조 변경, 이동) / `작은 변경`(설명 보강, 오타) | 큰 변경만 확인표시를 시작한다 |
 | ChangeSet | 저장 1회의 기록. 변경 크기, 요약, 출처, 바뀐 항목 |  |
 | 경로 표기 | 상위부터 이어 쓴 이름 (`주문 › 고객`) | 이름이 겹칠 때 구분용. 식별자는 아니다 |
 | 폐기됨 | 더 쓰지 않지만 이력 보존을 위해 남긴 도메인 |  |
 
 ## 하지 않는 것
 
-- 변경이 다른 문서에 미치는 영향 판단 (→ Impact Review)
+- 변경이 다른 문서에 미치는 영향 판단 (→ 확인표시)
 
 ## 다른 도메인과의 관계
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 발행 | Impact Review | 도메인 큰 변경 시 영향 검토 시작 |
-| 발행 | Harness | 원본 변경 알림 |
-| 수신 | Drift · Task | 도메인 변경 요청 |
-| 제공 | Spec | 도메인 목록과 현재 버전 |
+| 발행 | 확인표시 | 도메인 큰 변경 시 영향 검토 시작 |
+| 발행 | 에이전트 지침 | 원본 변경 알림 |
+| 수신 | 작업 대화 · Task | 도메인 변경 요청 |
+| 제공 | 기능 명세 | 도메인 목록과 현재 버전 |
 
 ## 문서
 

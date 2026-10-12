@@ -16,7 +16,7 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
 
   return (
     <div className="page narrow-page">
-      <h2>설정</h2>
+      <h2>프로젝트 설정</h2>
       <div className="muted small">
         {project.projectDir} · 데이터 폴더 {project.dataRoot} {project.isGit ? '' : '· git 저장소 아님'}
       </div>

@@ -1,13 +1,13 @@
 ---
 id: dom-integration
 kind: domain
-title: Integration
+title: 연동
 subdomainType: Generic
-version: 2
+version: 3
 status: draft
 ---
 
-# Integration
+# 연동
 
 ## 역할
 
@@ -34,9 +34,9 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 제공 | Drift | 작업 대화 |
-| 제공 | Verification | 테스트 실행 결과 |
-| 수신 | Task · Harness | Issue 동기화, 하네스 파일 쓰기 |
+| 제공 | 작업 대화 | 작업 대화 |
+| 제공 | 테스트 | 테스트 실행 결과 |
+| 수신 | Task · 에이전트 지침 | Issue 동기화, 하네스 파일 쓰기 |
 
 ## 문서
 

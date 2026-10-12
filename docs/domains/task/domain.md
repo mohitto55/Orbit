@@ -1,13 +1,13 @@
 ---
 id: dom-task
 kind: domain
-title: Task
+title: 할 일
 subdomainType: Core
-version: 2
+version: 3
 status: draft
 ---
 
-# Task
+# 할 일
 
 > 해결 문제: P2
 
@@ -38,9 +38,9 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Impact Review · Verification · Drift | 할 일 생성 요청 |
-| 요청 | Domain Modeling | 완료 시 도메인 변경 요청 |
-| 요청 | Integration | GitHub Issue 동기화 |
+| 수신 | 확인표시 · 테스트 · 작업 대화 | 할 일 생성 요청 |
+| 요청 | 도메인 | 완료 시 도메인 변경 요청 |
+| 요청 | 연동 | GitHub Issue 동기화 |
 
 ## 문서
 

@@ -1,13 +1,13 @@
 ---
 id: dom-knowledge
 kind: domain
-title: Knowledge
+title: 지식
 subdomainType: Supporting
-version: 2
+version: 3
 status: draft
 ---
 
-# Knowledge
+# 지식
 
 ## 역할
 
@@ -35,8 +35,8 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Drift | 지식 초안 |
-| 발행 | Harness | 지식 변경 알림 |
+| 수신 | 작업 대화 | 지식 초안 |
+| 발행 | 에이전트 지침 | 지식 변경 알림 |
 
 ## 문서
 

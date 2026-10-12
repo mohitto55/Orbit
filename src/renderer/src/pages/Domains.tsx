@@ -126,7 +126,10 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
 }
 
 function Tree(props: { domains: Domain[]; parent: string | undefined; depth: number; selected: string | null; onSelect: (id: string) => void; requests: string[] }) {
-  const kids = props.domains.filter((d) => (d.parent ?? undefined) === props.parent)
+  const rank = { Core: 0, Supporting: 1, Generic: 2 } as Record<string, number>
+  const kids = props.domains
+    .filter((d) => (d.parent ?? undefined) === props.parent)
+    .sort((a, b) => (rank[a.subdomainType] ?? 9) - (rank[b.subdomainType] ?? 9) || a.title.localeCompare(b.title, 'ko'))
   return (
     <>
       {kids.map((d) => (

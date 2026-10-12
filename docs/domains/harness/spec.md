@@ -1,14 +1,14 @@
 ---
 id: spec-harness
 kind: spec
-title: Harness 기능 명세
+title: 에이전트 지침 기능 명세
 basedOn:
   - { ref: dom-harness, version: 1 }
 version: 1
 status: draft
 ---
 
-# Harness 기능 명세
+# 에이전트 지침 기능 명세
 
 도메인·명세·설계·지식을 Claude Code / Codex용 작업 환경 파일로 만들고, 원본이 바뀌면 다시 만들 때가 됐음을 알린다.
 

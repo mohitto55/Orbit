@@ -1,13 +1,13 @@
 ---
 id: dom-harness
 kind: domain
-title: Harness
+title: 에이전트 지침
 subdomainType: Supporting
-version: 2
+version: 3
 status: draft
 ---
 
-# Harness
+# 에이전트 지침
 
 ## 역할
 
@@ -24,7 +24,7 @@ status: draft
 | 생성 결과물 | `CLAUDE.md`, `AGENTS.md`, skill, slash command 등 |  |
 | 관리 영역 | 생성 파일에서 표식 사이 구간. 앱은 여기만 고친다 |  |
 | 생성 기준 | 생성할 때 쓴 원본 문서와 버전 목록 |  |
-| 낡음 | 생성 기준 이후 원본이 바뀐 상태 (도메인 작은 변경 제외) | Spec·Design의 낡음과 조건이 다르다 |
+| 낡음 | 생성 기준 이후 원본이 바뀐 상태 (도메인 작은 변경 제외) | 기능 명세·설계의 낡음과 조건이 다르다 |
 
 ## 하지 않는 것
 
@@ -34,8 +34,8 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Domain Modeling · Spec · Design · Knowledge | 원본 변경 알림 |
-| 요청 | Integration | 하네스 파일 쓰기 |
+| 수신 | 도메인 · 기능 명세 · 설계 · 지식 | 원본 변경 알림 |
+| 요청 | 연동 | 하네스 파일 쓰기 |
 
 ## 문서
 

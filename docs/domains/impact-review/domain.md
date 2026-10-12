@@ -1,13 +1,13 @@
 ---
 id: dom-impact-review
 kind: domain
-title: Impact Review
+title: 확인표시
 subdomainType: Core
-version: 2
+version: 3
 status: draft
 ---
 
-# Impact Review
+# 확인표시
 
 > 해결 문제: P1
 
@@ -36,8 +36,8 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Domain Modeling · Spec · Design | 변경 이벤트 |
-| 요청 | Spec · Design · Verification | 확인 요청 |
+| 수신 | 도메인 · 기능 명세 · 설계 | 변경 이벤트 |
+| 요청 | 기능 명세 · 설계 · 테스트 | 확인 요청 |
 | 요청 | Task | 보류된 확인을 Task로 |
 
 ## 문서

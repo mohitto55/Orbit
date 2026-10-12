@@ -1,13 +1,13 @@
 ---
 id: dom-drift
 kind: domain
-title: Drift
+title: 작업 대화
 subdomainType: Core
-version: 2
+version: 3
 status: draft
 ---
 
-# Drift
+# 작업 대화
 
 > 해결 문제: P3
 
@@ -36,9 +36,9 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Integration | 작업 대화 |
-| 요청 | Domain Modeling | 도메인 변경 요청 |
-| 요청 | Task · Knowledge | 할 일·지식 초안 |
+| 수신 | 연동 | 작업 대화 |
+| 요청 | 도메인 | 도메인 변경 요청 |
+| 요청 | Task · 지식 | 할 일·지식 초안 |
 
 ## 문서
 

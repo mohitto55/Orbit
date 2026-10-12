@@ -18,14 +18,14 @@ export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification
 const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드' },
   { id: 'domains', label: '도메인', badge: (d) => d.pendingRequests },
-  { id: 'reviews', label: '확인 필요', badge: (d) => d.pendingReviews },
+  { id: 'reviews', label: '확인표시', badge: (d) => d.pendingReviews },
   { id: 'tasks', label: '할 일', badge: (d) => d.inbox + d.dueTasks.length },
-  { id: 'verification', label: '검증', badge: (d) => d.lastRun?.failed ?? 0 },
-  { id: 'drift', label: 'Drift 검토', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
+  { id: 'verification', label: '테스트', badge: (d) => d.lastRun?.failed ?? 0 },
+  { id: 'drift', label: '작업 대화', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
   { id: 'knowledge', label: '지식' },
-  { id: 'graph', label: '그래프' },
-  { id: 'harness', label: '하네스' },
-  { id: 'settings', label: '설정' }
+  { id: 'graph', label: '관계도' },
+  { id: 'harness', label: '에이전트 지침' },
+  { id: 'settings', label: '프로젝트 설정' }
 ]
 
 export interface PageProps {

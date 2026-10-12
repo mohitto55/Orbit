@@ -30,7 +30,7 @@ export default function Harness({ refreshKey }: PageProps) {
 
   return (
     <div className="page">
-      <h2>하네스</h2>
+      <h2>에이전트 지침</h2>
       <div className="row">
         <div className="seg">
           <button className={target === 'claude' ? 'on' : ''} onClick={() => { setTarget('claude'); setPreview(null) }}>

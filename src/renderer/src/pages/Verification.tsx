@@ -59,7 +59,7 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
   return (
     <div className="page">
       <div className="row between">
-        <h2>검증</h2>
+        <h2>테스트</h2>
         <div className="row">
           <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="필터 인자 (선택)" />
           {running ? (

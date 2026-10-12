@@ -48,7 +48,7 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
   return (
     <div className="split">
       <div className="pane-list">
-        <h3>확인 필요 ({pending.length})</h3>
+        <h3>확인표시 ({pending.length})</h3>
         {pending.length === 0 && <Empty>모든 확인을 마쳤습니다</Empty>}
         {pending.map((p, i) => (
           <button key={p.review.id + p.item.target} className={`tree-item ${cur === p ? 'on' : ''}`} onClick={() => setSel(i)}>

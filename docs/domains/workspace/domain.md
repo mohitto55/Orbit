@@ -1,13 +1,13 @@
 ---
 id: dom-workspace
 kind: domain
-title: Workspace
+title: 프로젝트
 subdomainType: Supporting
-version: 2
+version: 3
 status: draft
 ---
 
-# Workspace
+# 프로젝트
 
 ## 역할
 
@@ -22,7 +22,7 @@ status: draft
 | 프로젝트 | 로컬 저장소 폴더 하나에 대응하는 작업 단위 |  |
 | 데이터 폴더 | 프로젝트의 모든 md 문서가 있는 폴더 (`.girsktop/` 가칭) |  |
 | 도메인 폴더 | 데이터 폴더 안 `domains/<도메인>/`. 도메인 하나의 1~3층 문서 묶음 | 계층을 뜻하지 않는다 |
-| 프로젝트 설정 | Drift 주기, 리마인드 시각, GitHub 저장소, 하네스 대상, 테스트 명령 |  |
+| 프로젝트 설정 | 작업 대화 주기, 리마인드 시각, GitHub 저장소, 하네스 대상, 테스트 명령 |  |
 | 외부 변경 | 앱 밖(에디터, git, 에이전트)에서 일어난 md 파일 변경 |  |
 
 ## 하지 않는 것
@@ -34,7 +34,7 @@ status: draft
 | 방향 | 대상 | 내용 |
 |---|---|---|
 | 제공 | 모든 도메인 | 데이터 폴더 경로, 프로젝트 설정 |
-| 발행 | Knowledge Graph | 파일 변경 알림 |
+| 발행 | 관계도 | 파일 변경 알림 |
 
 ## 문서
 

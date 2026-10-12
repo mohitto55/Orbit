@@ -1,13 +1,13 @@
 ---
 id: dom-knowledge-graph
 kind: domain
-title: Knowledge Graph
+title: 관계도
 subdomainType: Supporting
-version: 2
+version: 3
 status: draft
 ---
 
-# Knowledge Graph
+# 관계도
 
 ## 역할
 
@@ -35,7 +35,7 @@ status: draft
 
 | 방향 | 대상 | 내용 |
 |---|---|---|
-| 수신 | Workspace | 파일 변경 알림 |
+| 수신 | 프로젝트 | 파일 변경 알림 |
 | 제공 | 모든 도메인 | 백링크, 이름 링크 해석, 하위·의존 도메인 조회 |
 
 ## 문서

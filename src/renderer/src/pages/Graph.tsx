@@ -108,7 +108,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
   return (
     <div className="page graph-page">
       <div className="row between">
-        <h2>그래프</h2>
+        <h2>관계도</h2>
         <div className="row">
           <div className="seg small">
             {(

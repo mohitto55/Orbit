@@ -1,14 +1,14 @@
 ---
 id: spec-impact-review
 kind: spec
-title: Impact Review 기능 명세
+title: 확인표시 기능 명세
 basedOn:
   - { ref: dom-impact-review, version: 1 }
 version: 1
 status: draft
 ---
 
-# Impact Review 기능 명세
+# 확인표시 기능 명세
 
 위 층에 큰 변경이 생기면 그것을 기준으로 한 아래 층에 "확인 필요"를 표시하고, 사람의 판단을 기록한다. (P1 해결)
 
