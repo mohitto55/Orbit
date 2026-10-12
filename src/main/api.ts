@@ -182,6 +182,13 @@ export function createApi(deps: ApiDeps) {
         acStatus: vr.acStatuses(spec.features, links, run, pendingAcs)
       }
     },
+    /** 모든 명세의 AC 상태. 테스트 파일 훑기·실행 기록 읽기를 명세마다 반복하지 않고 한 번만 한다. */
+    async allAcStatuses() {
+      const c = need()
+      const [specs, links, run, pending] = await Promise.all([sp.listSpecs(c), vr.scanTestLinks(c.projectDir), vr.loadLastRun(c), ir.pendingItems(c)])
+      const pendingAcs = new Set(pending.filter((p) => p.item.layer === 'test').map((p) => p.item.target.replace(/^test:/, '')))
+      return Object.fromEntries(specs.map((s) => [s.id, vr.acStatuses(s.features, links, run, pendingAcs)]))
+    },
 
     // Design
     async listDesigns() {

@@ -572,6 +572,8 @@ select.prio { font-weight: 600; }
 .undo-bar .undo-btn { background: none; border: none; color: var(--accent-line); font-weight: 700; padding: 4px 8px; }
 .undo-bar .undo-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
 .undo-bar .icon { color: var(--bg); opacity: 0.6; }
+.undo-bar.done .undo-text { text-decoration: line-through; opacity: 0.6; }
+.undo-done { padding: 4px 8px; font-weight: 700; color: var(--accent-line); }
 .undo-timer { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--accent); transform-origin: left; animation: undo-timer linear forwards; }
 
 /* ---------- Task 순서 바꾸기 · 넓은 편집 창 ---------- */

@@ -46,9 +46,11 @@ let dismissToast: (id: number) => void = () => {}
 
 /* ---------- 되돌리기 ---------- */
 
-type UndoOffer = { id: number; text: string; undo: () => Promise<void>; leaving?: boolean }
+type UndoOffer = { id: number; text: string; undo: () => Promise<void>; leaving?: boolean; done?: boolean }
 let pushUndo: (o: Omit<UndoOffer, 'id'>) => void = () => {}
 const UNDO_MS = 7000
+/** 되돌린 뒤 "취소됨"을 보여 주는 시간 */
+const DONE_MS = 1400
 
 /** 좌측 아래에 "되돌리기"를 띄운다. 새 제안이 오면 이전 것은 사라진다. Ctrl+Z로도 실행된다. */
 export function offerUndo(text: string, undo: () => Promise<void>) {
@@ -70,21 +72,23 @@ export function UndoBar() {
   }
 
   const run = async () => {
-    if (!offer || offer.leaving || busy) return
+    if (!offer || offer.leaving || offer.done || busy) return
     setBusy(true)
     try {
       await offer.undo()
-      toast('되돌렸습니다')
+      // 결과는 누른 자리에서 보여 준다: 문구에 줄을 긋고 잠깐 "취소됨"
+      setOffer((o) => (o && o.id === offer.id ? { ...o, done: true } : o))
+      setTimeout(() => close(offer.id), DONE_MS)
     } catch (e) {
       errorToast(e)
+      close(offer.id)
     } finally {
       setBusy(false)
-      close(offer.id)
     }
   }
 
   useEffect(() => {
-    if (!offer || offer.leaving) return
+    if (!offer || offer.leaving || offer.done) return
     const timer = setTimeout(() => close(offer.id), UNDO_MS)
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
@@ -103,15 +107,21 @@ export function UndoBar() {
 
   if (!offer) return null
   return (
-    <div key={offer.id} className={`undo-bar ${offer.leaving ? 'leaving' : ''}`}>
-      <span className="grow">{offer.text}</span>
-      <button className="undo-btn" disabled={busy} onClick={run} title="Ctrl+Z">
-        되돌리기
-      </button>
-      <button className="icon" onClick={() => close(offer.id)} title="닫기">
-        ✕
-      </button>
-      <div className="undo-timer" style={{ animationDuration: `${UNDO_MS}ms` }} />
+    <div key={offer.id} className={`undo-bar ${offer.leaving ? 'leaving' : ''} ${offer.done ? 'done' : ''}`}>
+      <span className="grow undo-text">{offer.text}</span>
+      {offer.done ? (
+        <span className="undo-done">취소됨</span>
+      ) : (
+        <>
+          <button className="undo-btn" disabled={busy} onClick={run} title="Ctrl+Z">
+            되돌리기
+          </button>
+          <button className="icon" onClick={() => close(offer.id)} title="닫기">
+            ✕
+          </button>
+          <div className="undo-timer" style={{ animationDuration: `${UNDO_MS}ms` }} />
+        </>
+      )}
     </div>
   )
 }

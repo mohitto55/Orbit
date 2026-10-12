@@ -123,7 +123,14 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
                   <tr key={f.id} className={f.status === '폐기' ? 'dim' : ''}>
                     <td className="mono small">{f.id}</td>
                     <td>
-                      <input value={f.name} onChange={(e) => update(i, { name: e.target.value })} />
+                      {/* 긴 이름도 다 보이게 줄바꿈해서 보여준다. 이름은 한 줄이므로 Enter·줄바꿈은 넣지 않는다 */}
+                      <textarea
+                        rows={1}
+                        className="autogrow"
+                        value={f.name}
+                        onChange={(e) => update(i, { name: e.target.value.replace(/\n/g, ' ') })}
+                        onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
+                      />
                     </td>
                     <td>
                       <textarea rows={1} className="autogrow" value={f.purpose} onChange={(e) => update(i, { purpose: e.target.value })} />

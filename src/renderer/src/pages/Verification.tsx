@@ -30,17 +30,18 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
 
   useEffect(() => {
     if (!specs) return
-    Promise.all(specs.map(async (s) => [s.id, (await api.specStatus(s.id)).acStatus] as const))
-      .then((entries) => setStatuses(Object.fromEntries(entries)))
-      .catch(errorToast)
-  }, [specs, run, refreshKey])
+    api.allAcStatuses().then(setStatuses).catch(errorToast)
+  }, [specs, refreshKey])
 
   const start = async () => {
     setLog('')
     setRunning(true)
     try {
       const r = await api.runTests(filter || undefined)
+      // 실행 결과와 검증률이 함께 바뀌도록 상태를 먼저 받아 둔다
+      const st = await api.allAcStatuses().catch(() => null)
       setRun(r)
+      if (st) setStatuses(st)
       reloadLinks()
       reloadBadges()
       toast(r.error ? r.error : `통과 ${r.passed} / 실패 ${r.failed} / 전체 ${r.total}`, r.error || r.failed ? 'error' : 'ok')
