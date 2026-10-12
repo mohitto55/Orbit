@@ -3,7 +3,7 @@ id: dom-domain-modeling
 kind: domain
 title: 도메인
 subdomainType: Core
-version: 6
+version: 7
 status: draft
 ---
 
@@ -28,7 +28,7 @@ status: draft
 | 개념 (Concept) | 도메인 안의 Entity / Value Object / Aggregate / Event / Policy / Term. 정확히 한 도메인에 속한다 | Term은 이 도메인 안에서만 유효한 용어 |
 | 버전 | 도메인 문서의 정수 버전. 저장할 때마다 1 오른다 | 개념에는 버전이 없다 |
 | 변경 크기 | `큰 변경`(규칙·구조 변경, 이동) / `작은 변경`(설명 보강, 오타) | 큰 변경만 아래 층 문서에 영향을 준다 |
-| ChangeSet | 저장 1회의 기록. 변경 크기, 요약, 출처, 바뀐 항목 |  |
+| ChangeSet | 저장 1회의 기록. 변경 크기, 요약, 출처, 바뀐 항목, 저장 시점의 변경 전·후 본문 스냅샷 | 스냅샷이 없는 예전 ChangeSet은 변경 전·후를 비교할 수 없다 |
 | 경로 표기 | 상위부터 이어 쓴 이름 (`주문 › 고객`) | 이름이 겹칠 때 구분용. 식별자는 아니다 |
 | 폐기됨 | 더 쓰지 않지만 이력 보존을 위해 남긴 도메인 |  |
 

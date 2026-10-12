@@ -3,7 +3,7 @@ id: dom-integration
 kind: domain
 title: 연동
 subdomainType: Generic
-version: 5
+version: 6
 status: draft
 parent: dom-platform
 ---
@@ -12,7 +12,7 @@ parent: dom-platform
 
 ## 역할
 
-외부 도구와 연결한다. 바깥 형식을 앱 내부 개념으로 바꿔주는 번역층이다. 연결 대상: GitHub(저장소, Issue, PR), Claude Code·Codex(세션 기록), 테스트 실행기(명령 실행, 결과 파일 읽기).
+외부 도구와 연결한다. 바깥 형식을 앱 내부 개념으로 바꿔주는 번역층이다. 연결 대상: GitHub(저장소, Issue, PR), Claude Code·Codex(세션 기록, 앱 안 터미널에서 실행), 테스트 실행기(명령 실행, 결과 파일 읽기).
 
 ## 용어
 
@@ -23,6 +23,7 @@ parent: dom-platform
 | 어댑터 | 외부 도구 하나와 앱 사이의 번역층 |  |
 | 연결 상태 | 외부 도구의 설치·인증·발견 여부 |  |
 | 세션 폴더 | 에이전트가 대화 기록을 저장하는 위치 |  |
+| 앱 안 터미널 | 프로젝트 폴더에서 Claude Code·Codex·셸을 실행하는 앱 안의 터미널 탭 | 다른 화면으로 옮겨도 실행이 유지된다. 탭을 닫으면 프로세스가 끝난다 |
 | 테스트 명령 | 프로젝트 설정에 등록한 테스트 실행 명령 |  |
 | 필터 인자 | 테스트 대상을 좁히기 위해 명령에 넘기는 인자 |  |
 | 결과 파일 | 테스트 실행 후 만들어지는 JUnit XML |  |
