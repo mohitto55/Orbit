@@ -1,7 +1,7 @@
 import path from 'path'
 import type { Ctx } from './workspace'
 import { exists, listDirs, listMd, readMd, writeMd } from './md'
-import { recordChange, requireChange, type ChangeInput, type ChangeSet } from './changes'
+import { readRaw, recordChange, requireChange, type ChangeInput, type ChangeSet } from './changes'
 import { getSpec } from './spec'
 
 export const SYSTEM_DESIGN_ID = 'system-design'
@@ -127,6 +127,7 @@ export async function saveDesign(
   const change = requireChange(changeInput)
   const design = (await listDesigns(ctx)).find((d) => d.id === id)
   if (!design) throw new Error(`설계를 찾을 수 없습니다: ${id}`)
+  const before = await readRaw(design.file)
   const { data } = await readMd(design.file)
   await writeMd(design.file, { ...data, version: design.version + 1 }, content)
   const recorded = await recordChange(ctx, {
@@ -137,7 +138,7 @@ export async function saveDesign(
     summary: change.summary,
     source: change.source,
     changed: design.system ? changedSections : []
-  })
+  }, { file: design.file, before, after: await readRaw(design.file) })
   return { design: await loadDesign(design.file, design.folder), change: recorded }
 }
 

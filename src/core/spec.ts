@@ -2,7 +2,7 @@ import path from 'path'
 import type { Ctx } from './workspace'
 import { exists, readMd, writeMd, nowIso } from './md'
 import { listDomains, type Domain } from './domain'
-import { recordChange, requireChange, majorChangesAfter, type ChangeInput, type ChangeSet } from './changes'
+import { readRaw, recordChange, requireChange, majorChangesAfter, type ChangeInput, type ChangeSet } from './changes'
 
 export type FeatureStatus = '초안' | '활성' | '폐기'
 
@@ -258,6 +258,7 @@ export async function saveFeatures(
     return { spec: await getSpec(ctx, specId), change: null }
   }
   const change = requireChange(changeInput)
+  const before = await readRaw(spec.file)
   await writeSpecFeatures(ctx, spec, features, spec.version + 1, acSeq)
   const recorded = await recordChange(ctx, {
     target: spec.id,
@@ -267,7 +268,7 @@ export async function saveFeatures(
     summary: change.summary,
     source: change.source,
     changed: changedIds
-  })
+  }, { file: spec.file, before, after: await readRaw(spec.file) })
   return { spec: await getSpec(ctx, specId), change: recorded }
 }
 

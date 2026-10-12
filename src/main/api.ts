@@ -11,6 +11,7 @@ import * as vr from '../core/verification'
 import * as dr from '../core/drift'
 import * as kn from '../core/knowledge'
 import * as kg from '../core/graph'
+import * as df from '../core/diff'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import { TerminalManager, type TerminalKind } from '../core/terminal'
@@ -201,6 +202,27 @@ export function createApi(deps: ApiDeps) {
       ir.decide(need(), reviewId, target, decision, note),
     async changesById(ids: string[]) {
       return (await listChanges(need())).filter((c) => ids.includes(c.id))
+    },
+    /** IR-F03: 변경 전·후 비교. full이면 접지 않고 전체를 보여준다. */
+    async changeDiff(changeId: string, full = false) {
+      const c = need()
+      const change = (await listChanges(c)).find((x) => x.id === changeId)
+      if (!change) throw new Error(`변경 기록을 찾을 수 없습니다: ${changeId}`)
+      const r = await df.changeDiff(c, change)
+      if ('unavailable' in r) return { change, unavailable: r.unavailable }
+      return { change, source: r.source, file: r.file, diff: df.lineDiff(r.before, r.after, full ? -1 : 3) }
+    },
+    /** 문서 id → 이름·종류·현재 버전·기준 (변경 검토에서 원인 → 영향을 보여줄 때 씀) */
+    async docIndex() {
+      const c = need()
+      const domains = await dm.listDomains(c)
+      const specs = await sp.listSpecs(c, domains)
+      const designs = await ds.listDesigns(c)
+      const out: Record<string, { kind: 'domain' | 'spec' | 'design'; title: string; version: number; basedOn: { ref: string; version: number; feature?: string }[] }> = {}
+      for (const d of domains) out[d.id] = { kind: 'domain', title: dm.domainPathLabel(domains, d.id), version: d.version, basedOn: [] }
+      for (const s of specs) out[s.id] = { kind: 'spec', title: s.title, version: s.version, basedOn: s.basedOn }
+      for (const d of designs) out[d.id] = { kind: 'design', title: d.title, version: d.version, basedOn: [...d.basedOn, ...d.refs.map((r) => ({ ref: r.ref, version: r.version ?? 0, feature: r.section }))] }
+      return out
     },
 
     // Task

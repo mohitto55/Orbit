@@ -283,3 +283,36 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .dot.claude { background: #d97757; }
 .dot.codex { background: #10a37f; }
 .dot.shell { background: var(--muted); }
+
+/* ---------- 변경 검토: 원인 → 영향, 비교 ---------- */
+.review-item { display: flex; flex-direction: column; gap: 2px; }
+.flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: stretch; margin-bottom: 10px; }
+.flow-box { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.flow-box.cause { border-left: 3px solid var(--warn); }
+.flow-box.target { border-left: 3px solid var(--accent); }
+.flow-summary { font-weight: 600; }
+.flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+.flow-arrow .arrow { font-size: 26px; line-height: 1; color: var(--warn); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chips code { background: var(--warn-soft); color: var(--warn); padding: 1px 6px; border-radius: 4px; }
+.review-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.decision { display: flex; gap: 8px; align-items: center; padding-top: 10px; border-top: 1px solid var(--line); margin-top: 10px; }
+.decision input { flex: 1; }
+
+.diff { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.diff-head { display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: var(--side); border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.diff-stat .plus { color: var(--ok); font-weight: 600; }
+.diff-stat .minus { color: var(--bad); font-weight: 600; }
+.diff-table { width: 100%; border-collapse: collapse; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12.5px; line-height: 1.55; }
+.diff-table td { padding: 0 8px; vertical-align: top; }
+.diff-table .ln { width: 1%; min-width: 38px; text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); }
+.diff-table .sign { width: 1%; user-select: none; color: var(--muted); }
+.diff-table .code { white-space: pre-wrap; word-break: break-all; }
+.diff-add { background: var(--ok-soft); }
+.diff-add .sign, .diff-add .code { color: var(--ok); }
+.diff-del { background: var(--bad-soft); }
+.diff-del .sign, .diff-del .code { color: var(--bad); }
+.diff-skip td { background: var(--accent-soft); color: var(--accent); text-align: center; cursor: pointer; padding: 3px; font-family: inherit; }
+@media (prefers-color-scheme: dark) {
+  .diff-add .code { color: #8ce99a; }
+  .diff-del .code { color: #ffa8a8; }

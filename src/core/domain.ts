@@ -2,7 +2,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import type { Ctx } from './workspace'
 import { exists, listDirs, readMd, writeMd, slugify, sectionText } from './md'
-import { recordChange, requireChange, type ChangeInput, type ChangeSet } from './changes'
+import { readRaw, recordChange, requireChange, type ChangeInput, type ChangeSet } from './changes'
 
 export type SubdomainType = 'Core' | 'Supporting' | 'Generic'
 
@@ -176,6 +176,7 @@ export async function saveDomain(
   const size = moved ? 'major' : change.size
 
   const file = domainFile(ctx, cur.folder)
+  const before = await readRaw(file)
   const { data } = await readMd(file)
   const next = {
     ...data,
@@ -197,7 +198,7 @@ export async function saveDomain(
     summary: moved && change.size === 'minor' ? `${change.summary} (도메인 이동으로 큰 변경 처리)` : change.summary,
     source: change.source,
     changed: []
-  })
+  }, { file, before, after: await readRaw(file) })
   const domain = (await listDomains(ctx)).find((d) => d.id === id)!
   return { domain, change: recorded }
 }

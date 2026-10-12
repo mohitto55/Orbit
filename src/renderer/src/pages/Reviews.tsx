@@ -1,24 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { PageProps } from '../App'
-import type { Decision } from '../types'
+import type { ChangeSet, Decision } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
 import { MdViewer } from '../Markdown'
+import DiffView from './DiffView'
 
 const LAYER: Record<string, string> = { spec: '기능 명세 표', design: '설계', test: '테스트' }
+const KIND: Record<string, string> = { domain: '도메인', spec: '기능 명세 표', design: '설계' }
 
 export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
   const [pending, reload] = useLoad(() => api.pendingItems(), [refreshKey])
   const [reviews] = useLoad(() => api.listReviews(), [refreshKey])
-  const [sel, setSel] = useState(0)
-  const cur = pending?.[Math.min(sel, (pending?.length ?? 1) - 1)]
-  const [changes] = useLoad(() => (cur ? api.changesById(cur.item.changes) : Promise.resolve([])), [cur?.review.id, cur?.item.target])
+  const [docs] = useLoad(() => api.docIndex(), [refreshKey])
+  // 목록에 "무엇이 바뀌어서"를 보여주기 위해 쌓인 변경 기록을 한 번에 가져온다
+  const [causes] = useLoad(
+    () => (pending ? api.changesById(pending.flatMap((p) => p.item.changes)) : Promise.resolve([] as ChangeSet[])),
+    [pending]
+  )
   const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
   const [designs] = useLoad(() => api.listDesigns(), [refreshKey])
   const [tests] = useLoad(() => api.scanTests(), [refreshKey])
+  const [sel, setSel] = useState(0)
+  const [changeIdx, setChangeIdx] = useState(0)
+  const [tab, setTab] = useState<'diff' | 'target'>('diff')
   const [note, setNote] = useState('')
 
-  if (!pending) return null
+  const cur = pending?.[Math.min(sel, Math.max(0, (pending?.length ?? 1) - 1))]
+  useEffect(() => {
+    setChangeIdx(0)
+    setTab('diff')
+  }, [cur?.review.id, cur?.item.target])
+
+  if (!pending || !docs) return null
+
+  const title = (id: string) => docs[id]?.title ?? id
+  const changesOf = (ids: string[]) => (causes ?? []).filter((c) => ids.includes(c.id))
+  const curChanges = cur ? changesOf(cur.item.changes) : []
+  const change = curChanges[Math.min(changeIdx, Math.max(0, curChanges.length - 1))]
+  const targetLabel = (layer: string, target: string) => (layer === 'test' ? target.replace(/^test:/, '') : title(target))
 
   const decideItem = async (decision: Decision) => {
     if (!cur) return
@@ -39,8 +59,13 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
     if (cur.item.layer === 'spec') return specs?.find((s) => s.id === t)?.content ?? ''
     if (cur.item.layer === 'design') return designs?.find((d) => d.id === t)?.content ?? ''
     const ac = t.replace(/^test:/, '')
-    const links = (tests ?? []).filter((l) => l.acId === ac)
-    return `${ac}에 연결된 테스트\n\n` + links.map((l) => `${l.file}:${l.line}\n  ${l.text}`).join('\n\n')
+    return `${ac}에 연결된 테스트\n\n` + (tests ?? []).filter((l) => l.acId === ac).map((l) => `${l.file}:${l.line}\n  ${l.text}`).join('\n\n')
+  }
+
+  /** 확인할 문서가 바뀐 문서의 몇 버전을 기준으로 쓰였는지 */
+  const basis = (target: string, cause: string) => {
+    const b = docs[target]?.basedOn.filter((x) => x.ref === cause) ?? []
+    return b.length ? b.map((x) => `${x.feature ? `${x.feature} ` : ''}v${x.version}`).join(', ') : null
   }
 
   const references = (reviews ?? []).filter((r) => r.reference.length > 0).slice(-5)
@@ -49,64 +74,117 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
     <div className="split">
       <div className="pane-list">
         <h3>변경 검토 ({pending.length})</h3>
-        {pending.length === 0 && <Empty>모든 확인을 마쳤습니다</Empty>}
-        {pending.map((p, i) => (
-          <button key={p.review.id + p.item.target} className={`tree-item ${cur === p ? 'on' : ''}`} onClick={() => setSel(i)}>
-            <Badge>{LAYER[p.item.layer]}</Badge> {p.item.target}
-            {p.item.changes.length > 1 && <span className="count">{p.item.changes.length}</span>}
-          </button>
-        ))}
+        <div className="muted small">위 층 문서가 크게 바뀌어, 그걸 기준으로 쓴 아래 문서를 확인해야 하는 항목</div>
+        {pending.length === 0 && <Empty>확인할 항목이 없습니다</Empty>}
+        {pending.map((p, i) => {
+          const cs = changesOf(p.item.changes)
+          const last = cs[cs.length - 1]
+          return (
+            <button key={p.review.id + p.item.target} className={`tree-item review-item ${cur === p ? 'on' : ''}`} onClick={() => setSel(i)}>
+              <div>
+                <Badge>{LAYER[p.item.layer]}</Badge> {targetLabel(p.item.layer, p.item.target)}
+              </div>
+              {last && (
+                <div className="small muted">
+                  ← {title(last.target)} v{last.from}→v{last.to}
+                  {cs.length > 1 && ` 외 ${cs.length - 1}건`}
+                </div>
+              )}
+            </button>
+          )
+        })}
         {references.length > 0 && (
           <>
             <div className="tree-sep" />
-            <h4>참고 목록 (확인표시 없음)</h4>
+            <h4>참고 목록 (확인 항목 없음)</h4>
             {references.map((r) => (
               <div key={r.id} className="small muted">
-                {r.trigger}: {r.reference.join(', ')}
+                {r.reference.map(title).join(', ')}
               </div>
             ))}
           </>
         )}
       </div>
       <div className="pane-main">
-        {cur ? (
+        {cur && change ? (
           <>
-            <h2>
-              {LAYER[cur.item.layer]} 확인: {cur.item.target}
-            </h2>
-            <div className="compare">
-              <div>
-                <h4>위 층 변경 내역</h4>
-                {(changes ?? []).map((c) => (
-                  <div key={c.id} className="change-card">
-                    <div>
-                      <b>{c.target}</b> v{c.from} → v{c.to} <Badge kind={c.size}>{c.size === 'major' ? '큰 변경' : '작은 변경'}</Badge>
-                    </div>
-                    <div>{c.summary}</div>
-                    {c.changed.length > 0 && <div className="small muted">바뀐 항목: {c.changed.join(', ')}</div>}
-                    <div className="small muted">{new Date(c.created).toLocaleString()}</div>
+            {/* 원인 → 영향 */}
+            <div className="flow">
+              <div className="flow-box cause">
+                <div className="small muted">바뀐 문서 · {KIND[docs[change.target]?.kind] ?? '문서'}</div>
+                <b>{title(change.target)}</b>
+                <div>
+                  v{change.from} → v{change.to} <Badge kind={change.size}>{change.size === 'major' ? '큰 변경' : '작은 변경'}</Badge>
+                </div>
+                <div className="flow-summary">{change.summary}</div>
+                {change.changed.length > 0 && (
+                  <div className="chips">
+                    {change.changed.map((c) => (
+                      <code key={c}>{c}</code>
+                    ))}
                   </div>
-                ))}
+                )}
+                <div className="small muted">{new Date(change.created).toLocaleString()}</div>
               </div>
-              <div>
-                <h4>아래 층 내용</h4>
-                {cur.item.layer === 'test' ? <pre className="doc">{targetBody()}</pre> : <MdViewer source={targetBody()} />}
+              <div className="flow-arrow">
+                <span>영향</span>
+                <span className="arrow">→</span>
+              </div>
+              <div className="flow-box target">
+                <div className="small muted">확인할 문서 · {LAYER[cur.item.layer]}</div>
+                <b>{targetLabel(cur.item.layer, cur.item.target)}</b>
+                <div className="small">
+                  {basis(cur.item.target, change.target)
+                    ? `${title(change.target)} ${basis(cur.item.target, change.target)}을 기준으로 작성됨 → 지금은 v${docs[change.target]?.version}`
+                    : cur.item.layer === 'test'
+                      ? '이 수용 기준이 바뀌어, 연결된 테스트가 옛 기준으로 통과하고 있을 수 있음'
+                      : '기준 관계로 연결됨'}
+                </div>
               </div>
             </div>
-            <div className="field">
-              <label>메모 (선택)</label>
-              <input value={note} onChange={(e) => setNote(e.target.value)} />
-            </div>
-            <div className="row">
-              <button className="primary" onClick={() => decideItem('unchanged')}>
-                변경 불필요 (기준 버전만 갱신)
+
+            {curChanges.length > 1 && (
+              <div className="row">
+                <span className="small muted">쌓인 변경 {curChanges.length}건</span>
+                <div className="seg small">
+                  {curChanges.map((c, i) => (
+                    <button key={c.id} className={i === changeIdx ? 'on' : ''} onClick={() => setChangeIdx(i)}>
+                      v{c.from}→v{c.to}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="tabs">
+              <button className={tab === 'diff' ? 'on' : ''} onClick={() => setTab('diff')}>
+                바뀐 내용 (비교)
               </button>
-              <button onClick={() => decideItem('modify')}>{cur.item.layer === 'test' ? '수정 필요 (test Task 생성)' : '수정 필요 (수정 후 기준 갱신)'}</button>
+              <button className={tab === 'target' ? 'on' : ''} onClick={() => setTab('target')}>
+                확인할 문서
+              </button>
+            </div>
+            <div className="review-body">
+              {tab === 'diff' ? (
+                <DiffView key={change.id} changeId={change.id} />
+              ) : cur.item.layer === 'test' ? (
+                <pre className="doc">{targetBody()}</pre>
+              ) : (
+                <MdViewer source={targetBody()} />
+              )}
+            </div>
+
+            <div className="decision">
+              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="메모 (선택)" />
+              <button className="primary" onClick={() => decideItem('unchanged')} title="내용은 그대로 두고 기준 버전만 올립니다">
+                변경 불필요
+              </button>
+              <button onClick={() => decideItem('modify')}>{cur.item.layer === 'test' ? '수정 필요 (test Task)' : '수정 필요'}</button>
               <button onClick={() => decideItem('defer')}>보류 (Task 생성)</button>
             </div>
           </>
         ) : (
-          <Empty>처리할 항목이 없습니다</Empty>
+          <Empty>{pending.length ? '왼쪽에서 항목을 고르세요' : '처리할 항목이 없습니다'}</Empty>
         )}
       </div>
     </div>

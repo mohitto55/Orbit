@@ -1,3 +1,4 @@
+import { promises as fs } from 'fs'
 import path from 'path'
 import type { Ctx } from './workspace'
 import { listMd, readMd, writeMd, stamp, nowIso } from './md'
@@ -34,9 +35,39 @@ export function requireChange(change: ChangeInput | undefined | null): ChangeInp
   return change
 }
 
+/** 바뀌기 전·후 파일 원문. 변경 검토에서 GitHub처럼 줄 단위로 비교하는 데 쓴다. */
+export interface Snapshot {
+  /** 데이터 폴더 기준 경로 */
+  file: string
+  before: string
+  after: string
+}
+
+function snapshotFile(ctx: Ctx, id: string) {
+  return path.join(ctx.dataRoot, 'changes', 'snapshots', `${id}.json`)
+}
+
+/** 파일 원문을 읽는다 (없으면 빈 문자열). */
+export async function readRaw(file: string): Promise<string> {
+  try {
+    return (await fs.readFile(file, 'utf8')).replace(/\r\n/g, '\n')
+  } catch {
+    return ''
+  }
+}
+
+export async function readSnapshot(ctx: Ctx, id: string): Promise<Snapshot | null> {
+  try {
+    return JSON.parse(await fs.readFile(snapshotFile(ctx, id), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 export async function recordChange(
   ctx: Ctx,
-  c: Omit<ChangeSet, 'id' | 'created' | 'source'> & { source?: ChangeSource }
+  c: Omit<ChangeSet, 'id' | 'created' | 'source'> & { source?: ChangeSource },
+  snapshot?: { file: string; before: string; after: string }
 ): Promise<ChangeSet> {
   const change: ChangeSet = {
     id: `chg-${stamp()}`,
@@ -45,6 +76,11 @@ export async function recordChange(
     source: c.source ?? 'manual'
   }
   await writeMd(path.join(ctx.dataRoot, 'changes', `${change.id}.md`), change, `${change.summary}\n`)
+  if (snapshot) {
+    const rel = path.relative(ctx.dataRoot, snapshot.file).replace(/\\/g, '/')
+    await fs.mkdir(path.dirname(snapshotFile(ctx, change.id)), { recursive: true })
+    await fs.writeFile(snapshotFile(ctx, change.id), JSON.stringify({ file: rel, before: snapshot.before, after: snapshot.after }, null, 1), 'utf8')
+  }
   return change
 }
 
