@@ -12,7 +12,6 @@ export const SUBDIRS = [
   'tasks',
   'drift',
   'knowledge',
-  'features',
   'verification',
   '.cache'
 ]

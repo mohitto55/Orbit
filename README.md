@@ -44,7 +44,6 @@
   system-design.md    시스템 공통 설계
   domains/<도메인>/    domain.md · spec.md · design/<기능ID>.md
   changes/            변경 기록 (추가만 함)
-  features/<앱 기능>/  spec.md (도메인이 아닌 기술 기능)
   reviews/ inbox/ tasks/ drift/ knowledge/ requests/ verification/
 ```
 

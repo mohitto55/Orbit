@@ -2,8 +2,8 @@
 id: spec-integration
 kind: spec
 title: 연동 기능 명세
-basedOn: []
-scope: feature
+basedOn:
+  - { ref: dom-integration, version: 1 }
 version: 1
 status: draft
 ---

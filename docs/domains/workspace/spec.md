@@ -2,8 +2,8 @@
 id: spec-workspace
 kind: spec
 title: 프로젝트 기능 명세
-basedOn: []
-scope: feature
+basedOn:
+  - { ref: dom-workspace, version: 1 }
 version: 1
 status: draft
 ---

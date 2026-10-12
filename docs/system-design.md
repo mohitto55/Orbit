@@ -2,7 +2,7 @@
 id: system-design
 kind: design
 title: 시스템 공통 설계
-version: 3
+version: 4
 status: draft
 ---
 
@@ -68,8 +68,6 @@ status: draft
       domain.md           1층: 역할 (parent로 상위 도메인 표기)
       spec.md             2층: 기능 명세 표
       design/<기능ID>.md   3층: 기능별 설계 (필요할 때만)
-  features/
-    <앱 기능 폴더>/        spec.md (+ design/) — 도메인이 아닌 기술 기능 (S8)
   verification/           AC–테스트 연결 확인 기록, 실행 이력 요약
   changes/                ChangeSet (1건당 1파일, 추가만 함)
   reviews/                Impact Review
@@ -139,7 +137,7 @@ changed: [PAY-F02, PAY-F02-AC1]
 | `SpecChanged` | 기능 명세 | 확인표시, 테스트 |
 | `DesignChanged` | 설계 | 확인표시 |
 | `TestRunCompleted` | 테스트 | 기능 명세(검증 상태 열), 관계도 |
-| `FilesChanged` | 프로젝트 (앱 기능) | 관계도 (인덱스 갱신) |
+| `FilesChanged` | 프로젝트 | 관계도 (인덱스 갱신) |
 
 ## S7. 기술 결정 {#s7}
 
@@ -162,12 +160,13 @@ changed: [PAY-F02, PAY-F02-AC1]
 | `src/main/` | Electron 메인: IPC(`api:<이름>`), 파일 감시, 테스트 실행, 알림, 전역 단축키 |
 | `src/renderer/` | React 화면 |
 
-## S8. 앱 기능 {#s8}
+## S8. 앱 기반 도메인과 코드 위치 {#s8}
 
-도메인이 아닌 기술 기능 (도메인 모델 원칙 8). 자기 업무 규칙 없이 도메인을 돕는다. 역할과 용어를 적는 `domain.md`는 두지 않고, 요구사항과 테스트 연결을 위해 기능 명세 표만 둔다 (기준 도메인 없음).
+기술 기능은 상위 도메인 **앱 기반** 아래 하위 도메인으로 둔다 (도메인 모델 원칙 8).
 
-| 앱 기능 | 하는 일 | 기능 명세 표 | 코드 |
-|---|---|---|---|
-| 프로젝트 | 프로젝트 만들기·열기·전환, 설정, 앱 밖에서 바뀐 파일 감지 | [features/workspace/spec.md](features/workspace/spec.md) | `src/core/workspace.ts`, 파일 감시는 `src/main/index.ts` |
-| 관계도 | md 문서를 노드로, 문서 사이 링크를 엣지로 모아 보여준다. `[[이름]]` 해석, 미정의 노드, 백링크 | [features/knowledge-graph/spec.md](features/knowledge-graph/spec.md) | `src/core/graph.ts` |
-| 연동 | GitHub, Claude Code·Codex 세션 파일, 테스트 실행기를 앱 내부 형식으로 바꾼다 | [features/integration/spec.md](features/integration/spec.md) | 세션 읽기 `src/core/drift.ts`, 테스트 실행 `src/main/api.ts` |
+| 도메인 | 코드 |
+|---|---|
+| 앱 기반 | 화면 이동 `src/renderer/src/App.tsx`, 알림 규칙 `src/core/notify.ts`, 알림·단축키·자동 업데이트 `src/main/index.ts` |
+| └ 프로젝트 | `src/core/workspace.ts`, 파일 감시 `src/main/index.ts` |
+| └ 관계도 | `src/core/graph.ts`, 화면 `src/renderer/src/pages/Graph.tsx` |
+| └ 연동 | 세션 읽기 `src/core/drift.ts`, 테스트 실행 `src/main/api.ts` |

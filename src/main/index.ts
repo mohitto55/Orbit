@@ -3,6 +3,7 @@ import path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { createApi } from './api'
 import type { Ctx } from '../core/workspace'
+import { NotifyLog, afterTime } from '../core/notify'
 
 let win: BrowserWindow | null = null
 let watcher: FSWatcher | null = null
@@ -40,12 +41,10 @@ for (const [name, fn] of Object.entries(api)) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 
-/** 알림: 하루에 종류별로 한 번만 보낸다. */
-const notified = new Map<string, string>()
+/** 알림: 하루에 종류별로 한 번만 보낸다 (PL-F02). */
+const notifyLog = new NotifyLog()
 function notifyOnce(kind: string, title: string, body: string) {
-  const today = new Date().toDateString()
-  if (notified.get(kind) === today || !Notification.isSupported()) return
-  notified.set(kind, today)
+  if (!Notification.isSupported() || !notifyLog.take(kind)) return
   new Notification({ title, body }).show()
 }
 
@@ -54,9 +53,7 @@ async function checkReminders() {
     const project = await api.currentProject()
     if (!project) return
     const d = await api.dashboard()
-    const now = new Date()
-    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-    if (d.inbox > 0 && hhmm >= d.settings.reminderTime) notifyOnce('inbox', 'Inbox 정리', `분류하지 않은 할 일이 ${d.inbox}개 있습니다`)
+    if (d.inbox > 0 && afterTime(d.settings.reminderTime)) notifyOnce('inbox', 'Inbox 정리', `분류하지 않은 할 일이 ${d.inbox}개 있습니다`)
     if (d.dueTasks.length > 0) notifyOnce('due', '할 일 시기 도래', `${d.dueTasks.length}개의 Task가 지금 할 때입니다`)
     if (d.driftDue) notifyOnce('drift', '도메인 검토 요청', `검토하지 않은 작업 대화가 ${d.pendingSessions}개 있습니다`)
     if (d.pendingReviews > 0) notifyOnce('review', '확인 필요', `확인을 기다리는 항목이 ${d.pendingReviews}개 있습니다`)

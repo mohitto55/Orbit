@@ -2,8 +2,8 @@
 id: spec-knowledge-graph
 kind: spec
 title: 관계도 기능 명세
-basedOn: []
-scope: feature
+basedOn:
+  - { ref: dom-knowledge-graph, version: 1 }
 version: 1
 status: draft
 ---

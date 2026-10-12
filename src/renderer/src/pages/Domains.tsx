@@ -27,9 +27,6 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
   const [tab, setTab] = useState<Tab>('role')
   const [creating, setCreating] = useState(false)
   const [systemDesign, setSystemDesign] = useState(false)
-  const [featureSpec, setFeatureSpec] = useState<string | null>(null)
-  const [featureTab, setFeatureTab] = useState<'spec' | 'design'>('spec')
-  const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
 
   useEffect(() => {
     if (!selected && domains?.length) setSelected(domains[0].id)
@@ -61,43 +58,15 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
           </button>
         </div>
         {domains.length === 0 && <Empty>도메인이 없습니다</Empty>}
-        <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign || featureSpec ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false); setFeatureSpec(null) }} requests={pendingReq.map((r) => r.domain)} />
+        <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
         <div className="tree-sep" />
-        <button className={`tree-item ${systemDesign ? 'on' : ''}`} onClick={() => { setSystemDesign(true); setFeatureSpec(null) }}>
+        <button className={`tree-item ${systemDesign ? 'on' : ''}`} onClick={() => setSystemDesign(true)}>
           시스템 공통 설계
         </button>
-        <div className="tree-sep" />
-        <h4>앱 기능</h4>
-        {(specs ?? [])
-          .filter((s) => s.scope === 'feature')
-          .map((s) => (
-            <button key={s.id} className={`tree-item ${featureSpec === s.id ? 'on' : ''}`} onClick={() => { setFeatureSpec(s.id); setSystemDesign(false) }}>
-              <span className="dot" />
-              {s.title.replace(/ 기능 명세$/, '')}
-            </button>
-          ))}
       </div>
       <div className="pane-main">
         {systemDesign ? (
           <DesignPanel system refreshKey={refreshKey} onChanged={reloadBadges} />
-        ) : featureSpec ? (
-          <>
-            <div className="muted small">앱 기능 · 도메인이 아닌 기술 기능</div>
-            <h2>{specs?.find((s) => s.id === featureSpec)?.title.replace(/ 기능 명세$/, '')}</h2>
-            <div className="tabs">
-              <button className={featureTab === 'spec' ? 'on' : ''} onClick={() => setFeatureTab('spec')}>
-                기능 명세 표
-              </button>
-              <button className={featureTab === 'design' ? 'on' : ''} onClick={() => setFeatureTab('design')}>
-                설계
-              </button>
-            </div>
-            {featureTab === 'spec' ? (
-              <SpecTable key={featureSpec} specId={featureSpec} refreshKey={refreshKey} onChanged={reloadBadges} />
-            ) : (
-              <DesignPanel key={featureSpec} folder={specs?.find((s) => s.id === featureSpec)?.folder} refreshKey={refreshKey} onChanged={reloadBadges} />
-            )}
-          </>
         ) : domain ? (
           <>
             <div className="row between">

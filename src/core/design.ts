@@ -54,11 +54,9 @@ export async function listDesigns(ctx: Ctx): Promise<Design[]> {
   const out: Design[] = []
   const sys = path.join(ctx.dataRoot, 'system-design.md')
   if (await exists(sys)) out.push(await loadDesign(sys, undefined))
-  for (const root of ['domains', 'features']) {
-    for (const folder of await listDirs(path.join(ctx.dataRoot, root))) {
-      for (const f of await listMd(path.join(ctx.dataRoot, root, folder, 'design'))) {
-        out.push(await loadDesign(f, folder))
-      }
+  for (const folder of await listDirs(path.join(ctx.dataRoot, 'domains'))) {
+    for (const f of await listMd(path.join(ctx.dataRoot, 'domains', folder, 'design'))) {
+      out.push(await loadDesign(f, folder))
     }
   }
   return out
