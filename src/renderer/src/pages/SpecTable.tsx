@@ -112,8 +112,8 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
                 <th style={{ width: 140 }}>기능</th>
                 <th style={{ width: 150 }}>목적</th>
                 <th>수용 기준</th>
-                <th style={{ width: 80 }}>상태</th>
-                <th style={{ width: 80 }}>설계</th>
+                <th style={{ width: 104 }}>상태</th>
+                <th style={{ width: 104 }}>설계</th>
               </tr>
             </thead>
             <tbody>

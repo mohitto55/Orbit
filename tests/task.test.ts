@@ -29,6 +29,14 @@ describe('Task', () => {
     expect(await listInbox(ctx)).toHaveLength(0)
   })
 
+  it('[TK-F03-AC1] Task로 옮길 때 제목과 세부 내용을 고쳐 쓸 수 있다', async () => {
+    const ctx = await newProject()
+    const item = await addInbox(ctx, 'x')
+    const task = await classifyInbox(ctx, item.id, { type: 'bug', horizon: '지금', title: ' 결제 실패 재현 ', body: '재현 순서' })
+    expect(task).toMatchObject({ title: '결제 실패 재현', type: 'bug' })
+    expect(task.body).toContain('재현 순서')
+  })
+
   it('[TK-F03-AC2] 유형이나 시기가 없으면 Task로 저장되지 않는다', async () => {
     const ctx = await newProject()
     const item = await addInbox(ctx, 'x')
@@ -70,7 +78,7 @@ describe('Task', () => {
     await expect(updateTask(ctx, t.id, { status: '보류' as any })).rejects.toThrow()
   })
 
-  it('Task에 시작일·종료일을 저장하고 고치고 지울 수 있다', async () => {
+  it('[TK-F10-AC1] Task에 시작일·종료일을 저장하고 고치고 지울 수 있다', async () => {
     const ctx = await newProject()
     const t = await createTask(ctx, { title: 'x', type: 'feature', horizon: '지금', start: '2026-10-12', end: '2026-10-20' })
     expect(t).toMatchObject({ start: '2026-10-12', end: '2026-10-20' })
@@ -80,7 +88,7 @@ describe('Task', () => {
     expect(cleared.end).toBe('2026-10-25')
   })
 
-  it('종료일이 시작일보다 빠르면 저장되지 않는다', async () => {
+  it('[TK-F10-AC2] 종료일이 시작일보다 빠르면 저장되지 않는다', async () => {
     const ctx = await newProject()
     await expect(createTask(ctx, { title: 'x', type: 'bug', horizon: '지금', start: '2026-10-20', end: '2026-10-12' })).rejects.toThrow(/종료일/)
     const t = await createTask(ctx, { title: 'y', type: 'bug', horizon: '지금', start: '2026-10-12' })
@@ -98,7 +106,7 @@ describe('Task', () => {
     expect((await listTasks(ctx))[0]).toMatchObject({ start: '2026-11-01', end: '2026-11-03' })
   })
 
-  it('Task의 제목·유형·내용을 고치고 삭제할 수 있다', async () => {
+  it('[TK-F11-AC1] Task의 제목·유형·내용을 고치고 삭제할 수 있다', async () => {
     const ctx = await newProject()
     const t = await createTask(ctx, { title: 'a', type: 'bug', horizon: '지금' })
     const u = await updateTask(ctx, t.id, { title: ' b ', type: 'docs', horizon: '나중', body: '메모', links: ['dom-a'] })
@@ -127,7 +135,7 @@ describe('Task', () => {
     expect(byId).toEqual({ [b.id]: 1, [a.id]: 2 })
   })
 
-  it('스냅샷으로 수정·삭제·생성을 되돌린다', async () => {
+  it('[TK-F11-AC3] 스냅샷으로 수정·삭제·생성을 되돌린다', async () => {
     const ctx = await newProject()
     const t = await createTask(ctx, { title: 'a', type: 'bug', horizon: '지금' })
     const snap = await snapshotFiles(ctx, [t.file])

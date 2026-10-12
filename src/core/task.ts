@@ -189,11 +189,12 @@ export async function createTask(
   return (await listTasks(ctx)).find((t) => t.id === id)!
 }
 
-export async function classifyInbox(ctx: Ctx, inboxId: string, input: ClassifyInput): Promise<Task> {
+/** 제목·세부 내용을 넘기면 Inbox에 적힌 것 대신 그것으로 만든다. */
+export async function classifyInbox(ctx: Ctx, inboxId: string, input: ClassifyInput & { title?: string; body?: string }): Promise<Task> {
   validateClassify(input)
   const item = (await listInbox(ctx)).find((i) => i.id === inboxId)
   if (!item) throw new Error(`Inbox 항목을 찾을 수 없습니다: ${inboxId}`)
-  const task = await createTask(ctx, { ...input, title: item.title, body: item.body, source: item.source })
+  const task = await createTask(ctx, { ...input, title: input.title?.trim() || item.title, body: input.body ?? item.body, source: item.source })
   await fs.rm(item.file, { force: true })
   return task
 }

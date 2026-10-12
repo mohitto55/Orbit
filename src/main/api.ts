@@ -242,7 +242,7 @@ export function createApi(deps: ApiDeps) {
     // Task
     listInbox: () => tk.listInbox(need()),
     addInbox: (title: string, source?: string) => tk.addInbox(need(), title, source),
-    classifyInbox: (id: string, input: tk.ClassifyInput) => tk.classifyInbox(need(), id, input),
+    classifyInbox: (id: string, input: tk.ClassifyInput & { title?: string; body?: string }) => tk.classifyInbox(need(), id, input),
     discardInbox: (id: string) => tk.discardInbox(need(), id),
     listTasks: () => tk.listTasks(need()),
     createTask: (input: tk.ClassifyInput & { title: string; body?: string }) => tk.createTask(need(), input),
@@ -301,12 +301,6 @@ export function createApi(deps: ApiDeps) {
       if (process.platform === 'win32') spawn('taskkill', ['/pid', String(testProc.pid), '/T', '/F'])
       else testProc.kill('SIGTERM')
     },
-
-    // Drift
-    pendingSessions: () => dr.pendingSessions(need()),
-    readSession: (file: string, agent: dr.Agent) => dr.readSessionMessages(file, agent),
-    listChecks: () => dr.listChecks(need()),
-    finishCheck: (input: { sessionIds: string[]; marks: dr.Mark[]; startedAt?: string }) => dr.finishCheck(need(), input),
 
     // Knowledge
     listKnowledge: () => kn.listKnowledge(need()),

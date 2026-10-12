@@ -57,7 +57,7 @@ export default function Requests({ refreshKey, reloadBadges, go, focus }: PagePr
     <div className="split">
       <div className="pane-list">
         <h3>변경 요청</h3>
-        <div className="muted small">도메인 문서를 이렇게 고치자는 요청. AI 점검·대화 직접 보기·할 일 완료에서 들어옵니다.</div>
+        <div className="muted small">도메인 문서를 이렇게 고치자는 요청. AI 점검·할 일 완료에서 들어옵니다.</div>
         <label className="small">
           <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> 처리한 요청도 보기
         </label>

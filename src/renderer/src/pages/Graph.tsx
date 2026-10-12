@@ -3,7 +3,7 @@ import cytoscape, { type Core, type Layouts, type NodeSingular } from 'cytoscape
 import { api } from '../api'
 import type { PageProps } from '../App'
 import type { GNode } from '../types'
-import { useLoad } from '../ui'
+import { useDark, useLoad } from '../ui'
 
 const KINDS = [
   ['domain', '도메인'],
@@ -44,12 +44,12 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
   goRef.current = go
 
   // 파일 감시로 같은 데이터가 다시 와도 그래프를 새로 만들지 않도록, 내용이 바뀐 경우에만 다시 만든다
+  const dark = useDark()
   const signature = useMemo(() => (graph ? JSON.stringify(graph) : ''), [graph])
 
   /* 1) 그래프 생성: 데이터 내용이 바뀔 때만 */
   useEffect(() => {
     if (!graph || !ref.current) return
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
     const prev = cy.current
     running.current?.stop()
     running.current = null
@@ -68,9 +68,8 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
         })),
         ...graph.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.type } }))
       ],
-      minZoom: 0.2,
+      minZoom: 0.1,
       maxZoom: 3,
-      wheelSensitivity: 0.25,
       style: [
         {
           selector: 'node',
@@ -127,7 +126,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     if (positions.size > 0) applyView(instance, 'none')
     else applyView(instance, 'instant')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature])
+  }, [signature, dark])
 
   useEffect(
     () => () => {
@@ -136,6 +135,29 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     },
     []
   )
+
+  /* 휠 줌: cytoscape 3.33+는 일반 마우스 휠(한 칸 deltaY=100)을 "부정확한 장치"로 보고 delta를 100으로 나눠
+     한 칸에 3% 정도만 줌된다. 바깥 래퍼에서 캡처 단계로 먼저 받아 직접 줌한다. */
+  useEffect(() => {
+    const wrap = ref.current?.parentElement
+    if (!wrap) return
+    const onWheel = (e: WheelEvent) => {
+      const c = cy.current
+      if (!c || !ref.current || e.deltaY === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1)
+      // 마우스 한 칸(100) ≈ 1.2배, 터치패드 핀치(ctrl+휠, 작은 delta)는 더 민감하게
+      const k = e.ctrlKey ? 0.01 : 0.0018
+      const rect = ref.current.getBoundingClientRect()
+      c.zoom({
+        level: c.zoom() * Math.exp(-delta * k),
+        renderedPosition: { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      })
+    }
+    wrap.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => wrap.removeEventListener('wheel', onWheel, { capture: true })
+  }, [])
 
   /* 2) 보기 바꾸기: 필터·모드·단계 — 그래프는 그대로 두고 보이는 요소만 바꾼 뒤 부드럽게 재배치 */
   useEffect(() => {

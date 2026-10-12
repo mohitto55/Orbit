@@ -120,9 +120,24 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
 function SpecAcs({ spec, status, links, onTask, go }: { spec: Spec; status: Record<string, AcStatus>; links: { acId: string; file: string; line: number }[]; onTask: () => void; go: PageProps['go'] }) {
   const rows = spec.features.filter((f) => f.status !== '폐기').flatMap((f) => f.acs.map((a) => ({ f, a })))
   if (!rows.length) return null
-  const makeTask = async (acId: string, type: 'test' | 'bug', text: string) => {
+  const domainName = spec.title.replace(/\s*기능 명세$/, '')
+  const makeTask = async (f: Spec['features'][number], a: Spec['features'][number]['acs'][number], type: 'test' | 'bug') => {
+    const tests = links.filter((x) => x.acId === a.id).map((x) => `- \`${x.file}:${x.line}\``)
+    const title = `${f.name}(${domainName}) ${type === 'test' ? '테스트 추가' : '실패한 테스트 고치기'} — ${a.text}`
+    const body = [
+      `- **기능**: ${domainName} › ${f.name} (${f.id})`,
+      f.purpose ? `- **목적**: ${f.purpose}` : undefined,
+      `- **확인할 조건** (${a.id}): ${a.text}`,
+      '',
+      type === 'test'
+        ? `이 조건을 확인하는 테스트가 아직 없습니다. 테스트를 만들고 이름에 \`[${a.id}]\`를 넣으면 검증 화면에 연결됩니다.`
+        : `이 조건을 확인하는 테스트가 실패하고 있습니다. 원인을 찾아 코드(또는 잘못된 테스트)를 고칩니다.`,
+      ...(type === 'bug' && tests.length ? ['', '**실패한 테스트**', ...tests] : [])
+    ]
+      .filter((x) => typeof x === 'string')
+      .join('\n')
     try {
-      const t = await api.createTask({ title: `${type === 'test' ? '테스트 작성' : '실패 수정'}: [${acId}] ${text}`, type, horizon: '다음', links: [acId] })
+      const t = await api.createTask({ title, body, type, horizon: '다음', links: [a.id] })
       toast(`${t.id}를 만들었습니다`)
       onTask()
     } catch (e) {
@@ -156,12 +171,12 @@ function SpecAcs({ spec, status, links, onTask, go }: { spec: Spec; status: Reco
                 </td>
                 <td style={{ width: 120 }}>
                   {st === 'none' && (
-                    <button className="small ghost" onClick={() => makeTask(a.id, 'test', a.text)}>
+                    <button className="small ghost" onClick={() => makeTask(f, a, 'test')}>
                       test Task
                     </button>
                   )}
                   {st === 'fail' && (
-                    <button className="small ghost" onClick={() => makeTask(a.id, 'bug', a.text)}>
+                    <button className="small ghost" onClick={() => makeTask(f, a, 'bug')}>
                       bug Task
                     </button>
                   )}

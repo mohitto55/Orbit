@@ -29,6 +29,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
   const [showDone, setShowDone] = useState(false)
   const [completing, setCompleting] = useState<Task | null>(null)
   const [editing, setEditing] = useState<Task | null>(null)
+  const [creating, setCreating] = useState<{ inbox?: InboxItem; title?: string } | null>(null)
 
   const refresh = () => {
     reloadInbox()
@@ -109,7 +110,23 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
       <div className="row">
         <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder="빠른 기록: 한 줄 쓰고 Enter (Ctrl+Shift+Space로 어디서나)" onKeyDown={(e) => e.key === 'Enter' && add()} />
         <button onClick={add}>Inbox에 추가</button>
+        <button className="primary" onClick={() => setCreating({ title: text })}>
+          Task 추가
+        </button>
       </div>
+
+      {creating && (
+        <TaskEditor
+          inbox={creating.inbox}
+          initialTitle={creating.title}
+          track={track}
+          onClose={() => setCreating(null)}
+          onSaved={() => {
+            if (!creating.inbox) setText('')
+            setCreating(null)
+          }}
+        />
+      )}
 
       {editing && (
         <TaskEditor
@@ -132,7 +149,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
         Inbox <span className="muted small">유형과 시기를 붙여야 Task가 됩니다</span>
       </h3>
       {inbox && inbox.length === 0 && <Empty>비어 있습니다</Empty>}
-      {inbox?.map((i) => <InboxRow key={i.id} item={i} track={track} />)}
+      {inbox?.map((i) => <InboxRow key={i.id} item={i} track={track} onPromote={() => setCreating({ inbox: i })} />)}
 
       {due && due.length > 0 && (
         <div className="banner warn">
@@ -240,53 +257,14 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
 
 type Track = <T>(label: string, files: string[], action: () => Promise<T>, created?: (r: T) => string[]) => Promise<T>
 
-function InboxRow({ item, track }: { item: InboxItem; track: Track }) {
-  const [type, setType] = useState('')
-  const [horizon, setHorizon] = useState('')
-  const [priority, setPriority] = useState<Priority>('보통')
-  const [due, setDue] = useState('')
-  const [start, setStart] = useState('')
-  const [end, setEnd] = useState('')
-  const classify = async () => {
-    try {
-      await track(
-        `"${item.title}"을(를) Task로 옮겼습니다`,
-        [item.file],
-        () => api.classifyInbox(item.id, { type, horizon, priority, due: due || undefined, start: start || undefined, end: end || undefined }),
-        (t) => [t.file]
-      )
-    } catch (e) {
-      errorToast(e)
-    }
-  }
+function InboxRow({ item, track, onPromote }: { item: InboxItem; track: Track; onPromote: () => void }) {
   return (
     <div className="inbox-row">
       <div className="grow">
         <div>{item.title}</div>
         {item.source && <div className="small muted">출처: {item.source}</div>}
       </div>
-      <select value={type} onChange={(e) => setType(e.target.value)}>
-        <option value="">유형</option>
-        {TASK_TYPES.map((t) => (
-          <option key={t}>{t}</option>
-        ))}
-      </select>
-      <select value={horizon} onChange={(e) => setHorizon(e.target.value)}>
-        <option value="">시기</option>
-        {HORIZONS.map((h) => (
-          <option key={h}>{h}</option>
-        ))}
-      </select>
-      <select className={`prio prio-${priority}`} value={priority} onChange={(e) => setPriority(e.target.value as Priority)} title="중요도">
-        {PRIORITIES.map((p) => (
-          <option key={p}>{p}</option>
-        ))}
-      </select>
-      <input type="date" value={start} max={end || undefined} onChange={(e) => setStart(e.target.value)} title="시작일 (선택)" />
-      <span className="muted">~</span>
-      <input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} title="종료일 (선택)" />
-      <input type="date" value={due} onChange={(e) => setDue(e.target.value)} title="기한 (선택)" />
-      <button className="primary" disabled={!type || !horizon} onClick={classify}>
+      <button className="primary" onClick={onPromote}>
         Task로
       </button>
       <button
@@ -299,32 +277,58 @@ function InboxRow({ item, track }: { item: InboxItem; track: Track }) {
   )
 }
 
-function TaskEditor({ task, track, onClose, onSaved }: { task: Task; track: Track; onClose: () => void; onSaved: (t: Task | null) => void }) {
+/** task가 있으면 수정, 없으면 새로 만든다 (inbox가 있으면 그 항목을 Task로 옮긴다). */
+function TaskEditor({
+  task,
+  inbox,
+  initialTitle,
+  track,
+  onClose,
+  onSaved
+}: {
+  task?: Task
+  inbox?: InboxItem
+  initialTitle?: string
+  track: Track
+  onClose: () => void
+  onSaved: (t: Task | null) => void
+}) {
   const [f, setF] = useState({
-    title: task.title,
-    body: task.body,
-    type: task.type,
-    horizon: task.horizon,
-    priority: task.priority,
-    status: task.status,
-    start: task.start ?? '',
-    end: task.end ?? '',
-    due: task.due ?? '',
-    links: task.links.join(', ')
+    title: task?.title ?? inbox?.title ?? initialTitle ?? '',
+    body: task?.body ?? inbox?.body ?? '',
+    type: (task?.type ?? '') as Task['type'] | '',
+    horizon: (task?.horizon ?? '') as Task['horizon'] | '',
+    priority: task?.priority ?? ('보통' as Priority),
+    status: task?.status ?? ('대기' as TaskStatus),
+    start: task?.start ?? '',
+    end: task?.end ?? '',
+    due: task?.due ?? '',
+    links: task?.links.join(', ') ?? ''
   })
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
   const badRange = !!f.start && !!f.end && f.start > f.end
-  const canSave = !!f.title.trim() && !badRange
+  const canSave = !!f.title.trim() && !!f.type && !!f.horizon && !badRange
 
   const save = async () => {
+    const links = f.links.split(',').map((l) => l.trim()).filter(Boolean)
+    const title = f.title.trim()
     try {
-      const links = f.links.split(',').map((l) => l.trim()).filter(Boolean)
-      onSaved(await track(`"${f.title.trim()}" 저장했습니다`, [task.file], () => api.updateTask(task.id, { ...f, links })))
+      if (task) {
+        onSaved(await track(`"${title}" 저장했습니다`, [task.file], () => api.updateTask(task.id, { ...f, type: f.type as Task['type'], horizon: f.horizon as Task['horizon'], links })))
+        return
+      }
+      const input = { title, body: f.body, type: f.type, horizon: f.horizon, priority: f.priority, start: f.start || undefined, end: f.end || undefined, due: f.due || undefined, links }
+      onSaved(
+        inbox
+          ? await track(`"${title}"을(를) Task로 옮겼습니다`, [inbox.file], () => api.classifyInbox(inbox.id, input), (t) => [t.file])
+          : await track(`"${title}" Task를 추가했습니다`, [], () => api.createTask(input), (t) => [t.file])
+      )
     } catch (e) {
       errorToast(e)
     }
   }
   const remove = async () => {
+    if (!task) return
     try {
       await track(`"${task.title}" 삭제했습니다`, [task.file], () => api.deleteTask(task.id))
       onSaved(null)
@@ -334,15 +338,17 @@ function TaskEditor({ task, track, onClose, onSaved }: { task: Task; track: Trac
   }
 
   return (
-    <Modal title={`Task 수정 · ${task.id}`} onClose={onClose} wide>
+    <Modal title={task ? `Task 수정 · ${task.id}` : inbox ? 'Inbox → Task' : '새 Task'} onClose={onClose} wide>
+      {inbox?.source && <div className="small muted">출처: {inbox.source}</div>}
       <div className="field">
         <label>제목</label>
         <input autoFocus value={f.title} onChange={(e) => set('title', e.target.value)} onKeyDown={(e) => e.key === 'Enter' && canSave && save()} />
       </div>
-      <div className="grid4">
+      <div className={task ? 'grid4' : 'grid3'}>
         <div className="field">
           <label>유형</label>
           <select value={f.type} onChange={(e) => set('type', e.target.value as Task['type'])}>
+            {!f.type && <option value="">골라 주세요</option>}
             {TASK_TYPES.map((t) => (
               <option key={t}>{t}</option>
             ))}
@@ -351,6 +357,7 @@ function TaskEditor({ task, track, onClose, onSaved }: { task: Task; track: Trac
         <div className="field">
           <label>시기</label>
           <select value={f.horizon} onChange={(e) => set('horizon', e.target.value as Task['horizon'])}>
+            {!f.horizon && <option value="">골라 주세요</option>}
             {HORIZONS.map((h) => (
               <option key={h}>{h}</option>
             ))}
@@ -364,14 +371,16 @@ function TaskEditor({ task, track, onClose, onSaved }: { task: Task; track: Trac
             ))}
           </select>
         </div>
-        <div className="field">
-          <label>상태</label>
-          <select value={f.status} onChange={(e) => set('status', e.target.value as TaskStatus)}>
-            {TASK_STATUSES.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </div>
+        {task && (
+          <div className="field">
+            <label>상태</label>
+            <select value={f.status} onChange={(e) => set('status', e.target.value as TaskStatus)}>
+              {TASK_STATUSES.map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div className="grid3">
         <div className="field">
@@ -397,13 +406,17 @@ function TaskEditor({ task, track, onClose, onSaved }: { task: Task; track: Trac
         <textarea className="task-body" value={f.body} onChange={(e) => set('body', e.target.value)} placeholder="세부 내용, 메모 (마크다운)" />
       </div>
       <div className="row between">
-        <button className="danger" onClick={remove}>
-          삭제
-        </button>
+        {task ? (
+          <button className="danger" onClick={remove}>
+            삭제
+          </button>
+        ) : (
+          <span className="small muted">{!f.type || !f.horizon ? '유형과 시기를 골라야 Task가 됩니다' : ''}</span>
+        )}
         <div className="row">
           <button onClick={onClose}>취소</button>
           <button className="primary" disabled={!canSave} onClick={save}>
-            저장
+            {task ? '저장' : 'Task 만들기'}
           </button>
         </div>
       </div>
@@ -524,8 +537,8 @@ function Timeline({ tasks, focus, dueIds, onOpen }: { tasks: Task[]; focus?: str
           {days.map((d) => {
             const k = ymd(d)
             return (
-              <div key={k} className={`tl-day ${isWeekend(d) ? 'weekend' : ''} ${k === today ? 'today' : ''}`}>
-                <div>{d.getDate()}</div>
+              <div key={k} className={`tl-day ${isWeekend(d) ? 'weekend' : ''} ${d.getDay() === 1 ? 'week' : ''} ${k === today ? 'today' : ''}`}>
+                <div className="tl-date">{d.getDate()}</div>
                 <small>{'일월화수목금토'[d.getDay()]}</small>
               </div>
             )
@@ -541,7 +554,7 @@ function Timeline({ tasks, focus, dueIds, onOpen }: { tasks: Task[]; focus?: str
                 {t.title}
               </div>
               {days.map((d) => (
-                <div key={ymd(d)} className={`tl-cell ${isWeekend(d) ? 'weekend' : ''}`} />
+                <div key={ymd(d)} className={`tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d.getDay() === 1 ? 'week' : ''}`} />
               ))}
               {todayIdx >= 0 && todayIdx < SPAN && <div className="tl-today" style={{ left: 220 + todayIdx * DAY_W + DAY_W / 2 }} />}
               <div
