@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Markdown } from '../Markdown'
 import { api } from '../api'
 import type { PageProps } from '../App'
 import type { Mark, SessionInfo } from '../types'
@@ -15,7 +16,7 @@ export default function Drift({ refreshKey, reloadBadges }: PageProps) {
   const [startedAt] = useState(() => new Date().toISOString())
   const [messages] = useLoad(() => (current ? api.readSession(current.file, current.agent) : Promise.resolve([])), [current?.file])
 
-  const terms = useMemo(() => (domains ?? []).map((d) => d.title).filter((t) => t.length > 1).sort((a, b) => b.length - a.length), [domains])
+  const terms = useMemo(() => (domains ?? []).map((d) => ({ title: d.title, id: d.id })), [domains])
   const domain = domains?.find((d) => d.id === domainId)
 
   const open = (s: SessionInfo) => {
@@ -52,20 +53,6 @@ export default function Drift({ refreshKey, reloadBadges }: PageProps) {
     } catch (e) {
       errorToast(e)
     }
-  }
-
-  const highlight = (text: string) => {
-    if (!terms.length) return text
-    const re = new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g')
-    return text.split(re).map((part, i) =>
-      terms.includes(part) ? (
-        <mark key={i} onClick={() => setDomainId(domains!.find((d) => d.title === part)!.id)}>
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    )
   }
 
   return (
@@ -115,7 +102,7 @@ export default function Drift({ refreshKey, reloadBadges }: PageProps) {
               {(messages ?? []).map((m, i) => (
                 <div key={i} className={`msg ${m.role}`}>
                   <div className="small muted">{m.role === 'user' ? '사람' : '에이전트'}</div>
-                  <div className="msg-text">{highlight(m.text)}</div>
+                  <Markdown className="msg-text" source={m.text} terms={terms} onTerm={setDomainId} />
                 </div>
               ))}
             </div>
@@ -134,7 +121,7 @@ export default function Drift({ refreshKey, reloadBadges }: PageProps) {
             </option>
           ))}
         </select>
-        {domain && <pre className="doc">{domain.content}</pre>}
+        {domain && <Markdown className="bordered md-scroll" source={domain.content} />}
       </div>
     </div>
   )

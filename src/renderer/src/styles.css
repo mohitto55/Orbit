@@ -199,3 +199,51 @@ mark { background: #ffe066; color: #000; cursor: pointer; border-radius: 2px; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
 .toast { padding: 10px 14px; border-radius: 8px; background: var(--text); color: var(--bg); max-width: 420px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); }
 .toast.error { background: var(--bad); color: #fff; }
+
+/* ---------- md 문서 ---------- */
+.md { line-height: 1.7; font-size: 14.5px; color: var(--text); word-break: keep-all; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md h1 { font-size: 24px; margin: 4px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.md h2 { font-size: 18px; margin: 26px 0 10px; padding-left: 10px; border-left: 3px solid var(--accent); }
+.md h3 { font-size: 15.5px; margin: 20px 0 8px; }
+.md h4 { font-size: 14px; margin: 16px 0 6px; color: var(--text); }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md li::marker { color: var(--muted); }
+.md strong { font-weight: 700; }
+.md hr { border: none; border-top: 1px solid var(--line); margin: 20px 0; }
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md code { background: var(--accent-soft); color: var(--accent); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+.md pre { background: var(--side); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow: auto; line-height: 1.5; }
+.md pre code { background: none; color: var(--text); padding: 0; font-size: 12.5px; }
+.md blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; color: var(--text); }
+.md blockquote p { margin: 2px 0; }
+.md-table { overflow-x: auto; margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; }
+.md table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.md th { background: var(--side); font-weight: 600; text-align: left; color: var(--muted); font-size: 12.5px; }
+.md th, .md td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.md tr:last-child td { border-bottom: none; }
+.md tbody tr:hover { background: var(--accent-soft); }
+.md td:first-child code, .md td:first-child { white-space: nowrap; }
+.md input[type='checkbox'] { margin-right: 6px; }
+.md .wikilink { border: none; padding: 0 6px; border-radius: 4px; background: var(--ok-soft); color: var(--ok); font: inherit; cursor: pointer; }
+.md .wikilink:hover { text-decoration: underline; }
+.empty-md { color: var(--muted); font-style: italic; }
+
+.md-editor { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 8px 0; }
+.md-editor-body { flex: 1; min-height: 360px; display: grid; gap: 12px; }
+.md-editor-body.view, .md-editor-body.edit { grid-template-columns: 1fr; }
+.md-editor-body.split { grid-template-columns: 1fr 1fr; }
+.md-editor-body textarea { min-height: 360px; height: 100%; resize: none; line-height: 1.6; font-size: 13px; }
+.md-scroll { overflow: auto; padding: 18px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: 70vh; }
+.md-editor-body.view .md-scroll { max-height: none; }
+.bordered { border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; background: var(--panel); }
+.md-viewer { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.md-viewer .md-scroll { flex: 1; }
+
+/* 대화 메시지 안의 md는 조금 작게 */
+.msg .md { font-size: 13.5px; line-height: 1.6; }
+.msg .md h1, .msg .md h2 { font-size: 15px; border: none; padding: 0; }
+.pane-side .md { font-size: 13px; }

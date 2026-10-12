@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { Design } from '../types'
 import { Badge, Empty, askChange, errorToast, toast, useLoad } from '../ui'
 import { History } from './Domains'
+import { MdEditor } from '../Markdown'
 
 type DesignWithStale = Design & { stale: { id: string; summary: string; target: string }[] }
 
@@ -101,7 +102,7 @@ function DesignEditor({ design, onSaved }: { design: DesignWithStale; onSaved: (
         <History target={design.id} />
       ) : (
         <>
-          <textarea className="mono grow" value={content} onChange={(e) => setContent(e.target.value)} />
+          <MdEditor value={content} onChange={setContent} />
           <div className="row end">
             <button className="primary" disabled={content === design.content} onClick={save}>
               저장

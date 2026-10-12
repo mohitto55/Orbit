@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { PageProps } from '../App'
 import type { HarnessTarget } from '../types'
 import { Empty, errorToast, toast, useLoad } from '../ui'
+import { MdViewer } from '../Markdown'
 
 export default function Harness({ refreshKey }: PageProps) {
   const [target, setTarget] = useState<HarnessTarget>('claude')
@@ -66,11 +67,11 @@ export default function Harness({ refreshKey }: PageProps) {
           <div className="compare">
             <div>
               <h4>현재</h4>
-              <pre className="doc">{preview.before || '(파일 없음)'}</pre>
+              <MdViewer source={preview.before || '(파일 없음)'} />
             </div>
             <div>
               <h4>생성 후</h4>
-              <pre className="doc">{preview.after}</pre>
+              <MdViewer source={preview.after} />
             </div>
           </div>
           <div className="row end">

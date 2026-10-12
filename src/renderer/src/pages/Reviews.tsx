@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { PageProps } from '../App'
 import type { Decision } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
+import { MdViewer } from '../Markdown'
 
 const LAYER: Record<string, string> = { spec: '기능 명세 표', design: '설계', test: '테스트' }
 
@@ -89,7 +90,7 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
               </div>
               <div>
                 <h4>아래 층 내용</h4>
-                <pre className="doc">{targetBody()}</pre>
+                {cur.item.layer === 'test' ? <pre className="doc">{targetBody()}</pre> : <MdViewer source={targetBody()} />}
               </div>
             </div>
             <div className="field">

@@ -4,6 +4,7 @@ import type { PageProps } from '../App'
 import type { Knowledge, KnowledgeType } from '../types'
 import { KN_TYPES } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
+import { MdEditor } from '../Markdown'
 
 type Draft = { id?: string; type: KnowledgeType; title: string; content: string; status: Knowledge['status']; harness: boolean; supersedes?: string }
 
@@ -118,10 +119,7 @@ function Editor({ draft, setDraft, onSave, items }: { draft: Draft; setDraft: (d
       </div>
       {current?.supersededBy && <div className="banner">이 결정은 {current.supersededBy}로 대체되었습니다</div>}
       {current?.sources.length ? <div className="small muted">근거: {current.sources.join(', ')}</div> : null}
-      <div className="field grow">
-        <label>본문</label>
-        <textarea className="mono" value={local.content} onChange={(e) => set({ content: e.target.value })} />
-      </div>
+      <MdEditor label="본문" value={local.content} onChange={(v) => set({ content: v })} />
       <div className="row end">
         <button className="primary" disabled={!local.title.trim()} onClick={onSave}>
           저장

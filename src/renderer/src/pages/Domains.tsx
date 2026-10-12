@@ -4,6 +4,7 @@ import type { PageProps } from '../App'
 import type { Domain, SubdomainType } from '../types'
 import { Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import SpecTable from './SpecTable'
+import { MdEditor } from '../Markdown'
 import DesignPanel from './DesignPanel'
 
 type Tab = 'role' | 'spec' | 'design' | 'history'
@@ -33,6 +34,18 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
 
   if (!domains) return null
   const domain = domains.find((d) => d.id === selected)
+  const openWiki = (target: string) => {
+    const [a, b] = target.split('/').map((x) => x.trim())
+    const hit = b
+      ? domains.find((d) => d.title === b && domains.find((p) => p.id === d.parent)?.title === a)
+      : domains.find((d) => d.id === target) ??
+        domains.find((d) => d.title === target && (d.parent ?? '') === (domain?.parent ?? '')) ??
+        (domains.filter((d) => d.title === target).length === 1 ? domains.find((d) => d.title === target) : undefined)
+    if (hit) {
+      setSelected(hit.id)
+      setSystemDesign(false)
+    } else toast(`아직 없는 도메인입니다: ${target}`, 'error')
+  }
   const pendingReq = (requests ?? []).filter((r) => r.status === 'pending')
 
   return (
@@ -45,7 +58,7 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
           </button>
         </div>
         {domains.length === 0 && <Empty>도메인이 없습니다</Empty>}
-        <Tree domains={domains} parent={undefined} depth={0} selected={selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
+        <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
         <div className="tree-sep" />
         <button className={`tree-item ${systemDesign ? 'on' : ''}`} onClick={() => setSystemDesign(true)}>
           시스템 공통 설계
@@ -98,7 +111,7 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
                 </button>
               ))}
             </div>
-            {tab === 'role' && <RoleEditor key={domain.id + domain.version} domain={domain} domains={domains} onSaved={() => { reload(); reloadBadges() }} />}
+            {tab === 'role' && <RoleEditor key={domain.id + domain.version} domain={domain} domains={domains} onWiki={openWiki} onSaved={() => { reload(); reloadBadges() }} />}
             {tab === 'spec' && <SpecTable key={domain.id} domain={domain} refreshKey={refreshKey} onChanged={reloadBadges} />}
             {tab === 'design' && <DesignPanel key={domain.id} folder={domain.folder} refreshKey={refreshKey} onChanged={reloadBadges} />}
             {tab === 'history' && <History key={domain.id + domain.version} target={domain.id} />}
@@ -189,7 +202,7 @@ function CreateDomain({ domains, onClose, onCreated }: { domains: Domain[]; onCl
   )
 }
 
-function RoleEditor({ domain, domains, onSaved }: { domain: Domain; domains: Domain[]; onSaved: () => void }) {
+function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; domains: Domain[]; onSaved: () => void; onWiki: (t: string) => void }) {
   const [title, setTitle] = useState(domain.title)
   const [parent, setParent] = useState(domain.parent ?? '')
   const [type, setType] = useState<SubdomainType>(domain.subdomainType)
@@ -256,10 +269,7 @@ function RoleEditor({ domain, domains, onSaved }: { domain: Domain; domains: Dom
           </select>
         </div>
       </div>
-      <div className="field grow">
-        <label>domain.md 본문 (역할 / 용어 / 하지 않는 것 / 관계)</label>
-        <textarea className="mono" value={content} onChange={(e) => setContent(e.target.value)} />
-      </div>
+      <MdEditor label="domain.md (역할 / 용어 / 하지 않는 것 / 관계)" value={content} onChange={setContent} onWiki={onWiki} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제
