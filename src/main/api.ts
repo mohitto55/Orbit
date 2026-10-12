@@ -218,10 +218,23 @@ export function createApi(deps: ApiDeps) {
       const domains = await dm.listDomains(c)
       const specs = await sp.listSpecs(c, domains)
       const designs = await ds.listDesigns(c)
-      const out: Record<string, { kind: 'domain' | 'spec' | 'design'; title: string; version: number; basedOn: { ref: string; version: number; feature?: string }[] }> = {}
+      const out: Record<string, { kind: 'domain' | 'spec' | 'design'; title: string; version: number; domainId?: string; basedOn: { ref: string; version: number; feature?: string }[] }> = {}
+      // 어느 도메인의 문서인지 바로 보이도록 이름 앞에 도메인 경로를 붙인다 (예: 앱 기반 › 프로젝트 › 기능 명세 표)
+      const pathOfFolder = (folder?: string) => {
+        const d = domains.find((x) => x.folder === folder)
+        return d ? dm.domainPathLabel(domains, d.id) : ''
+      }
       for (const d of domains) out[d.id] = { kind: 'domain', title: dm.domainPathLabel(domains, d.id), version: d.version, basedOn: [] }
-      for (const s of specs) out[s.id] = { kind: 'spec', title: s.title, version: s.version, basedOn: s.basedOn }
-      for (const d of designs) out[d.id] = { kind: 'design', title: d.title, version: d.version, basedOn: [...d.basedOn, ...d.refs.map((r) => ({ ref: r.ref, version: r.version ?? 0, feature: r.section }))] }
+      for (const s of specs) {
+        const base = dm.domainPathLabel(domains, s.domainId)
+        out[s.id] = { kind: 'spec', title: `${base} › 기능 명세 표`, version: s.version, domainId: s.domainId, basedOn: s.basedOn }
+        // 테스트 항목(test:<AC ID>)도 어느 도메인의 수용 기준인지 보이게
+        for (const f of s.features) for (const a of f.acs) out[`test:${a.id}`] = { kind: 'spec', title: `${base} › ${a.id}`, version: s.version, domainId: s.domainId, basedOn: [] }
+      }
+      for (const d of designs) {
+        const title = d.system ? '시스템 공통 설계' : `${pathOfFolder(d.folder)} › 설계 · ${d.title}`
+        out[d.id] = { kind: 'design', title, version: d.version, domainId: domains.find((x) => x.folder === d.folder)?.id, basedOn: [...d.basedOn, ...d.refs.map((r) => ({ ref: r.ref, version: r.version ?? 0, feature: r.section }))] }
+      }
       return out
     },
 

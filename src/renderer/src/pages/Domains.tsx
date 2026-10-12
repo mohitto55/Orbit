@@ -23,8 +23,10 @@ export function domainLabel(domains: Domain[], id: string): string {
 export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) {
   const [domains, reload] = useLoad(() => api.listDomains(), [refreshKey])
   const [requests, reloadReq] = useLoad(() => api.listRequests(), [refreshKey])
-  const [selected, setSelected] = useState<string | null>(focus ?? null)
-  const [tab, setTab] = useState<Tab>('role')
+  // focus는 '도메인 id' 또는 '도메인 id#spec|design' (다른 화면에서 특정 탭으로 바로 열 때)
+  const [focusId, focusTab] = (focus ?? '').split('#')
+  const [selected, setSelected] = useState<string | null>(focusId || null)
+  const [tab, setTab] = useState<Tab>(focusTab === 'spec' || focusTab === 'design' ? focusTab : 'role')
   const [creating, setCreating] = useState(false)
   const [systemDesign, setSystemDesign] = useState(false)
 

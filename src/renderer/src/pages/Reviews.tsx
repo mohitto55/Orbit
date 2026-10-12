@@ -9,7 +9,7 @@ import DiffView from './DiffView'
 const LAYER: Record<string, string> = { spec: '기능 명세 표', design: '설계', test: '테스트' }
 const KIND: Record<string, string> = { domain: '도메인', spec: '기능 명세 표', design: '설계' }
 
-export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
+export default function Reviews({ refreshKey, reloadBadges, go }: PageProps) {
   const [pending, reload] = useLoad(() => api.pendingItems(), [refreshKey])
   const [reviews] = useLoad(() => api.listReviews(), [refreshKey])
   const [docs] = useLoad(() => api.docIndex(), [refreshKey])
@@ -38,7 +38,7 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
   const changesOf = (ids: string[]) => (causes ?? []).filter((c) => ids.includes(c.id))
   const curChanges = cur ? changesOf(cur.item.changes) : []
   const change = curChanges[Math.min(changeIdx, Math.max(0, curChanges.length - 1))]
-  const targetLabel = (layer: string, target: string) => (layer === 'test' ? target.replace(/^test:/, '') : title(target))
+  const targetLabel = (_layer: string, target: string) => title(target)
 
   const decideItem = async (decision: Decision) => {
     if (!cur) return
@@ -82,7 +82,7 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
           return (
             <button key={p.review.id + p.item.target} className={`tree-item review-item ${cur === p ? 'on' : ''}`} onClick={() => setSel(i)}>
               <div>
-                <Badge>{LAYER[p.item.layer]}</Badge> {targetLabel(p.item.layer, p.item.target)}
+                {targetLabel(p.item.layer, p.item.target)}
               </div>
               {last && (
                 <div className="small muted">
@@ -174,13 +174,30 @@ export default function Reviews({ refreshKey, reloadBadges }: PageProps) {
               )}
             </div>
 
+            <div className="decision-help small muted">
+              <b>확인 완료</b>: 내용이 맞다고 확인했거나 고친 뒤 누릅니다. 문서 내용은 그대로 두고 &quot;이 버전까지 확인함&quot;으로 기준만 올린 뒤 항목을 닫습니다.{' '}
+              {cur.item.layer === 'test' ? (
+                <>
+                  <b>테스트 고칠 할 일</b>: test 유형 할 일을 만들고 항목을 닫습니다.
+                </>
+              ) : (
+                <>
+                  <b>문서 열어서 고치기</b>: 편집 화면으로 이동합니다. 항목은 열린 채로 남으니, 고친 뒤 돌아와 확인 완료를 누르세요.
+                </>
+              )}{' '}
+              <b>나중에</b>: 할 일을 만들고 항목을 닫습니다. 문서는 고칠 때까지 &apos;낡음&apos;으로 표시됩니다.
+            </div>
             <div className="decision">
               <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="메모 (선택)" />
-              <button className="primary" onClick={() => decideItem('unchanged')} title="내용은 그대로 두고 기준 버전만 올립니다">
-                변경 불필요
+              <button className="primary" onClick={() => decideItem('unchanged')}>
+                확인 완료 · 기준을 v{docs[change.target]?.version}로
               </button>
-              <button onClick={() => decideItem('modify')}>{cur.item.layer === 'test' ? '수정 필요 (test Task)' : '수정 필요'}</button>
-              <button onClick={() => decideItem('defer')}>보류 (Task 생성)</button>
+              {cur.item.layer === 'test' ? (
+                <button onClick={() => decideItem('modify')}>테스트 고칠 할 일 만들기</button>
+              ) : (
+                <button onClick={() => go('domains', `${docs[cur.item.target]?.domainId ?? ''}#${cur.item.layer}`)}>문서 열어서 고치기</button>
+              )}
+              <button onClick={() => decideItem('defer')}>나중에 · 할 일로 남기기</button>
             </div>
           </>
         ) : (

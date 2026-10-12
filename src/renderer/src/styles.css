@@ -316,3 +316,5 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 @media (prefers-color-scheme: dark) {
   .diff-add .code { color: #8ce99a; }
   .diff-del .code { color: #ffa8a8; }
+.decision-help { margin-top: 10px; line-height: 1.6; }
+.decision-help b { color: var(--text); }
