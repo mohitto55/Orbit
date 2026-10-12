@@ -327,3 +327,6 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .finding { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .finding.accepted { border-left: 3px solid var(--ok); opacity: 0.75; }
 .finding.dismissed { opacity: 0.5; }
+.req-notice { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 6px 12px; margin: 6px 0; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
+.req-notice-head { font-weight: 600; color: var(--warn); }
+.req-notice-item { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }

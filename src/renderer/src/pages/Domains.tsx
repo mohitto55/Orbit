@@ -20,9 +20,9 @@ export function domainLabel(domains: Domain[], id: string): string {
   return names.join(' › ')
 }
 
-export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) {
+export default function Domains({ refreshKey, focus, reloadBadges, go }: PageProps) {
   const [domains, reload] = useLoad(() => api.listDomains(), [refreshKey])
-  const [requests, reloadReq] = useLoad(() => api.listRequests(), [refreshKey])
+  const [requests] = useLoad(() => api.listRequests(), [refreshKey])
   // focus는 '도메인 id' 또는 '도메인 id#spec|design' (다른 화면에서 특정 탭으로 바로 열 때)
   const [focusId, focusTab] = (focus ?? '').split('#')
   const [selected, setSelected] = useState<string | null>(focusId || null)
@@ -86,26 +86,19 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
                 </h2>
               </div>
             </div>
-            {pendingReq
-              .filter((r) => r.domain === domain.id)
-              .map((r) => (
-                <div key={r.id} className="banner">
-                  <div>
-                    <b>변경 요청</b> <span className="muted small">({r.source})</span>
-                    <blockquote>{r.excerpt}</blockquote>
-                    {r.note && <div>{r.note}</div>}
-                  </div>
-                  <button
-                    onClick={async () => {
-                      await api.resolveRequest(r.id).catch(errorToast)
-                      reloadReq()
-                      reloadBadges()
-                    }}
-                  >
-                    반영 완료
-                  </button>
-                </div>
-              ))}
+            {/* 변경 요청은 변경 검토에서 처리한다. 여기서는 제목만 짧게 알린다. */}
+            {pendingReq.some((r) => r.domain === domain.id) && (
+              <div className="req-notice">
+                <span className="req-notice-head">변경 요청 {pendingReq.filter((r) => r.domain === domain.id).length}개</span>
+                {pendingReq
+                  .filter((r) => r.domain === domain.id)
+                  .map((r) => (
+                    <button key={r.id} className="link req-notice-item" title="변경 검토에서 보기" onClick={() => go('reviews', `request:${r.id}`)}>
+                      {(r.note ?? r.excerpt).split(/[:\n]/)[0]}
+                    </button>
+                  ))}
+              </div>
+            )}
             <div className="tabs">
               {(
                 [

@@ -13,11 +13,12 @@ function sourceLabel(source: string): string {
 }
 
 /** IR-F08: 바깥 → 도메인. 도메인을 이렇게 고치자는 요청을 보고 반영 완료 / 반려로 닫는다. */
-export default function Requests({ refreshKey, reloadBadges, go }: PageProps) {
+export default function Requests({ refreshKey, reloadBadges, go, focus }: PageProps) {
   const [requests, reload] = useLoad(() => api.listRequests(), [refreshKey])
   const [docs] = useLoad(() => api.docIndex(), [refreshKey])
   const [showDone, setShowDone] = useState(false)
-  const [sel, setSel] = useState<string | null>(null)
+  // 도메인 화면에서 특정 요청을 눌러 들어오면 그 요청을 연다
+  const [sel, setSel] = useState<string | null>(focus?.startsWith('request:') ? focus.slice(8) : null)
   const [note, setNote] = useState('')
 
   if (!requests || !docs) return null
