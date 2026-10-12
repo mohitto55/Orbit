@@ -19,8 +19,8 @@ const xterms = new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivEle
 function theme() {
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
   return dark
-    ? { background: '#141517', foreground: '#e9ecef', cursor: '#5c7cfa', selectionBackground: '#2b3252' }
-    : { background: '#ffffff', foreground: '#212529', cursor: '#4263eb', selectionBackground: '#dbe4ff' }
+    ? { background: '#1c2026', foreground: '#e4e7ec', cursor: '#3fbfae', selectionBackground: '#24584f' }
+    : { background: '#ffffff', foreground: '#1c2230', cursor: '#0b7a70', selectionBackground: '#cfe8e4' }
 }
 
 /** IN-F09: 프로젝트 폴더에서 Claude Code·Codex·셸을 탭으로 실행한다. 페이지를 떠나도 계속 살아 있다. */

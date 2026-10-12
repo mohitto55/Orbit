@@ -28,27 +28,37 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
     }
   }
 
+  // 같은 폴더가 구분자만 달리 두 번 기록된 경우가 있어 한 번만 보여준다
+  const seen = new Set<string>()
+  const projects = (recent ?? []).filter((r) => {
+    const key = r.replace(/\\/g, '/').toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
   return (
     <div className="start">
       <div className="start-card">
         <h1 className="brand-name">
-          <Logo size={40} /> Orbit
+          <Logo size={36} /> Orbit
         </h1>
-        <p className="muted">도메인 → 기능 명세 → 설계 → 검증을 한곳에서. 위 층이 바뀌면 아래 층에 확인표시를 띄웁니다.</p>
-        <div className="row">
+        <p className="start-lead">도메인, 기능 명세, 설계, 테스트를 한곳에서 관리합니다. 위 층이 바뀌면 아래 층에 확인할 곳을 표시합니다.</p>
+        <div className="start-actions">
           <button className="primary" onClick={() => open()}>
             프로젝트 폴더 열기
           </button>
           <button onClick={() => create()}>새 프로젝트 만들기</button>
         </div>
-        {recent && recent.length > 0 && (
+        {projects.length > 0 && (
           <>
             <h4>최근 프로젝트</h4>
-            <ul className="list">
-              {recent.map((r) => (
+            <ul className="recent">
+              {projects.map((r) => (
                 <li key={r}>
-                  <button className="link" onClick={() => open(r)}>
-                    {r}
+                  <button onClick={() => open(r)} title={r}>
+                    <span className="recent-name">{r.split(/[\\/]/).filter(Boolean).pop()}</span>
+                    <span className="recent-path">{r}</span>
                   </button>
                 </li>
               ))}

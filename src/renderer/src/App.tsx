@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { api, on, type Dashboard as DashboardData, type Project } from './api'
 import { ChangeDialog, Modal, Toasts, UndoBar, errorToast, toast } from './ui'
 import Start from './pages/Start'
@@ -17,16 +17,16 @@ import { Logo } from './Logo'
 
 export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'settings'
 
-const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] = [
-  { id: 'dashboard', label: '대시보드' },
+const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData) => number }[] = [
+  { id: 'dashboard', label: '대시보드', group: '작업' },
   { id: 'domains', label: '도메인' },
   { id: 'reviews', label: '변경 검토', badge: (d) => d.pendingReviews + d.pendingRequests },
   { id: 'tasks', label: '할 일', badge: (d) => d.inbox + d.dueTasks.length },
-  { id: 'verification', label: '테스트', badge: (d) => d.lastRun?.failed ?? 0 },
+  { id: 'verification', label: '테스트', group: '확인', badge: (d) => d.lastRun?.failed ?? 0 },
   { id: 'drift', label: '도메인 점검', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
-  { id: 'knowledge', label: '지식' },
+  { id: 'knowledge', label: '지식', group: '자료' },
   { id: 'graph', label: '관계도' },
-  { id: 'terminal', label: '터미널' },
+  { id: 'terminal', label: '터미널', group: '도구' },
   { id: 'settings', label: '프로젝트 설정' }
 ]
 
@@ -96,24 +96,27 @@ export default function App() {
       <aside className="side">
         <div className="brand">
           <span className="brand-name">
-            <Logo size={22} /> Orbit
+            <Logo size={22} /> {project.settings.name || 'Orbit'}
           </span>
-          <small title={project.projectDir}>{project.settings.name}</small>
+          <small title={project.projectDir}>{project.projectDir.split(/[\\/]/).pop()}</small>
         </div>
         <nav>
           {NAV.map((n) => {
             const count = badges && n.badge ? n.badge(badges) : 0
             return (
-              <button key={n.id} className={page === n.id ? 'on' : ''} onClick={() => go(n.id)}>
-                {n.label}
-                {count > 0 && <span className="count">{count}</span>}
-              </button>
+              <Fragment key={n.id}>
+                {n.group && <div className="nav-group">{n.group}</div>}
+                <button className={page === n.id ? 'on' : ''} onClick={() => go(n.id)}>
+                  {n.label}
+                  {count > 0 && <span className="count">{count}</span>}
+                </button>
+              </Fragment>
             )
           })}
         </nav>
         <div className="side-foot">
           <UpdateButton />
-          <button onClick={() => setCapture(true)} title="Ctrl+Shift+Space">
+          <button className="ghost" onClick={() => setCapture(true)} title="Ctrl+Shift+Space">
             + 빠른 기록
           </button>
           <button

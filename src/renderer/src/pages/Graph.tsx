@@ -17,14 +17,14 @@ const KINDS = [
 const KIND_LABEL: Record<string, string> = Object.fromEntries(KINDS)
 
 const COLORS: Record<string, string> = {
-  Core: '#e8590c',
-  Supporting: '#1c7ed6',
-  Generic: '#868e96',
-  spec: '#2f9e44',
-  design: '#7048e8',
-  task: '#f08c00',
-  knowledge: '#0c8599',
-  ghost: '#ced4da'
+  Core: '#c2416b',
+  Supporting: '#3a6fc4',
+  Generic: '#8b919c',
+  spec: '#5a8f2e',
+  design: '#7a5bc7',
+  task: '#b98a2e',
+  knowledge: '#4f8fa8',
+  ghost: '#c9ced6'
 }
 
 type Mode = 'all' | 'local' | 'tree'
@@ -77,7 +77,8 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
           style: {
             'background-color': 'data(color)',
             label: 'data(label)',
-            color: dark ? '#e9ecef' : '#212529',
+            color: dark ? '#c3c8d1' : '#3d4454',
+            'font-family': 'Pretendard Variable, Pretendard, sans-serif',
             'font-size': 11,
             'text-valign': 'bottom',
             'text-margin-y': 4,
@@ -88,27 +89,27 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
           }
         },
         { selector: 'node[kind = "domain"]', style: { width: 28, height: 28 } },
-        { selector: 'node[kind = "ghost"]', style: { 'border-width': 1, 'border-style': 'dashed', 'border-color': '#868e96' } },
-        { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#fab005', width: 32, height: 32 } },
+        { selector: 'node[kind = "ghost"]', style: { 'border-width': 1, 'border-style': 'dashed', 'border-color': '#8b919c' } },
+        { selector: 'node:selected', style: { 'border-width': 3, 'border-color': dark ? '#3fbfae' : '#0b7a70', width: 32, height: 32 } },
         { selector: '.faded', style: { opacity: 0.12 } },
         {
           selector: 'edge',
           style: {
             width: 1,
-            'line-color': dark ? '#495057' : '#ced4da',
-            'target-arrow-color': dark ? '#495057' : '#ced4da',
+            'line-color': dark ? '#3a404b' : '#c9ced6',
+            'target-arrow-color': dark ? '#3a404b' : '#c9ced6',
             'target-arrow-shape': 'triangle',
             'arrow-scale': 0.7,
             'curve-style': 'bezier',
             label: 'data(label)',
             'font-size': 8,
-            color: '#868e96',
+            color: '#8b919c',
             'text-opacity': 0,
             'transition-property': 'opacity, line-color',
             'transition-duration': 250
           }
         },
-        { selector: 'edge.near', style: { 'line-color': '#fab005', 'target-arrow-color': '#fab005', width: 2, 'text-opacity': 1 } }
+        { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', 'target-arrow-color': dark ? '#3fbfae' : '#0b7a70', width: 2, 'text-opacity': 1 } }
       ]
     })
     instance.on('tap', 'node', (e) => setSelected((e.target as NodeSingular).id()))
