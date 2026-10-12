@@ -113,6 +113,10 @@ async function smoke(dir: string, out?: string) {
       )
       await new Promise((r) => setTimeout(r, 1200))
     }
+    if (process.env.GIRSKTOP_SMOKE_JS) {
+      const r = await win!.webContents.executeJavaScript(process.env.GIRSKTOP_SMOKE_JS)
+      console.log('SMOKE_JS', JSON.stringify(r))
+    }
     const text = await win!.webContents.executeJavaScript('document.body.innerText')
     const dash = await api.dashboard()
     console.log('SMOKE_DASHBOARD', JSON.stringify({ ...dash, settings: undefined }))

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import cytoscape, { type Core } from 'cytoscape'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import { api } from '../api'
 import type { PageProps } from '../App'
+import type { GNode } from '../types'
 import { useLoad } from '../ui'
 
 const KINDS = [
@@ -12,6 +13,8 @@ const KINDS = [
   ['knowledge', '지식'],
   ['ghost', '미정의']
 ] as const
+
+const KIND_LABEL: Record<string, string> = Object.fromEntries(KINDS)
 
 const COLORS: Record<string, string> = {
   Core: '#e8590c',
@@ -24,41 +27,47 @@ const COLORS: Record<string, string> = {
   ghost: '#ced4da'
 }
 
+type Mode = 'all' | 'local' | 'tree'
+
+const ANIM = { duration: 450, easing: 'ease-in-out-cubic' as const }
+
 export default function GraphPage({ refreshKey, go }: PageProps) {
   const [graph] = useLoad(() => api.graph(), [refreshKey])
   const ref = useRef<HTMLDivElement>(null)
   const cy = useRef<Core | null>(null)
   const [kinds, setKinds] = useState<Set<string>>(new Set(['domain', 'spec', 'design', 'ghost']))
-  const [mode, setMode] = useState<'all' | 'local' | 'tree'>('all')
-  const [center, setCenter] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>('all')
+  const [selected, setSelected] = useState<string | null>(null)
   const [depth, setDepth] = useState(1)
+  const goRef = useRef(go)
+  goRef.current = go
 
+  // 파일 감시로 같은 데이터가 다시 와도 그래프를 새로 만들지 않도록, 내용이 바뀐 경우에만 다시 만든다
+  const signature = useMemo(() => (graph ? JSON.stringify(graph) : ''), [graph])
+
+  /* 1) 그래프 생성: 데이터 내용이 바뀔 때만 */
   useEffect(() => {
     if (!graph || !ref.current) return
-    let nodes = graph.nodes.filter((n) => kinds.has(n.kind))
-    let edges = graph.edges
-    if (mode === 'tree') edges = edges.filter((e) => e.type === '상위')
-    if (mode === 'local' && center) {
-      const keep = new Set([center])
-      for (let i = 0; i < depth; i++) {
-        for (const e of edges) {
-          if (keep.has(e.source)) keep.add(e.target)
-          if (keep.has(e.target)) keep.add(e.source)
-        }
-      }
-      nodes = nodes.filter((n) => keep.has(n.id))
-    }
-    const ids = new Set(nodes.map((n) => n.id))
-    edges = edges.filter((e) => ids.has(e.source) && ids.has(e.target))
-
-    cy.current?.destroy()
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    cy.current = cytoscape({
+    const prev = cy.current
+    const positions = new Map<string, { x: number; y: number }>()
+    prev?.nodes().forEach((n) => {
+      positions.set(n.id(), { ...n.position() })
+    })
+    prev?.destroy()
+
+    const instance = cytoscape({
       container: ref.current,
       elements: [
-        ...nodes.map((n) => ({ data: { id: n.id, label: n.label, kind: n.kind, color: COLORS[n.kind === 'domain' ? n.subdomainType ?? 'Supporting' : n.kind] } })),
-        ...edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.type } }))
+        ...graph.nodes.map((n) => ({
+          data: { id: n.id, label: n.label, kind: n.kind, color: COLORS[n.kind === 'domain' ? n.subdomainType ?? 'Supporting' : n.kind] },
+          position: positions.get(n.id)
+        })),
+        ...graph.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.type } }))
       ],
+      minZoom: 0.2,
+      maxZoom: 3,
+      wheelSensitivity: 0.25,
       style: [
         {
           selector: 'node',
@@ -70,12 +79,15 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
             'text-valign': 'bottom',
             'text-margin-y': 4,
             width: 18,
-            height: 18
+            height: 18,
+            'transition-property': 'opacity, border-width, width, height',
+            'transition-duration': 250
           }
         },
         { selector: 'node[kind = "domain"]', style: { width: 28, height: 28 } },
-        { selector: 'node[kind = "ghost"]', style: { 'border-width': 1, 'border-style': 'dashed', 'border-color': '#868e96', opacity: 0.7 } },
-        { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#fab005' } },
+        { selector: 'node[kind = "ghost"]', style: { 'border-width': 1, 'border-style': 'dashed', 'border-color': '#868e96' } },
+        { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#fab005', width: 32, height: 32 } },
+        { selector: '.faded', style: { opacity: 0.12 } },
         {
           selector: 'edge',
           style: {
@@ -87,23 +99,97 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
             'curve-style': 'bezier',
             label: 'data(label)',
             'font-size': 8,
-            color: '#868e96'
+            color: '#868e96',
+            'text-opacity': 0,
+            'transition-property': 'opacity, line-color',
+            'transition-duration': 250
           }
-        }
-      ],
-      layout: mode === 'tree' ? { name: 'breadthfirst', directed: true, padding: 20 } : { name: 'cose', animate: false, padding: 20 }
+        },
+        { selector: 'edge.near', style: { 'line-color': '#fab005', 'target-arrow-color': '#fab005', width: 2, 'text-opacity': 1 } }
+      ]
     })
-    cy.current.on('tap', 'node', (e) => setCenter(e.target.id()))
-    cy.current.on('dbltap', 'node', (e) => {
-      const n = e.target.data()
-      if (n.kind === 'domain') go('domains', n.id)
-      if (n.kind === 'task') go('tasks', n.id)
+    instance.on('tap', 'node', (e) => setSelected((e.target as NodeSingular).id()))
+    instance.on('tap', (e) => {
+      if (e.target === instance) setSelected(null)
     })
-    return () => {
-      cy.current?.destroy()
-      cy.current = null
+    instance.on('dbltap', 'node', (e) => openNode(e.target.data()))
+    instance.on('mouseover', 'node', () => ref.current && (ref.current.style.cursor = 'pointer'))
+    instance.on('mouseout', 'node', () => ref.current && (ref.current.style.cursor = 'default'))
+    cy.current = instance
+    // 확인용: 개발 도구나 스모크 확인에서 그래프 상태를 볼 수 있게 노출
+    ;(window as unknown as { __girsktopGraph?: Core }).__girsktopGraph = instance
+
+    // 처음에는 애니메이션 없이 배치, 이후 데이터 갱신은 기존 위치를 유지한 채 새 노드만 자리 잡는다
+    if (positions.size > 0) applyView(instance, 'none')
+    else applyView(instance, 'instant')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature])
+
+  useEffect(() => () => cy.current?.destroy(), [])
+
+  /* 2) 보기 바꾸기: 필터·모드·단계 — 그래프는 그대로 두고 보이는 요소만 바꾼 뒤 부드럽게 재배치 */
+  useEffect(() => {
+    if (cy.current) applyView(cy.current, 'animate')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kinds, mode, depth, mode === 'local' ? selected : null])
+
+  /* 3) 선택 강조: 배치는 건드리지 않고 이웃만 밝게 */
+  useEffect(() => {
+    const c = cy.current
+    if (!c) return
+    c.batch(() => {
+      c.elements().removeClass('faded near').unselect()
+      if (!selected) return
+      const node = c.getElementById(selected)
+      if (node.empty()) return
+      node.select()
+      const near = node.closedNeighborhood()
+      if (mode !== 'local') c.elements().not(near).addClass('faded')
+      near.edges().addClass('near')
+    })
+  }, [selected, mode, signature])
+
+  function visibleSet(c: Core) {
+    let nodes = c.nodes().filter((n) => kinds.has(n.data('kind')))
+    let edges = c.edges()
+    if (mode === 'tree') edges = edges.filter((e) => e.data('label') === '상위')
+    if (mode === 'local' && selected) {
+      let keep = c.getElementById(selected).union(c.collection())
+      for (let i = 0; i < depth; i++) keep = keep.union(keep.neighborhood())
+      nodes = nodes.intersection(keep.nodes())
     }
-  }, [graph, kinds, mode, center, depth, go])
+    edges = edges.filter((e) => nodes.contains(e.source()) && nodes.contains(e.target()))
+    return { nodes, edges }
+  }
+
+  /** layout: none = 보이는 요소만 바꿈, instant = 애니메이션 없이 배치(처음 열 때), animate = 부드럽게 재배치 */
+  function applyView(c: Core, layout: 'none' | 'instant' | 'animate') {
+    const { nodes, edges } = visibleSet(c)
+    c.batch(() => {
+      c.elements().style('display', 'none')
+      nodes.style('display', 'element')
+      edges.style('display', 'element')
+    })
+    const shown = nodes.union(edges)
+    if (shown.empty() || layout === 'none') return
+    const animate = layout === 'animate'
+    const motion = { animate, animationDuration: ANIM.duration, animationEasing: ANIM.easing, padding: 30 }
+    const opts = mode === 'tree' ? { name: 'breadthfirst', directed: true, ...motion } : { name: 'cose', randomize: !animate, nodeDimensionsIncludeLabels: true, ...motion }
+    shown.layout(opts as cytoscape.LayoutOptions).run()
+  }
+
+  function openNode(n: { id: string; kind: string }) {
+    if (n.kind === 'domain') goRef.current('domains', n.id)
+    if (n.kind === 'task') goRef.current('tasks', n.id)
+  }
+
+  const fit = () => {
+    const c = cy.current
+    if (c) c.animate({ fit: { eles: c.elements(':visible'), padding: 30 } }, ANIM)
+  }
+
+  const info: GNode | undefined = graph?.nodes.find((n) => n.id === selected)
+  const links = graph ? graph.edges.filter((e) => e.source === selected || e.target === selected) : []
 
   return (
     <div className="page graph-page">
@@ -128,6 +214,9 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
               단계 <input type="number" min={1} max={5} value={depth} onChange={(e) => setDepth(Number(e.target.value))} style={{ width: 50 }} />
             </label>
           )}
+          <button className="small" onClick={fit}>
+            화면에 맞추기
+          </button>
         </div>
       </div>
       <div className="row">
@@ -138,16 +227,39 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
               checked={kinds.has(k)}
               onChange={(e) => {
                 const s = new Set(kinds)
-                e.target.checked ? s.add(k) : s.delete(k)
+                if (e.target.checked) s.add(k)
+                else s.delete(k)
                 setKinds(s)
               }}
             />
             {l}
           </label>
         ))}
-        <span className="muted small">노드 클릭: 로컬 중심 선택 · 더블클릭: 열기</span>
+        <span className="muted small">
+          {mode === 'local' ? '노드를 누르면 그 주변만 보여줍니다' : '노드를 누르면 연결된 곳이 강조됩니다'} · 더블클릭: 열기 · 빈 곳 클릭: 선택 해제
+        </span>
       </div>
-      <div ref={ref} className="graph" />
+      <div className="graph-wrap">
+        <div ref={ref} className="graph" />
+        {info && (
+          <div className="graph-info">
+            <div className="small muted">{KIND_LABEL[info.kind] ?? info.kind}</div>
+            <b>{info.label}</b>
+            <div className="small muted mono">{info.id}</div>
+            <div className="small">연결 {links.length}개</div>
+            <div className="row">
+              {(info.kind === 'domain' || info.kind === 'task') && (
+                <button className="small primary" onClick={() => openNode(info)}>
+                  열기
+                </button>
+              )}
+              <button className="small ghost" onClick={() => setSelected(null)}>
+                닫기
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
