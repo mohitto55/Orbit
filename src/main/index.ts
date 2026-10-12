@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shel
 import path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { createApi } from './api'
+import { createAiCheckApi } from './aiCheckApi'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 
@@ -37,7 +38,15 @@ const api = createApi({
   onProjectOpened: watch
 })
 
-for (const [name, fn] of Object.entries(api)) {
+const aiCheckApi = createAiCheckApi({
+  send,
+  getCtx: async () => {
+    const p = await api.currentProject()
+    return p ? { projectDir: p.projectDir, dataRoot: p.dataRoot } : null
+  }
+})
+
+for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi })) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 

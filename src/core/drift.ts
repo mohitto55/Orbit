@@ -173,6 +173,7 @@ export async function listChecks(ctx: Ctx): Promise<DriftCheck[]> {
   const out: DriftCheck[] = []
   for (const file of await listMd(path.join(ctx.dataRoot, 'drift'))) {
     const { data } = await readMd(file)
+    if (data.kind === 'ai-check') continue // AI 점검 기록은 aicheck.ts가 따로 다룬다
     out.push({ id: data.id, startedAt: data.startedAt, finishedAt: data.finishedAt, sessions: data.sessions ?? [], marks: data.marks ?? [], file })
   }
   return out.sort((a, b) => a.finishedAt.localeCompare(b.finishedAt))

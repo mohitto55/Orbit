@@ -318,3 +318,12 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
   .diff-del .code { color: #ffa8a8; }
 .decision-help { margin-top: 10px; line-height: 1.6; }
 .decision-help b { color: var(--text); }
+
+/* ---------- 도메인 점검: AI 점검 ---------- */
+.drift-page { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.drift-tabs { margin: 0; padding: 8px 16px 0; }
+.drift-page > .split { flex: 1; min-height: 0; }
+.findings { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.finding { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.finding.accepted { border-left: 3px solid var(--ok); opacity: 0.75; }
+.finding.dismissed { opacity: 0.5; }

@@ -1,6 +1,6 @@
 ---
 title: Girsktop 도메인 모델
-version: 0.15.0
+version: 0.16.0
 status: draft
 updated: 2026-10-12
 ---
@@ -82,7 +82,7 @@ docs/
 | DS | [설계](domains/design/domain.md) | 도메인 | Core | 기능별 설계, 시스템 공통 설계 (3층) | P1 | `design` |
 | VR | [테스트](domains/verification/domain.md) | 도메인 | Core | AC–테스트 연결, 실행 결과 (4층) | P4 | `verification` |
 | IR | [변경 검토](domains/impact-review/domain.md) | 도메인 | Core | 위 층이 크게 바뀌어 확인할 아래 문서와 그 판단 (도메인 → 아래) | P1 | `impact-review` |
-| DR | [도메인 점검](domains/drift/domain.md) | 도메인 | Core | 작업 대화와 도메인 비교, 검토 회차 (바깥 → 도메인) | P3 | `drift` |
+| DR | [도메인 점검](domains/drift/domain.md) | 도메인 | Core | AI가 지난 점검 이후 작업과 도메인을 비교해 제안, 사람이 판단 (바깥 → 도메인) | P3 | `drift` |
 | TK | [할 일](domains/task/domain.md) | - | Core | Inbox, Task, 시기, 리마인드 | P2 | `task` |
 | KN | [지식](domains/knowledge/domain.md) | - | Supporting | 결정, 프로젝트 용어, 컨벤션, 교훈 | - | `knowledge` |
 | PL | [앱 기반](domains/platform/domain.md) | - | Supporting | 화면 이동, 알림, 빠른 기록 단축키, 자동 업데이트 | - | `platform` |
@@ -148,7 +148,7 @@ docs/
 |---|---|---|
 | D1 | 문서 저장 방식 | **md 파일** |
 | D2 | 버전을 매기는 단위 | **혼합.** 버전은 문서 단위(정수)로 매기고, 변경마다 변경 내역과 변경 크기(큰 변경 / 작은 변경)를 남긴다. 큰 변경일 때만 아래 층에 변경 검토를 띄운다. 기능 명세 표는 변경 내역에 바뀐 기능·AC ID를 남겨, 그 기능·AC를 기준으로 한 설계·테스트에만 변경 검토를 띄운다 |
-| D3 | 도메인 점검 판단 주체 | **사람.** 앱은 주기적으로 검토를 요청하고 비교할 자료를 보여주며, 수정 여부는 사람이 판단한다 |
+| D3 | 도메인 점검 판단 주체 | **점검은 AI, 반영은 사람.** 지난 점검 이후의 작업 대화·커밋과 도메인 문서를 Claude Code·Codex에게 주고 맞지 않는 곳을 찾게 한다. AI는 근거와 함께 제안만 하고, 사람이 항목마다 받아들이거나 무시한다 |
 | D4 | 사용 범위 | **1인** (팀 공유는 이후 검토) |
 | D5 | 문서 층 구조 | **4층**: 도메인(역할) → 기능 명세 표(요구사항) → 설계(기능별 + 시스템 공통) → 검증(테스트) |
 | D6 | 테스트 연결 방식 | 테스트 이름에 AC ID를 적는다 (예: `[PAY-F02-AC1] ...`). 결과는 JUnit XML로 읽는다 |

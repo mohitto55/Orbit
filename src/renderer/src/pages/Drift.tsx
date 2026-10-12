@@ -1,11 +1,30 @@
 import { useMemo, useState } from 'react'
+import AiCheck from './AiCheck'
 import { Markdown } from '../Markdown'
 import { api } from '../api'
 import type { PageProps } from '../App'
 import type { Mark, SessionInfo } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
 
-export default function Drift({ refreshKey, reloadBadges }: PageProps) {
+export default function Drift(props: PageProps) {
+  const [tab, setTab] = useState<'ai' | 'manual'>('ai')
+  return (
+    <div className="drift-page">
+      <div className="tabs drift-tabs">
+        <button className={tab === 'ai' ? 'on' : ''} onClick={() => setTab('ai')}>
+          AI 점검
+        </button>
+        <button className={tab === 'manual' ? 'on' : ''} onClick={() => setTab('manual')}>
+          대화 직접 보기
+        </button>
+      </div>
+      {tab === 'ai' ? <AiCheck {...props} /> : <ManualReview {...props} />}
+    </div>
+  )
+}
+
+/** 대화를 사람이 직접 읽으며 표시를 남기는 방식 (AI 점검을 보완) */
+function ManualReview({ refreshKey, reloadBadges }: PageProps) {
   const [sessions, reloadSessions] = useLoad(() => api.pendingSessions(), [refreshKey])
   const [checks, reloadChecks] = useLoad(() => api.listChecks(), [refreshKey])
   const [domains] = useLoad(() => api.listDomains(), [refreshKey])
