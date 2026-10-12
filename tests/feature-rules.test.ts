@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createDomain } from '../src/core/domain'
 import { addFeature, createSpec, getSpec, saveFeatures, specStaleness, type Feature } from '../src/core/spec'
 import { decide, openReview } from '../src/core/impact'
+import { createDesign } from '../src/core/design'
 import { listChanges } from '../src/core/changes'
 import { newProject } from './helpers'
 
@@ -39,6 +40,19 @@ describe('루트 기능 명세 / 하위 규칙 명세', () => {
     expect(r.spec.basedOn).toContainEqual({ ref: rules.id, version: rules.version })
     // 다시 읽어도 남아 있다
     expect((await getSpec(ctx, features.id)).features[0].uses).toEqual([rules.features[0].acs[0].id])
+  })
+
+  it('루트 기능의 설계는 응용 서비스용 틀(참여 하위 도메인·호출 순서·트랜잭션·재시도·후속 처리)로 만들어진다', async () => {
+    const { ctx, rules, features } = await setup()
+    const [f] = features.features
+    await saveFeatures(ctx, features.id, [{ ...f, uses: [rules.features[0].id] }], null)
+    const root = await createDesign(ctx, features.id, f.id)
+    for (const h of ['## 참여 하위 도메인', '## 호출 순서', '## 함께 확정할 범위 (트랜잭션)', '## 실패와 재시도', '## 후속 처리 (Outbox·이벤트)', '## 응용 서비스 코드 위치']) expect(root.content).toContain(h)
+    expect(root.content).toContain(`- \`${rules.features[0].id}\``)
+    // 하위 도메인 규칙의 설계는 기존 틀
+    const sub = await createDesign(ctx, rules.id, rules.features[0].id)
+    expect(sub.content).toContain('## 처리 흐름')
+    expect(sub.content).not.toContain('## 호출 순서')
   })
 
   it('자기 아래가 아닌 도메인의 규칙은 쓸 수 없다', async () => {

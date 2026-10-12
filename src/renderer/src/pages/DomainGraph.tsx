@@ -241,6 +241,16 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
             padding: '22px'
           }
         },
+        // 루트 도메인(고른 최상위 도메인) 상자는 하위 도메인과 다른 색
+        {
+          selector: 'node[kind = "root"]',
+          style: {
+            'background-color': dark ? '#16302d' : '#d7eeea',
+            'border-color': dark ? '#3fbfae' : '#0b7a70',
+            'border-width': 2,
+            color: dark ? '#7fd8cb' : '#0b5f57'
+          }
+        },
         { selector: 'node:selected', style: { 'border-width': 2.5, 'border-color': dark ? '#3fbfae' : '#0b7a70' } },
         {
           selector: 'edge',

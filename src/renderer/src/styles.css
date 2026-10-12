@@ -339,6 +339,9 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .modal { width: 520px; max-width: calc(100vw - 32px); background: var(--panel); border-radius: 14px; padding: 22px 24px; border: 1px solid var(--line); box-shadow: var(--shadow-float); }
 .modal h3:first-child { font-size: 16px; margin-bottom: 14px; }
 .modal input { width: 100%; }
+/* 체크박스·라디오는 늘리지 않는다 (모든 모달 공통) */
+.modal input[type='checkbox'], .modal input[type='radio'] { width: auto; flex: none; margin-top: 3px; }
+.modal label:has(> input[type='checkbox']), .modal label:has(> input[type='radio']) { display: flex; gap: 6px; align-items: flex-start; }
 
 .toasts { position: fixed; right: 16px; top: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 30; pointer-events: none; }
 .toast { padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 13.5px; max-width: 420px; box-shadow: var(--shadow-float); pointer-events: auto; cursor: pointer; }

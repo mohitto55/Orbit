@@ -82,6 +82,35 @@ export async function createSystemDesign(ctx: Ctx): Promise<Design> {
   return loadDesign(file, undefined)
 }
 
+/**
+ * 루트 기능의 설계: 하위 도메인 규칙을 조정하는 응용 서비스의 구현.
+ * 무엇을 함께 확정할지(계약)는 기능 명세의 AC에, 그걸 어떤 호출·트랜잭션·후속 처리로 하는지는 여기에.
+ */
+function featureDesignTemplate(name: string, uses: string[]): string {
+  return `# ${name} 설계
+
+## 개요
+
+## 참여 하위 도메인
+
+${uses.length ? uses.map((u) => `- \`${u}\``).join('\n') : '- (기능 명세에서 고른 쓰는 규칙)'}
+
+## 호출 순서
+
+(응용 서비스가 필요한 모델을 불러오고, 도메인 행위를 실행하고, 결과를 저장하는 순서)
+
+## 함께 확정할 범위 (트랜잭션)
+
+## 실패와 재시도
+
+## 후속 처리 (Outbox·이벤트)
+
+## 응용 서비스 코드 위치
+
+## 대안과 선택 이유
+`
+}
+
 export async function createDesign(ctx: Ctx, specId: string, featureId: string): Promise<Design> {
   const spec = await getSpec(ctx, specId)
   const feature = spec.features.find((f) => f.id === featureId)
@@ -99,7 +128,7 @@ export async function createDesign(ctx: Ctx, specId: string, featureId: string):
       version: 1,
       status: 'draft'
     },
-    `# ${feature.name} 설계
+    spec.role === 'feature' ? featureDesignTemplate(feature.name, feature.uses ?? []) : `# ${feature.name} 설계
 
 ## 개요
 
