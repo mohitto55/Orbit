@@ -2,7 +2,7 @@
 id: system-design
 kind: design
 title: 시스템 공통 설계
-version: 1
+version: 2
 status: draft
 ---
 
@@ -141,11 +141,23 @@ changed: [PAY-F02, PAY-F02-AC1]
 | `TestRunCompleted` | Verification | Spec(검증 상태 열), Knowledge Graph |
 | `FilesChanged` | Workspace | Knowledge Graph(인덱스 갱신) |
 
-## S7. 미결정 기술 결정 {#s7}
+## S7. 기술 결정 {#s7}
 
-| 항목 | 후보 | 판단 기준 |
+| 항목 | 결정 | 이유 |
 |---|---|---|
-| 데스크톱 셸 | Electron / Tauri | 배포 크기, 파일 감시·프로세스 실행 편의 |
-| 인덱스 저장소 | SQLite / 메모리 | S2 규모에서 메모리로 충분한지 |
-| 그래프 렌더링 | Cytoscape.js / sigma.js | 노드 수천 개에서의 성능 |
-| 자동 업데이트 | GitHub Releases 기반 업데이터 | 셸 선택에 따름 |
+| 데스크톱 셸 | **Electron** (electron-vite) | Rust·C++ 빌드 도구 없이 md 읽기·쓰기, 파일 감시, 테스트 프로세스 실행을 TypeScript 하나로 처리 |
+| UI | React + TypeScript | |
+| 인덱스 | 메모리 (매번 md에서 계산) | S2 규모에서 충분. 느려지면 SQLite 캐시 검토 |
+| md 파싱 | gray-matter | frontmatter + 본문 |
+| 파일 감시 | chokidar | WS-F05 |
+| 그래프 렌더링 | Cytoscape.js | 전체 / 로컬 / 계층(breadthfirst) 보기 |
+| 테스트 결과 | JUnit XML (fast-xml-parser) | 언어·도구와 무관 (D6) |
+| 배포 | electron-builder + GitHub Releases, electron-updater 자동 업데이트 | `v*` 태그 push → `.github/workflows/release.yml` |
+
+**코드 구조**
+
+| 위치 | 역할 |
+|---|---|
+| `src/core/` | 도메인별 로직. Electron에 의존하지 않아 테스트로 바로 검증 (`tests/`, 테스트 이름에 AC ID) |
+| `src/main/` | Electron 메인: IPC(`api:<이름>`), 파일 감시, 테스트 실행, 알림, 전역 단축키 |
+| `src/renderer/` | React 화면 |

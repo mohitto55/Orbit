@@ -1,0 +1,16 @@
+export type { Domain, SubdomainType } from '../../core/domain'
+export type { Spec, Feature, AC, FeatureStatus } from '../../core/spec'
+export type { Design } from '../../core/design'
+export type { ChangeSet, ChangeInput, ChangeSize } from '../../core/changes'
+export type { Review, ReviewItem, Decision } from '../../core/impact'
+export type { Task, InboxItem, TaskType, Horizon, TaskStatus } from '../../core/task'
+export type { TestLink, RunSummary, AcStatus } from '../../core/verification'
+export type { SessionInfo, SessionMessage, Mark, DomainRequest } from '../../core/drift'
+export type { Knowledge, KnowledgeType } from '../../core/knowledge'
+export type { ProjectSettings, HarnessTarget } from '../../core/workspace'
+export type { Graph, GNode, GEdge } from '../../core/graph'
+
+export const TASK_TYPES = ['feature', 'bug', 'refactor', 'tech-debt', 'research', 'docs', 'test', 'spec-sync', 'design-sync', 'domain-sync'] as const
+export const HORIZONS = ['지금', '다음', '나중', '언젠가'] as const
+export const TASK_STATUSES = ['대기', '진행', '완료', '취소'] as const
+export const KN_TYPES = ['결정', '용어', '컨벤션', '교훈', '주의'] as const

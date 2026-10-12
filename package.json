@@ -1,0 +1,66 @@
+{
+  "name": "girsktop",
+  "productName": "Girsktop",
+  "version": "0.1.0",
+  "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하고 Claude Code / Codex 하네스를 만드는 데스크톱 앱",
+  "main": "./out/main/index.js",
+  "author": "mohitto55",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:junit": "vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml",
+    "dist": "npm run build && electron-builder --publish never",
+    "release": "npm run build && electron-builder --publish always"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "cytoscape": "^3.30.2",
+    "electron-updater": "^6.3.4",
+    "fast-xml-parser": "^4.4.1",
+    "gray-matter": "^4.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/cytoscape": "^3.21.5",
+    "@types/node": "^20.14.15",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.4.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.1",
+    "vitest": "^2.0.5"
+  },
+  "build": {
+    "appId": "com.girsktop.app",
+    "productName": "Girsktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ]
+  }
+}
