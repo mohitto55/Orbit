@@ -93,6 +93,16 @@ export default function Terminals({ visible }: { visible: boolean }) {
       const info = await api.termCreate(kind, term.cols, term.rows)
       xterms.set(info.id, { term, fit, host })
       term.onData((d) => void api.termWrite(info.id, d))
+      // Shift+Enter / Ctrl+Enter는 xterm이 그냥 Enter(\r)로 보내 입력이 바로 전송된다.
+      // 에이전트가 줄바꿈으로 알아듣는 신호로 바꿔 보낸다: Claude Code는 Alt+Enter(ESC CR), Codex는 Ctrl+J(LF)
+      const newline = kind === 'claude' ? '\x1b\r' : kind === 'codex' ? '\n' : null
+      if (newline) {
+        term.attachCustomKeyEventHandler((e) => {
+          if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey) || e.altKey || e.metaKey) return true
+          if (e.type === 'keydown') void api.termWrite(info.id, newline)
+          return false
+        })
+      }
       setTabs((t) => [...t, { id: info.id, kind, title: info.title }])
       setActive(info.id)
     } catch (e) {
