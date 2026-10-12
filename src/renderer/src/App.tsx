@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, on, type Dashboard as DashboardData, type Project } from './api'
-import { ChangeDialog, Modal, Toasts, UndoBar, errorToast, toast } from './ui'
+import { ChangeDialog, Modal, Toasts, errorToast, toast } from './ui'
 import Start from './pages/Start'
 import Dashboard from './pages/Dashboard'
 import Domains from './pages/Domains'
@@ -83,7 +83,6 @@ export default function App() {
           <UpdateButton />
         </div>
         <Toasts />
-        <UndoBar />
       </>
     )
   }
@@ -139,7 +138,6 @@ export default function App() {
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
       <ChangeDialog />
       <Toasts />
-      <UndoBar />
     </div>
   )
 }
