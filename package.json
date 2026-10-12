@@ -78,7 +78,7 @@
         "provider": "github",
         "owner": "mohitto55",
         "repo": "Orbit",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ]
   }

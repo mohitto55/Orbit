@@ -29,3 +29,13 @@ jobs:
       - run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 세 OS 빌드가 모두 올라간 뒤에 공개한다. 먼저 공개하면 앱이 아직 없는 latest.yml을 찾다 404가 난다.
+  # 한 OS라도 실패하면 이 단계가 돌지 않아 초안으로 남는다 (반쪽짜리 릴리즈를 내보내지 않음).
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
