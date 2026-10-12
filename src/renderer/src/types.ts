@@ -15,3 +15,7 @@ export const HORIZONS = ['지금', '다음', '나중', '언젠가'] as const
 export const TASK_STATUSES = ['대기', '진행', '완료', '취소'] as const
 export const PRIORITIES = ['높음', '보통', '낮음'] as const
 export const KN_TYPES = ['결정', '용어', '컨벤션', '교훈', '주의'] as const
+export type { Concept, ConceptRelation } from '../../core/model'
+export type { AnchorHit } from '../../core/codecheck'
+export const CONCEPT_KINDS = ['Entity', 'Value Object', 'Aggregate', 'Event', 'Policy', 'Domain Service'] as const
+export type { DomainMap, MapNode, MapEdge, EdgeVia, DomainScope, ScopeNode, ScopeEdge } from '../../core/domainmap'

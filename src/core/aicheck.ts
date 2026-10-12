@@ -7,6 +7,7 @@ import { listDomains, domainPathLabel } from './domain'
 import { listChecks, pendingSessions, readSessionMessages, type SessionInfo } from './drift'
 import { addInbox } from './task'
 import { saveKnowledge } from './knowledge'
+import { checkAnchors } from './codecheck'
 
 /**
  * 도메인 점검: 지난 점검 이후의 작업 대화·커밋과 현재 도메인 문서를 AI(Claude Code / Codex)에게 주고
@@ -70,6 +71,9 @@ export async function buildCheckPrompt(ctx: Ctx, sessions: SessionInfo[], since:
     .map((d) => `### ${domainPathLabel(domains, d.id)} (id: ${d.id}, v${d.version})\n${d.content.trim()}`)
     .join('\n\n')
 
+  const anchors = await checkAnchors(ctx, domains).catch(() => [])
+  const anchorText = anchors.map((a) => `- ${a.domainId} › ${a.concept}: \`${a.anchor}\` → ${a.found ?? '찾지 못함'}`).join('\n')
+
   let budget = TOTAL_CHARS
   const sessionText: string[] = []
   for (const s of sessions) {
@@ -89,6 +93,8 @@ ${since ? `지난 점검(${since}) 이후` : '지금까지'}의 작업 대화와
 - domain: 작업에서 새로 생기거나 바뀐 도메인 규칙·용어·역할인데 도메인 문서에 없거나 다르게 적힌 것 (고칠 도메인 id를 domainId에)
 - task: 대화에서 "나중에", "TODO"처럼 미뤄둔 할 일
 - knowledge: 도메인 규칙은 아니지만 남겨둘 결정·교훈·주의사항
+- domain (모델): 도메인 문서의 \`## 모델\` 표가 코드와 어긋난 것. 코드 위치를 찾지 못한 개념, 커밋에서 이름이 바뀌거나 옮겨진 클래스,
+  개념이 지켜야 할 규칙·계산이 모델이 아니라 응용 서비스(호출 순서를 조율하는 쪽)에 들어간 것, 새 개념·관계가 생겼는데 표에 없는 것
 
 규칙:
 - 문서를 직접 고치지 말고 제안만 한다.
@@ -100,6 +106,10 @@ ${since ? `지난 점검(${since}) 이후` : '지금까지'}의 작업 대화와
 ## 현재 도메인 문서
 
 ${domainText}
+
+## 모델 표의 코드 위치 확인 결과
+
+${anchorText || '(코드 위치가 적힌 개념 없음)'}
 
 ## 커밋
 

@@ -13,6 +13,9 @@ import * as dr from '../core/drift'
 import * as kn from '../core/knowledge'
 import * as kg from '../core/graph'
 import * as df from '../core/diff'
+import { buildDomainMap, buildDomainScope } from '../core/domainmap'
+import { checkAnchors } from '../core/codecheck'
+import { ensureModelSection } from '../core/model'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import { TerminalManager, type TerminalKind } from '../core/terminal'
@@ -153,6 +156,18 @@ export function createApi(deps: ApiDeps) {
       const live = spec ? spec.features.filter((f) => f.status !== '폐기').length : 0
       return dm.deleteDomain(c, id, live)
     },
+    /** 도메인 지도: 상위 안에 하위를 묶고 도메인 사이 관계를 선으로 */
+    domainMap: () => buildDomainMap(need()),
+    /** 고른 도메인 하나의 그래프 (하위 도메인·개념·관계) */
+    domainScope: (rootId: string) => buildDomainScope(need(), rootId),
+    /** 모델 표의 코드 위치가 실제 코드에 있는지 */
+    async checkAnchors(domainId?: string) {
+      const c = need()
+      const domains = await dm.listDomains(c)
+      return checkAnchors(c, domainId ? domains.filter((d) => d.id === domainId) : domains)
+    },
+    /** 모델 섹션이 없는 도메인 문서 본문에 빈 모델 표를 붙인 결과 (저장은 하지 않음) */
+    withModelSection: (content: string) => ensureModelSection(content),
     async history(target: string) {
       return (await listChanges(need())).filter((c) => c.target === target).reverse()
     },

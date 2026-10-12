@@ -6,8 +6,13 @@ import { Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../u
 import SpecTable from './SpecTable'
 import { MdEditor } from '../Markdown'
 import DesignPanel from './DesignPanel'
+import ModelPanel from './ModelPanel'
+import DomainGraph from './DomainGraph'
+import FeatureRollup from './FeatureRollup'
+import { MdContent } from '../Markdown'
+import type { DomainMap as MapData } from '../types'
 
-type Tab = 'role' | 'spec' | 'design' | 'history'
+type Tab = 'role' | 'features' | 'model' | 'spec' | 'design' | 'history'
 
 export function domainLabel(domains: Domain[], id: string): string {
   const byId = new Map(domains.map((d) => [d.id, d]))
@@ -23,12 +28,31 @@ export function domainLabel(domains: Domain[], id: string): string {
 export default function Domains({ refreshKey, focus, reloadBadges, go }: PageProps) {
   const [domains, reload] = useLoad(() => api.listDomains(), [refreshKey])
   const [requests] = useLoad(() => api.listRequests(), [refreshKey])
-  // focus는 '도메인 id' 또는 '도메인 id#spec|design' (다른 화면에서 특정 탭으로 바로 열 때)
+  // focus는 '도메인 id' 또는 '도메인 id#model|spec|design' (다른 화면에서 특정 탭으로 바로 열 때)
   const [focusId, focusTab] = (focus ?? '').split('#')
   const [selected, setSelected] = useState<string | null>(focusId || null)
-  const [tab, setTab] = useState<Tab>(focusTab === 'spec' || focusTab === 'design' ? focusTab : 'role')
+  const [tab, setTab] = useState<Tab>(focusTab === 'spec' || focusTab === 'design' || focusTab === 'model' ? focusTab : 'role')
   const [creating, setCreating] = useState(false)
+  // 지도(그래프) 보기가 기본. 다른 화면에서 특정 도메인·탭으로 오면 문서 보기
+  const [view, setView] = useState<'map' | 'doc'>(focus ? 'doc' : 'map')
+  const [mapSel, setMapSel] = useState<string | null>(null)
+  const [relayout, setRelayout] = useState(0)
+  const [map, reloadMap] = useLoad(() => api.domainMap(), [refreshKey])
+  // 그래프로 볼 최상위 도메인 (애그리거트 루트 단위)
+  const [rootId, setRootId] = useState<string | null>(null)
+  const [scope, reloadScope] = useLoad(() => (rootId ? api.domainScope(rootId) : Promise.resolve(null)), [rootId, refreshKey])
+  const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
+  const [statuses] = useLoad(() => api.allAcStatuses(), [refreshKey])
   const [systemDesign, setSystemDesign] = useState(false)
+
+  // 다른 화면(관계도·유스케이스)에서 다른 도메인으로 옮겨 올 때
+  useEffect(() => {
+    if (!focusId) return
+    setSelected(focusId)
+    setSystemDesign(false)
+    setView('doc')
+    if (focusTab === 'spec' || focusTab === 'design' || focusTab === 'model') setTab(focusTab)
+  }, [focus])
 
   useEffect(() => {
     if (!selected && domains?.length) {
@@ -56,15 +80,138 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
     } else toast(`아직 없는 도메인입니다: ${target}`, 'error')
   }
   const pendingReq = (requests ?? []).filter((r) => r.status === 'pending')
+  const openDoc = (id: string, t?: Tab) => {
+    setSelected(id)
+    setSystemDesign(false)
+    if (t) setTab(t)
+    setView('doc')
+  }
+
+  if (view === 'map') {
+    const roots = domains
+      .filter((d) => !d.parent)
+      .sort((x, y) => (x.order ?? 99) - (y.order ?? 99) || x.title.localeCompare(y.title, 'ko'))
+    const under = (id: string) => domains.filter((d) => domainLabel(domains, d.id).startsWith(domainLabel(domains, id) + ' › '))
+    const root = domains.find((d) => d.id === rootId)
+    const pickedNode = scope?.nodes.find((n) => n.id === mapSel)
+    const changed = () => {
+      reload()
+      reloadMap()
+      reloadScope()
+      reloadBadges()
+    }
+    return (
+      <div className="split">
+        <div className="pane-list">
+          <div className="row between">
+            <h3>도메인</h3>
+            <div className="row">
+              <button className="small ghost" onClick={() => setView('doc')}>
+                문서로
+              </button>
+              <button className="small" onClick={() => setCreating(true)}>
+                + 새 도메인
+              </button>
+            </div>
+          </div>
+          <div className="muted small">도메인을 고르면 그 도메인의 하위 도메인과 개념 관계만 그래프로 봅니다.</div>
+          {roots.map((r) => {
+            const subs = under(r.id)
+            const feats = map?.nodes.filter((n) => n.id === r.id || subs.some((x) => x.id === n.id)).reduce((a, n) => a + n.features, 0) ?? 0
+            const concepts = [r, ...subs].reduce((a, x) => a + x.model.length, 0)
+            return (
+              <button key={r.id} className={`tree-item root-card ${rootId === r.id ? 'on' : ''}`} onClick={() => { setRootId(r.id); setMapSel(null) }}>
+                <span className="row between">
+                  <b>
+                    <span className={`dot ${r.subdomainType.toLowerCase()}`} /> {r.title}
+                  </b>
+                </span>
+                <span className="muted small">
+                  하위 {subs.length} · 기능 {feats}
+                  {concepts > 0 ? ` · 개념 ${concepts}` : ''}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        {root && scope ? (
+          <div className="pane-main map-main">
+            <div className="row between">
+              <div>
+                <div className="muted small">도메인 그래프</div>
+                <h2>
+                  {root.title} <Badge kind={root.subdomainType.toLowerCase()}>{root.subdomainType}</Badge>
+                </h2>
+              </div>
+              <div className="row">
+                <span className="muted small">회색 상자: 하위 도메인 · 흰 네모: 개념(객체) · 선: 개념 관계 (누르면 관계 이름) · 끌어서 옮길 수 있음</span>
+                <button className="small ghost" title="노드 위치를 처음부터 다시 배치합니다" onClick={() => setRelayout((n) => n + 1)}>
+                  다시 배치
+                </button>
+              </div>
+            </div>
+            <div className="map-body">
+              <div className="graph-wrap">
+                <DomainGraph
+                  scope={scope}
+                  selected={mapSel}
+                  onSelect={setMapSel}
+                  onOpen={(id) => {
+                    const n = scope.nodes.find((x) => x.id === id)
+                    if (n) openDoc(n.domainId, n.kind === 'concept' ? 'model' : undefined)
+                  }}
+                  relayout={relayout}
+                />
+              </div>
+              {pickedNode?.kind === 'concept' ? (
+                <ConceptSide domains={domains} domainId={pickedNode.domainId} name={pickedNode.label} onOpen={() => openDoc(pickedNode.domainId, 'model')} onSelect={setMapSel} />
+              ) : (
+                <MapSide
+                  id={pickedNode ? pickedNode.domainId : root.id}
+                  map={map}
+                  domains={domains}
+                  specs={specs ?? []}
+                  statuses={statuses ?? {}}
+                  onSelect={setMapSel}
+                  onOpen={openDoc}
+                  onChanged={changed}
+                />
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="pane-main">
+            <Empty>왼쪽에서 도메인을 고르면 그 도메인의 그래프가 나옵니다</Empty>
+          </div>
+        )}
+        {creating && <CreateDomain domains={domains} onClose={() => setCreating(false)} onCreated={(d) => { changed(); if (!d.parent) setRootId(d.id); setCreating(false) }} />}
+      </div>
+    )
+  }
 
   return (
     <div className="split">
       <div className="pane-list">
         <div className="row between">
           <h3>도메인</h3>
-          <button className="small" onClick={() => setCreating(true)}>
-            + 새 도메인
-          </button>
+          <div className="row">
+            <button
+              className="small ghost"
+              onClick={() => {
+                // 지금 보던 도메인이 속한 최상위 도메인의 그래프로
+                let cur = domains.find((d) => d.id === selected)
+                while (cur?.parent) cur = domains.find((d) => d.id === cur!.parent)
+                if (cur) setRootId(cur.id)
+                setMapSel(selected)
+                setView('map')
+              }}
+            >
+              그래프로
+            </button>
+            <button className="small" onClick={() => setCreating(true)}>
+              + 새 도메인
+            </button>
+          </div>
         </div>
         {domains.length === 0 && <Empty>도메인이 없습니다</Empty>}
         <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
@@ -102,7 +249,9 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             <div className="tabs">
               {(
                 [
+                  ...(domains.some((d) => d.parent === domain.id) ? ([['features', '기능 모아보기']] as [Tab, string][]) : []),
                   ['role', '역할 (1층)'],
+                  ['model', `모델${domain.model.length ? ` ${domain.model.length}` : ''}`],
                   ['spec', '기능 명세 표 (2층)'],
                   ['design', '설계 (3층)'],
                   ['history', '변경 이력']
@@ -114,6 +263,8 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
               ))}
             </div>
             {tab === 'role' && <RoleEditor key={domain.id + domain.version} domain={domain} domains={domains} onWiki={openWiki} onSaved={() => { reload(); reloadBadges() }} />}
+            {tab === 'features' && <FeatureRollup rootId={domain.id} domains={domains} specs={specs ?? []} statuses={statuses ?? {}} onOpen={(id) => openDoc(id, 'spec')} />}
+            {tab === 'model' && <ModelPanel key={domain.id} domain={domain} domains={domains} refreshKey={refreshKey} go={go} onEdit={() => setTab('role')} onSaved={() => { reload(); reloadBadges() }} />}
             {tab === 'spec' && <SpecTable key={domain.id} domain={domain} refreshKey={refreshKey} onChanged={reloadBadges} />}
             {tab === 'design' && <DesignPanel key={domain.id} folder={domain.folder} refreshKey={refreshKey} onChanged={reloadBadges} />}
             {tab === 'history' && <History key={domain.id + domain.version} target={domain.id} />}
@@ -274,7 +425,7 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
           </select>
         </div>
       </div>
-      <MdEditor label="domain.md (역할 / 용어 / 하지 않는 것)" value={content} onChange={setContent} onWiki={onWiki} />
+      <MdEditor label="domain.md (역할 / 용어 / 모델 / 하지 않는 것)" value={content} onChange={setContent} onWiki={onWiki} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제
@@ -320,5 +471,211 @@ export function History({ target }: { target: string }) {
         ))}
       </tbody>
     </table>
+  )
+}
+
+const VIA_LABEL: Record<string, string> = { link: '직접', concept: '모델', mention: '언급' }
+
+/** 지도 옆 패널: 고른 도메인의 역할, 관계, 하위까지 모은 기능 */
+function MapSide(props: {
+  id: string | null
+  map: MapData | null
+  domains: Domain[]
+  specs: import('../types').Spec[]
+  statuses: Record<string, Record<string, import('../types').AcStatus>>
+  onSelect: (id: string | null) => void
+  onOpen: (id: string, tab?: Tab) => void
+  onChanged: () => void
+}) {
+  const { id, map, domains, specs, statuses, onSelect, onOpen, onChanged } = props
+  const [type, setType] = useState('의존')
+  const [to, setTo] = useState('')
+  const d = domains.find((x) => x.id === id)
+  const title = (x: string) => domains.find((y) => y.id === x)?.title ?? x
+
+  if (!d || !map) {
+    const roots = domains.filter((x) => !x.parent)
+    return (
+      <aside className="map-side">
+        <h3>도메인 지도</h3>
+        <p className="muted small">상위 도메인은 상자, 하위 도메인은 그 안에 묶여 보입니다. 선은 같은 상자 안의 하위 도메인 사이 관계입니다.</p>
+        <ul className="small map-legend">
+          <li><span className="lg solid" /> 직접 적은 관계</li>
+          <li><span className="lg dashed" /> 모델 표의 개념 관계에서 온 것</li>
+          <li><span className="lg dotted" /> 문서 본문의 [[도메인]] 언급</li>
+        </ul>
+        <p className="muted small">누르면 관계와 기능을, 두 번 누르면 문서를 엽니다. 노드를 끌어 옮긴 위치는 기억합니다.</p>
+        <h4>최상위 도메인</h4>
+        {roots.map((r) => {
+          const all = [r.id, ...domains.filter((x) => domainLabel(domains, x.id).startsWith(domainLabel(domains, r.id) + ' › ')).map((x) => x.id)]
+          const n = map?.nodes.filter((x) => all.includes(x.id)).reduce((a, x) => a + x.features, 0) ?? 0
+          return (
+            <button key={r.id} className="tree-item" onClick={() => onSelect(r.id)}>
+              {r.title} <span className="muted small">기능 {n}</span>
+            </button>
+          )
+        })}
+      </aside>
+    )
+  }
+
+  const out = map.edges.filter((e) => e.source === d.id)
+  const inc = map.edges.filter((e) => e.target === d.id)
+  const kids = domains.filter((x) => x.parent === d.id)
+
+  const saveLinks = async (links: Domain['links'], summary: string) => {
+    try {
+      await api.saveDomain(d.id, { links }, { size: 'minor', summary })
+      toast('관계를 저장했습니다')
+      onChanged()
+    } catch (e) {
+      errorToast(e)
+    }
+  }
+
+  return (
+    <aside className="map-side">
+      <div className="muted small">{domainLabel(domains, d.id)}</div>
+      <h3>
+        {d.title} <Badge kind={d.subdomainType.toLowerCase()}>{d.subdomainType}</Badge>
+      </h3>
+      {d.role && (
+        <div className="small map-role">
+          <MdContent source={d.role} />
+        </div>
+      )}
+      <div className="row">
+        <button className="small primary" onClick={() => onOpen(d.id)}>
+          문서 열기
+        </button>
+        {d.parent && (
+          <button className="small ghost" onClick={() => onSelect(d.parent!)}>
+            ↑ {title(d.parent)}
+          </button>
+        )}
+      </div>
+      {kids.length > 0 && (
+        <div className="chips">
+          {kids.map((k) => (
+            <button key={k.id} className="chip small" onClick={() => onSelect(k.id)}>
+              {k.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <h4>관계</h4>
+      {out.length + inc.length === 0 && <div className="muted small">{d.parent ? '같은 상위 안의 다른 하위 도메인과 이어진 선이 없습니다' : '최상위 도메인끼리는 선을 긋지 않습니다'}</div>}
+      <ul className="small map-rels">
+        {out.map((e) => (
+          <li key={'o' + e.target}>
+            → <button className="link" onClick={() => onSelect(e.target)}>{title(e.target)}</button> {e.types.join(', ')}{' '}
+            <span className="muted">({e.via.map((v) => VIA_LABEL[v]).join('·')})</span>
+            {e.details.length > 0 && <div className="muted">{e.details.join(' / ')}</div>}
+            {e.via.includes('link') && (
+              <button className="link danger-link" title="직접 적은 관계 지우기" onClick={() => saveLinks(d.links.filter((l) => l.to !== e.target), `관계 삭제: → ${title(e.target)}`)}>
+                지우기
+              </button>
+            )}
+          </li>
+        ))}
+        {inc.map((e) => (
+          <li key={'i' + e.source}>
+            ← <button className="link" onClick={() => onSelect(e.source)}>{title(e.source)}</button> {e.types.join(', ')}{' '}
+            <span className="muted">({e.via.map((v) => VIA_LABEL[v]).join('·')})</span>
+          </li>
+        ))}
+      </ul>
+      {d.parent && (
+      <div className="row map-add">
+        <input value={type} onChange={(e) => setType(e.target.value)} list="rel-types" style={{ width: 80 }} />
+        <datalist id="rel-types">
+          <option value="의존" />
+          <option value="사용" />
+          <option value="요청" />
+          <option value="구독" />
+        </datalist>
+        <select value={to} onChange={(e) => setTo(e.target.value)}>
+          <option value="">대상 도메인…</option>
+          {domains
+            .filter((x) => x.id !== d.id && !!d.parent && x.parent === d.parent)
+            .map((x) => (
+              <option key={x.id} value={x.id}>
+                {domainLabel(domains, x.id)}
+              </option>
+            ))}
+        </select>
+        <button
+          className="small"
+          disabled={!to || !type.trim()}
+          onClick={() => {
+            saveLinks([...d.links.filter((l) => l.to !== to), { type: type.trim(), to }], `관계 추가: ${type.trim()} → ${title(to)}`)
+            setTo('')
+          }}
+        >
+          + 선
+        </button>
+      </div>
+      )}
+
+      <h4>기능{kids.length > 0 ? ' (하위 포함)' : ''}</h4>
+      <FeatureRollup compact rootId={d.id} domains={domains} specs={specs} statuses={statuses} onOpen={(x) => onOpen(x, 'spec')} />
+    </aside>
+  )
+}
+
+/** 그래프에서 개념을 골랐을 때: 상태·행위, 불변식, 관계, 코드 */
+function ConceptSide({ domains, domainId, name, onOpen, onSelect }: { domains: Domain[]; domainId: string; name: string; onOpen: () => void; onSelect: (id: string | null) => void }) {
+  const d = domains.find((x) => x.id === domainId)
+  const c = d?.model.find((m) => m.name === name)
+  if (!d || !c) return <aside className="map-side" />
+  const row = (label: string, v: string) =>
+    v ? (
+      <div className="concept-row">
+        <span className="muted small">{label}</span>
+        <MdContent source={v.replace(/<br\s*\/?>/gi, '\n\n')} />
+      </div>
+    ) : null
+  return (
+    <aside className="map-side">
+      <div className="muted small">{domainLabel(domains, d.id)} › 개념</div>
+      <h3>
+        {c.name} {c.kind && <Badge>{c.kind}</Badge>}
+      </h3>
+      {row('상태·행위', c.behavior)}
+      {row('불변식', c.invariants)}
+      {c.relations.length > 0 && (
+        <div className="concept-row">
+          <span className="muted small">관계</span>
+          <div className="chips">
+            {c.relations.map((r, i) => (
+              <span key={i} className="chip small">
+                {r.type} → {r.to}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {c.code.length > 0 && (
+        <div className="concept-row">
+          <span className="muted small">코드</span>
+          <div className="chips">
+            {c.code.map((x) => (
+              <span key={x} className="chip small mono">
+                {x}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="row">
+        <button className="small primary" onClick={onOpen}>
+          모델 표 열기
+        </button>
+        <button className="small ghost" onClick={() => onSelect(d.id)}>
+          ↑ {d.title}
+        </button>
+      </div>
+    </aside>
   )
 }

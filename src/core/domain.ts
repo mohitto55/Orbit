@@ -3,6 +3,7 @@ import path from 'path'
 import type { Ctx } from './workspace'
 import { exists, listDirs, readMd, writeMd, slugify, sectionText } from './md'
 import { readRaw, recordChange, requireChange, type ChangeInput, type ChangeSet } from './changes'
+import { parseModel, modelTemplate, type Concept } from './model'
 
 export type SubdomainType = 'Core' | 'Supporting' | 'Generic'
 
@@ -24,6 +25,8 @@ export interface Domain {
   links: DomainLink[]
   content: string
   role: string
+  /** `## 모델` 표의 개념들 */
+  model: Concept[]
 }
 
 export function domainFile(ctx: Ctx, folder: string): string {
@@ -47,7 +50,8 @@ export async function listDomains(ctx: Ctx): Promise<Domain[]> {
       order: data.order == null ? undefined : Number(data.order),
       links: Array.isArray(data.links) ? data.links : [],
       content,
-      role: sectionText(content, '역할')
+      role: sectionText(content, '역할'),
+      model: parseModel(content)
     })
   }
   return out
@@ -118,6 +122,7 @@ ${role || '(이 도메인이 책임지는 일)'}
 | 용어 | 뜻 | 비고 |
 |---|---|---|
 
+${modelTemplate()}
 ## 하지 않는 것
 
 -

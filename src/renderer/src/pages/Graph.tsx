@@ -4,11 +4,13 @@ import { api } from '../api'
 import type { PageProps } from '../App'
 import type { GNode } from '../types'
 import { useDark, useLoad } from '../ui'
+import { useWheelZoom } from '../cyZoom'
 
 const KINDS = [
   ['domain', '도메인'],
   ['spec', '기능 명세'],
   ['design', '설계'],
+  ['concept', '모델 개념'],
   ['task', 'Task'],
   ['knowledge', '지식'],
   ['ghost', '미정의']
@@ -21,13 +23,14 @@ const COLORS: Record<string, string> = {
   Supporting: '#3a6fc4',
   Generic: '#8b919c',
   spec: '#5a8f2e',
+  concept: '#2f9a8a',
   design: '#7a5bc7',
   task: '#b98a2e',
   knowledge: '#4f8fa8',
   ghost: '#c9ced6'
 }
 
-type Mode = 'all' | 'local' | 'tree'
+type Mode = 'all' | 'local' | 'tree' | 'model'
 
 const ANIM = { duration: 450, easing: 'ease-in-out-cubic' as const }
 
@@ -63,10 +66,10 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
       container: ref.current,
       elements: [
         ...graph.nodes.map((n) => ({
-          data: { id: n.id, label: n.label, kind: n.kind, color: COLORS[n.kind === 'domain' ? n.subdomainType ?? 'Supporting' : n.kind] },
+          data: { id: n.id, label: n.label, kind: n.kind, domainId: n.domainId, color: COLORS[n.kind === 'domain' ? n.subdomainType ?? 'Supporting' : n.kind] },
           position: positions.get(n.id)
         })),
-        ...graph.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.type } }))
+        ...graph.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, label: e.type }, classes: e.cross ? 'cross' : '' }))
       ],
       minZoom: 0.1,
       maxZoom: 3,
@@ -88,6 +91,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
           }
         },
         { selector: 'node[kind = "domain"]', style: { width: 28, height: 28 } },
+        { selector: 'node[kind = "concept"]', style: { shape: 'round-rectangle', width: 16, height: 16 } },
         { selector: 'node[kind = "ghost"]', style: { 'border-width': 1, 'border-style': 'dashed', 'border-color': '#8b919c' } },
         { selector: 'node:selected', style: { 'border-width': 3, 'border-color': dark ? '#3fbfae' : '#0b7a70', width: 32, height: 32 } },
         { selector: '.faded', style: { opacity: 0.12 } },
@@ -108,6 +112,8 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
             'transition-duration': 250
           }
         },
+        { selector: 'edge.cross', style: { 'line-style': 'dashed', 'line-color': '#d0702a', 'target-arrow-color': '#d0702a', width: 1.5 } },
+        { selector: 'edge[label = "소속"]', style: { 'line-style': 'dotted', 'target-arrow-shape': 'none' } },
         { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', 'target-arrow-color': dark ? '#3fbfae' : '#0b7a70', width: 2, 'text-opacity': 1 } }
       ]
     })
@@ -136,28 +142,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     []
   )
 
-  /* 휠 줌: cytoscape 3.33+는 일반 마우스 휠(한 칸 deltaY=100)을 "부정확한 장치"로 보고 delta를 100으로 나눠
-     한 칸에 3% 정도만 줌된다. 바깥 래퍼에서 캡처 단계로 먼저 받아 직접 줌한다. */
-  useEffect(() => {
-    const wrap = ref.current?.parentElement
-    if (!wrap) return
-    const onWheel = (e: WheelEvent) => {
-      const c = cy.current
-      if (!c || !ref.current || e.deltaY === 0) return
-      e.preventDefault()
-      e.stopPropagation()
-      const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1)
-      // 마우스 한 칸(100) ≈ 1.2배, 터치패드 핀치(ctrl+휠, 작은 delta)는 더 민감하게
-      const k = e.ctrlKey ? 0.01 : 0.0018
-      const rect = ref.current.getBoundingClientRect()
-      c.zoom({
-        level: c.zoom() * Math.exp(-delta * k),
-        renderedPosition: { x: e.clientX - rect.left, y: e.clientY - rect.top }
-      })
-    }
-    wrap.addEventListener('wheel', onWheel, { capture: true, passive: false })
-    return () => wrap.removeEventListener('wheel', onWheel, { capture: true })
-  }, [])
+  useWheelZoom(ref, cy)
 
   /* 2) 보기 바꾸기: 필터·모드·단계 — 그래프는 그대로 두고 보이는 요소만 바꾼 뒤 부드럽게 재배치 */
   useEffect(() => {
@@ -182,6 +167,14 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
   }, [selected, mode, signature])
 
   function visibleSet(c: Core) {
+    if (mode === 'model') {
+      // 도메인 모델 관계: 개념과 그 개념을 가진 도메인만, 관계 라벨은 늘 보이게
+      const concepts = c.nodes('[kind = "concept"]')
+      const owners = c.nodes('[kind = "domain"]').filter((d) => concepts.some((x) => x.data('domainId') === d.id()))
+      const nodes = concepts.union(owners)
+      const edges = c.edges().filter((e) => nodes.contains(e.source()) && nodes.contains(e.target()))
+      return { nodes, edges }
+    }
     let nodes = c.nodes().filter((n) => kinds.has(n.data('kind')))
     let edges = c.edges()
     if (mode === 'tree') edges = edges.filter((e) => e.data('label') === '상위')
@@ -204,6 +197,9 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     c.batch(() => {
       c.elements(':visible').difference(shown).style('display', 'none')
       appearing.style('display', 'element')
+      // 모델 보기에서는 관계 이름이 핵심이라 늘 보인다 (다른 보기는 선택했을 때만)
+      if (mode === 'model') c.edges().style('text-opacity', 1)
+      else c.edges().removeStyle('text-opacity')
     })
     // 새로 나타난 노드는 이미 보이는 이웃 곁에서 출발하게 해, 원점에서 날아오지 않게 한다
     appearing.nodes().forEach((n) => {
@@ -225,9 +221,10 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     l.run()
   }
 
-  function openNode(n: { id: string; kind: string }) {
+  function openNode(n: { id: string; kind: string; domainId?: string }) {
     if (n.kind === 'domain') goRef.current('domains', n.id)
     if (n.kind === 'task') goRef.current('tasks', n.id)
+    if (n.kind === 'concept' && n.domainId) goRef.current('domains', `${n.domainId}#model`)
   }
 
   const fit = () => {
@@ -237,6 +234,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
 
   const info: GNode | undefined = graph?.nodes.find((n) => n.id === selected)
   const links = graph ? graph.edges.filter((e) => e.source === selected || e.target === selected) : []
+  const label = (id: string) => graph?.nodes.find((n) => n.id === id)?.label ?? id
 
   return (
     <div className="page graph-page">
@@ -248,7 +246,8 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
               [
                 ['all', '전체'],
                 ['local', '로컬'],
-                ['tree', '계층']
+                ['tree', '계층'],
+                ['model', '모델']
               ] as const
             ).map(([m, l]) => (
               <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
@@ -266,6 +265,13 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
           </button>
         </div>
       </div>
+      {mode === 'model' ? (
+        <div className="row">
+          <span className="muted small">
+            도메인 모델 관계: 개념(■)이 다른 개념과 어떻게 엮이는지. <span className="cross-legend">주황 점선</span>은 도메인 경계를 넘는 관계, 회색 점선은 소속 도메인. 각 도메인 문서의 모델 표에서 옵니다.
+          </span>
+        </div>
+      ) : (
       <div className="row">
         {KINDS.map(([k, l]) => (
           <label key={k} className="small chip">
@@ -286,6 +292,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
           {mode === 'local' ? '노드를 누르면 그 주변만 보여줍니다' : '노드를 누르면 연결된 곳이 강조됩니다'} · 더블클릭: 열기 · 빈 곳 클릭: 선택 해제
         </span>
       </div>
+      )}
       <div className="graph-wrap">
         <div ref={ref} className="graph" />
         {info && (
@@ -293,9 +300,22 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
             <div className="small muted">{KIND_LABEL[info.kind] ?? info.kind}</div>
             <b>{info.label}</b>
             <div className="small muted mono">{info.id}</div>
+            {info.kind === 'concept' && info.conceptKind && <div className="small">{info.conceptKind}</div>}
+            {info.code && info.code.length > 0 && <div className="small mono">{info.code.join(', ')}</div>}
             <div className="small">연결 {links.length}개</div>
+            {info.kind === 'concept' && links.length > 0 && (
+              <ul className="small graph-rel">
+                {links
+                  .filter((e) => e.type !== '소속')
+                  .map((e, i) => (
+                    <li key={i}>
+                      {e.source === info.id ? `${e.type} → ${label(e.target)}` : `${label(e.source)} —${e.type}→`}
+                    </li>
+                  ))}
+              </ul>
+            )}
             <div className="row">
-              {(info.kind === 'domain' || info.kind === 'task') && (
+              {['domain', 'task', 'concept'].includes(info.kind) && (
                 <button className="small primary" onClick={() => openNode(info)}>
                   열기
                 </button>

@@ -4,20 +4,27 @@ import { listSpecs } from './spec'
 import { listDesigns } from './design'
 import { listTasks } from './task'
 import { listKnowledge } from './knowledge'
+import { conceptNodeId, resolveConcept, withoutModel } from './model'
 
-export type NodeKind = 'domain' | 'spec' | 'design' | 'task' | 'knowledge' | 'ghost'
+export type NodeKind = 'domain' | 'spec' | 'design' | 'task' | 'knowledge' | 'concept' | 'ghost'
 
 export interface GNode {
   id: string
   label: string
   kind: NodeKind
   subdomainType?: string
+  /** 개념 노드: 소속 도메인 / 종류 / 코드 위치 */
+  domainId?: string
+  conceptKind?: string
+  code?: string[]
 }
 
 export interface GEdge {
   source: string
   target: string
   type: string
+  /** 개념 관계가 도메인 경계를 넘는지 */
+  cross?: boolean
 }
 
 export interface Graph {
@@ -63,10 +70,12 @@ export async function buildGraph(ctx: Ctx): Promise<Graph> {
   const designs = await listDesigns(ctx)
   const tasks = await listTasks(ctx)
   const knowledge = await listKnowledge(ctx)
+  const concepts = domains.flatMap((d) => d.model.map((c) => ({ ...c, domainId: d.id, domainTitle: d.title })))
 
   const nodes: GNode[] = [
     ...domains.map((d) => ({ id: d.id, label: d.title, kind: 'domain' as const, subdomainType: d.subdomainType })),
     ...specs.map((s) => ({ id: s.id, label: s.title, kind: 'spec' as const })),
+    ...concepts.map((c) => ({ id: conceptNodeId(c.domainId, c.name), label: c.name, kind: 'concept' as const, domainId: c.domainId, conceptKind: c.kind, code: c.code })),
     ...designs.map((d) => ({ id: d.id, label: d.title, kind: 'design' as const })),
     ...tasks.map((t) => ({ id: t.id, label: t.title, kind: 'task' as const })),
     ...knowledge.map((k) => ({ id: k.id, label: k.title, kind: 'knowledge' as const }))
@@ -92,7 +101,17 @@ export async function buildGraph(ctx: Ctx): Promise<Graph> {
   for (const d of domains) {
     if (d.parent) link(d.id, d.parent, '상위')
     for (const l of d.links) link(d.id, l.to, l.type)
-    wiki(d.id, d.content, d.id)
+    wiki(d.id, withoutModel(d.content), d.id)
+  }
+  // 도메인 모델 관계: 개념 → 소속 도메인, 개념 → 개념
+  for (const c of concepts) {
+    const from = conceptNodeId(c.domainId, c.name)
+    edges.push({ source: from, target: c.domainId, type: '소속' })
+    for (const r of c.relations) {
+      const hit = resolveConcept(r.to, c.domainId, concepts)
+      if (hit) edges.push({ source: from, target: conceptNodeId(hit.domainId, hit.name), type: r.type, cross: hit.domainId !== c.domainId })
+      else link(from, r.to, r.type)
+    }
   }
   for (const s of specs) {
     for (const b of s.basedOn) link(s.id, b.ref, '기준')
