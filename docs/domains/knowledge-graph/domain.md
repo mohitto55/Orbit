@@ -3,7 +3,7 @@ id: dom-knowledge-graph
 kind: domain
 title: 관계도
 subdomainType: Supporting
-version: 3
+version: 4
 status: draft
 ---
 
@@ -29,14 +29,7 @@ status: draft
 
 ## 하지 않는 것
 
-- 각 노드의 내용과 규칙 (각 도메인이 책임)
-
-## 다른 도메인과의 관계
-
-| 방향 | 대상 | 내용 |
-|---|---|---|
-| 수신 | 프로젝트 | 파일 변경 알림 |
-| 제공 | 모든 도메인 | 백링크, 이름 링크 해석, 하위·의존 도메인 조회 |
+- 각 노드의 내용과 규칙
 
 ## 문서
 

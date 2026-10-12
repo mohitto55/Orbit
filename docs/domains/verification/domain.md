@@ -3,7 +3,7 @@ id: dom-verification
 kind: domain
 title: 테스트
 subdomainType: Core
-version: 3
+version: 4
 status: draft
 parent: dom-domain-modeling
 ---
@@ -32,16 +32,7 @@ parent: dom-domain-modeling
 
 ## 하지 않는 것
 
-- 테스트 코드 작성 (에이전트·사람이 함), 결과 해석
-
-## 다른 도메인과의 관계
-
-| 방향 | 대상 | 내용 |
-|---|---|---|
-| 검증 | 기능 명세 | 테스트가 AC ID로 수용 기준을 가리킴 |
-| 요청 | 연동 | 테스트 실행 |
-| 요청 | Task | 테스트 없음·실패를 Task로 |
-| 수신 | 확인표시 | AC 변경 시 테스트 확인 요청 |
+- 테스트 코드 작성, 결과 해석
 
 ## 문서
 

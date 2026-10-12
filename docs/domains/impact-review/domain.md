@@ -3,7 +3,7 @@ id: dom-impact-review
 kind: domain
 title: 확인표시
 subdomainType: Core
-version: 3
+version: 4
 status: draft
 ---
 
@@ -30,15 +30,7 @@ status: draft
 
 ## 하지 않는 것
 
-- 명세·설계·테스트를 직접 수정
-
-## 다른 도메인과의 관계
-
-| 방향 | 대상 | 내용 |
-|---|---|---|
-| 수신 | 도메인 · 기능 명세 · 설계 | 변경 이벤트 |
-| 요청 | 기능 명세 · 설계 · 테스트 | 확인 요청 |
-| 요청 | Task | 보류된 확인을 Task로 |
+- 확인 대상 문서나 테스트를 직접 수정
 
 ## 문서
 

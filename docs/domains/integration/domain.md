@@ -3,7 +3,7 @@ id: dom-integration
 kind: domain
 title: 연동
 subdomainType: Generic
-version: 3
+version: 4
 status: draft
 ---
 
@@ -29,14 +29,6 @@ status: draft
 ## 하지 않는 것
 
 - 업무 판단
-
-## 다른 도메인과의 관계
-
-| 방향 | 대상 | 내용 |
-|---|---|---|
-| 제공 | 작업 대화 | 작업 대화 |
-| 제공 | 테스트 | 테스트 실행 결과 |
-| 수신 | Task · 에이전트 지침 | Issue 동기화, 하네스 파일 쓰기 |
 
 ## 문서
 

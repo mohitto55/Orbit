@@ -272,7 +272,7 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
           </select>
         </div>
       </div>
-      <MdEditor label="domain.md (역할 / 용어 / 하지 않는 것 / 관계)" value={content} onChange={setContent} onWiki={onWiki} />
+      <MdEditor label="domain.md (역할 / 용어 / 하지 않는 것)" value={content} onChange={setContent} onWiki={onWiki} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제
