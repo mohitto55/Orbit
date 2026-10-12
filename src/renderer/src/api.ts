@@ -1,5 +1,6 @@
 import type { Api } from '../../main/api'
 import type { AiCheckApi } from '../../main/aiCheckApi'
+import type { UpdaterApi } from '../../main/updater'
 
 type Promisify<T> = {
   [K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never
@@ -29,7 +30,7 @@ export const api = new Proxy(
           throw new Error(cleanError(e))
         })
   }
-) as Promisify<Api & AiCheckApi>
+) as Promisify<Api & AiCheckApi & UpdaterApi>
 
 export const on = (channel: string, cb: (payload: any) => void) => window.girsktop.on(channel, cb)
 

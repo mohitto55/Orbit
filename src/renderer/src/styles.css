@@ -330,3 +330,18 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .req-notice { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 6px 12px; margin: 6px 0; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
 .req-notice-head { font-weight: 600; color: var(--warn); }
 .req-notice-item { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+
+/* ---------- 앱 업데이트 ---------- */
+.version-btn { border: none; background: none; color: var(--muted); font-size: 12px; text-align: left; padding: 4px 8px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.version-btn.has-update { color: var(--text); }
+.update-badge { background: var(--accent); color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+.start-version { position: fixed; left: 16px; bottom: 12px; }
+.update-panel { display: flex; flex-direction: column; gap: 10px; }
+.update-state { padding: 8px 12px; border-radius: 8px; background: var(--side); }
+.update-state.available, .update-state.downloading { background: var(--accent-soft); color: var(--accent); }
+.update-state.downloaded { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.update-state.error { background: var(--bad-soft); color: var(--bad); }
+.progress { position: relative; height: 22px; border-radius: 6px; background: var(--side); overflow: hidden; display: flex; align-items: center; }
+.progress-bar { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width 0.3s ease; }
+.progress span { position: relative; padding: 0 8px; }
+.update-settings { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); padding-top: 10px; }

@@ -3,6 +3,7 @@ import path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { createApi } from './api'
 import { createAiCheckApi } from './aiCheckApi'
+import { createUpdater } from './updater'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 
@@ -46,7 +47,9 @@ const aiCheckApi = createAiCheckApi({
   }
 })
 
-for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi })) {
+const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion() })
+
+for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api })) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 
@@ -91,17 +94,6 @@ function createWindow() {
   })
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
-}
-
-async function setupAutoUpdate() {
-  if (!app.isPackaged) return
-  try {
-    const { autoUpdater } = await import('electron-updater')
-    autoUpdater.autoDownload = true
-    await autoUpdater.checkForUpdatesAndNotify()
-  } catch {
-    // 업데이트 서버에 닿지 못해도 앱은 계속 동작한다
-  }
 }
 
 /** 개발용 스모크 확인: GIRSKTOP_SMOKE=<프로젝트 폴더> 로 실행하면 열고, 화면을 캡처하고, 종료한다. */
@@ -157,7 +149,7 @@ app.whenReady().then(() => {
   })
   setInterval(checkReminders, 10 * 60 * 1000)
   setTimeout(checkReminders, 15 * 1000)
-  void setupAutoUpdate()
+  void updater.start()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

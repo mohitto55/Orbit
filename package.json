@@ -72,7 +72,9 @@
     },
     "publish": [
       {
-        "provider": "github"
+        "provider": "github",
+        "owner": "mohitto55",
+        "repo": "Girsktop"
       }
     ]
   }
