@@ -8,7 +8,7 @@ type Promisify<T> = {
 
 declare global {
   interface Window {
-    girsktop: {
+    orbit: {
       invoke: (name: string, ...args: unknown[]) => Promise<any>
       on: (channel: string, cb: (payload: any) => void) => () => void
     }
@@ -26,13 +26,13 @@ export const api = new Proxy(
     get:
       (_t, name: string) =>
       (...args: unknown[]) =>
-        window.girsktop.invoke(name, ...args).catch((e: unknown) => {
+        window.orbit.invoke(name, ...args).catch((e: unknown) => {
           throw new Error(cleanError(e))
         })
   }
 ) as Promisify<Api & AiCheckApi & UpdaterApi>
 
-export const on = (channel: string, cb: (payload: any) => void) => window.girsktop.on(channel, cb)
+export const on = (channel: string, cb: (payload: any) => void) => window.orbit.on(channel, cb)
 
 export type Project = NonNullable<Awaited<ReturnType<Api['currentProject']>>>
 export type Dashboard = Awaited<ReturnType<Api['dashboard']>>

@@ -12,7 +12,7 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
       onOpen(await api.openProject(target))
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      if (msg.includes('찾을 수 없습니다') && confirm(`${target}\n\nGirsktop 프로젝트가 아닙니다. 이 폴더를 새 프로젝트로 만들까요?`)) {
+      if (msg.includes('찾을 수 없습니다') && confirm(`${target}\n\nOrbit 프로젝트가 아닙니다. 이 폴더를 새 프로젝트로 만들까요?`)) {
         await create(target)
       } else errorToast(e)
     }
@@ -32,7 +32,7 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
     <div className="start">
       <div className="start-card">
         <h1 className="brand-name">
-          <Logo size={40} /> Girsktop
+          <Logo size={40} /> Orbit
         </h1>
         <p className="muted">도메인 → 기능 명세 → 설계 → 검증을 한곳에서. 위 층이 바뀌면 아래 층에 확인표시를 띄웁니다.</p>
         <div className="row">

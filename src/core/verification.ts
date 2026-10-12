@@ -7,7 +7,7 @@ import type { Feature } from './spec'
 
 export const AC_ID_RE = /\[([A-Z][A-Z0-9]*-F\d+-AC\d+)\]/g
 const TEST_FILE_RE = /(\.(test|spec)\.[cm]?[jt]sx?$)|(_test\.(py|go)$)|(^test_.*\.py$)|(Tests?\.(java|kt|cs)$)/
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'release', '.girsktop', '.venv', 'venv', 'target'])
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'release', '.orbit', '.girsktop', '.venv', 'venv', 'target'])
 
 export interface TestLink {
   acId: string

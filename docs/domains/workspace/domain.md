@@ -3,7 +3,7 @@ id: dom-workspace
 kind: domain
 title: 프로젝트
 subdomainType: Supporting
-version: 5
+version: 6
 status: draft
 parent: dom-platform
 ---
@@ -21,7 +21,7 @@ parent: dom-platform
 | 용어 | 뜻 | 비고 |
 |---|---|---|
 | 프로젝트 | 로컬 저장소 폴더 하나에 대응하는 작업 단위 |  |
-| 데이터 폴더 | 프로젝트의 모든 md 문서가 있는 폴더 (`.girsktop/` 가칭) |  |
+| 데이터 폴더 | 프로젝트의 모든 md 문서가 있는 폴더 (`.orbit/`, 이름을 바꾸기 전 프로젝트는 `.girsktop/`) |  |
 | 도메인 폴더 | 데이터 폴더 안 `domains/<도메인>/`. 도메인 하나의 1~3층 문서 묶음 | 계층을 뜻하지 않는다 |
 | 프로젝트 설정 | 대화 검토 주기, 리마인드 시각, GitHub 저장소, 테스트 명령 |  |
 | 외부 변경 | 앱 밖(에디터, git, 에이전트)에서 일어난 md 파일 변경 |  |

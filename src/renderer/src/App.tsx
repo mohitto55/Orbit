@@ -96,7 +96,7 @@ export default function App() {
       <aside className="side">
         <div className="brand">
           <span className="brand-name">
-            <Logo size={22} /> Girsktop
+            <Logo size={22} /> Orbit
           </span>
           <small title={project.projectDir}>{project.settings.name}</small>
         </div>

@@ -120,7 +120,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     instance.on('mouseout', 'node', () => ref.current && (ref.current.style.cursor = 'default'))
     cy.current = instance
     // 확인용: 개발 도구나 스모크 확인에서 그래프 상태를 볼 수 있게 노출
-    ;(window as unknown as { __girsktopGraph?: Core }).__girsktopGraph = instance
+    ;(window as unknown as { __orbitGraph?: Core }).__orbitGraph = instance
 
     // 처음에는 애니메이션 없이 배치, 이후 데이터 갱신은 기존 위치를 유지한 채 새 노드만 자리 잡는다
     if (positions.size > 0) applyView(instance, 'none')

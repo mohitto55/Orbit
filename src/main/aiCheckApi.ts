@@ -18,7 +18,7 @@ const TIMEOUT_MS = 10 * 60 * 1000
 export const runAgent: AgentRunner = (agent, prompt, cwd, onOutput) =>
   new Promise((resolve, reject) => {
     const env = cleanEnv(process.env)
-    const lastMsg = path.join(os.tmpdir(), `girsktop-codex-${Date.now()}.txt`)
+    const lastMsg = path.join(os.tmpdir(), `orbit-codex-${Date.now()}.txt`)
     const [cmd, args] =
       agent === 'claude'
         ? ['claude', ['-p', '--output-format', 'text']]

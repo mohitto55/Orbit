@@ -29,14 +29,21 @@ describe('Workspace', () => {
     const dir = await tempDir()
     await createProject(dir)
     const gi = await fs.readFile(path.join(dir, '.gitignore'), 'utf8')
-    expect(gi).toContain('.girsktop/.cache/')
+    expect(gi).toContain('.orbit/.cache/')
   })
 
   it('[WS-F02-AC1] 데이터 폴더가 있는 폴더를 고르면 프로젝트로 열린다', async () => {
     const dir = await tempDir()
     await createProject(dir)
     const ctx = await openProject(dir)
-    expect(ctx.dataRoot).toBe(path.join(dir, '.girsktop'))
+    expect(ctx.dataRoot).toBe(path.join(dir, '.orbit'))
+  })
+
+  it('[WS-F02-AC4] 이름을 바꾸기 전 .girsktop/ 프로젝트도 그대로 열린다', async () => {
+    const dir = await tempDir()
+    await fs.mkdir(path.join(dir, '.girsktop'), { recursive: true })
+    await fs.writeFile(path.join(dir, '.girsktop', 'project.md'), '---\nname: old\n---\n')
+    expect((await openProject(dir)).dataRoot).toBe(path.join(dir, '.girsktop'))
   })
 
   it('[WS-F02-AC3] docs/domains 구조의 저장소도 열 수 있다', async () => {

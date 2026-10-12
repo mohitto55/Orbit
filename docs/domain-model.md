@@ -1,11 +1,11 @@
 ---
-title: Girsktop 도메인 모델
+title: Orbit 도메인 모델
 version: 0.17.0
 status: draft
 updated: 2026-10-12
 ---
 
-# Girsktop 도메인 모델
+# Orbit 도메인 모델
 
 > 이 문서는 **전체 지도**다. 도메인 목록, 도메인 간 관계, 결정 사항만 둔다. 각 도메인의 역할·요구사항·설계는 `domains/<도메인>/` 폴더 안에 있다.
 

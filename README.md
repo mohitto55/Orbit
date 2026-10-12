@@ -1,4 +1,4 @@
-# Girsktop
+# Orbit
 
 도메인 모델, 기능 명세, 설계, 테스트, 나중에 할 일을 한곳에서 관리하는 데스크톱 앱. 앱 안 터미널에서 Claude Code / Codex로 작업하고, 그 대화를 도메인 모델과 비교할 수 있다.
 
@@ -16,9 +16,9 @@
 
 | OS | 파일 |
 |---|---|
-| Windows | `Girsktop-Setup-x.y.z.exe` |
-| macOS | `Girsktop-x.y.z.dmg` |
-| Linux | `Girsktop-x.y.z.AppImage` |
+| Windows | `Orbit-Setup-x.y.z.exe` |
+| macOS | `Orbit-x.y.z.dmg` |
+| Linux | `Orbit-x.y.z.AppImage` |
 
 설치 후에는 새 버전이 나오면 자동으로 업데이트된다.
 
@@ -37,10 +37,10 @@
 
 ## 데이터
 
-모든 데이터는 프로젝트 안의 md 파일이다 (`.girsktop/`, 또는 `docs/domains/`가 있으면 `docs/`). git으로 이력이 남고, 앱의 인덱스는 언제든 다시 만들 수 있는 캐시다.
+모든 데이터는 프로젝트 안의 md 파일이다 (`.orbit/`, 또는 `docs/domains/`가 있으면 `docs/`). git으로 이력이 남고, 앱의 인덱스는 언제든 다시 만들 수 있는 캐시다.
 
 ```
-.girsktop/
+.orbit/
   project.md          설정
   system-design.md    시스템 공통 설계
   domains/<도메인>/    domain.md · spec.md · design/<기능ID>.md
@@ -48,7 +48,7 @@
   reviews/ inbox/ tasks/ drift/ knowledge/ requests/ verification/
 ```
 
-이 저장소의 [`docs/`](docs/domain-model.md)는 Girsktop 자신을 Girsktop으로 관리한 데이터 폴더다.
+이 저장소의 [`docs/`](docs/domain-model.md)는 Orbit 자신을 Orbit으로 관리한 데이터 폴더다.
 
 ## 테스트와 AC 연결
 

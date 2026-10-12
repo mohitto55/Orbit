@@ -1,6 +1,6 @@
 {
-  "name": "girsktop",
-  "productName": "Girsktop",
+  "name": "orbit",
+  "productName": "Orbit",
   "version": "0.1.0",
   "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하는 데스크톱 앱",
   "main": "./out/main/index.js",
@@ -48,8 +48,8 @@
     "vitest": "^2.0.5"
   },
   "build": {
-    "appId": "com.girsktop.app",
-    "productName": "Girsktop",
+    "appId": "com.orbit.app",
+    "productName": "Orbit",
     "directories": {
       "output": "release"
     },
@@ -74,7 +74,7 @@
       {
         "provider": "github",
         "owner": "mohitto55",
-        "repo": "Girsktop"
+        "repo": "Orbit"
       }
     ]
   }

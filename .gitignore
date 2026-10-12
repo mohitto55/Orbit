@@ -2,6 +2,7 @@ node_modules/
 out/
 release/
 test-results/
+.orbit/.cache/
 .girsktop/.cache/
 docs/.cache/
 *.log

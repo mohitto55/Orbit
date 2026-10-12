@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { createApi } from './api'
@@ -8,6 +9,25 @@ import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 
 let win: BrowserWindow | null = null
+
+/** 앱 이름을 Girsktop → Orbit으로 바꾸면서 설정 위치가 바뀌었다. 예전 최근 프로젝트·업데이트 설정을 한 번 옮겨온다. */
+function migrateOldSettings() {
+  const oldDir = path.join(app.getPath('appData'), 'Girsktop')
+  const newDir = app.getPath('userData')
+  for (const name of ['recent.json', 'update-settings.json']) {
+    const from = path.join(oldDir, name)
+    const to = path.join(newDir, name)
+    try {
+      if (existsSync(from) && !existsSync(to)) {
+        mkdirSync(newDir, { recursive: true })
+        copyFileSync(from, to)
+      }
+    } catch {
+      // 옮기지 못해도 새로 시작하면 된다
+    }
+  }
+}
+migrateOldSettings()
 let watcher: FSWatcher | null = null
 
 function send(channel: string, payload: unknown) {
@@ -80,7 +100,7 @@ function createWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 600,
-    title: 'Girsktop',
+    title: 'Orbit',
     // 설치본은 electron-builder가 build/icon.* 으로 실행 파일 아이콘을 넣는다. 개발 중에는 창 아이콘만 직접 지정한다.
     ...(app.isPackaged ? {} : { icon: path.join(__dirname, '../../build/icon.png') }),
     show: false,
@@ -98,26 +118,26 @@ function createWindow() {
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
 }
 
-/** 개발용 스모크 확인: GIRSKTOP_SMOKE=<프로젝트 폴더> 로 실행하면 열고, 화면을 캡처하고, 종료한다. */
+/** 개발용 스모크 확인: ORBIT_SMOKE=<프로젝트 폴더> 로 실행하면 열고, 화면을 캡처하고, 종료한다. */
 async function smoke(dir: string, out?: string) {
   try {
     await api.openProject(dir)
-    if (process.env.GIRSKTOP_SMOKE_RUNTESTS) {
+    if (process.env.ORBIT_SMOKE_RUNTESTS) {
       const run = await api.runTests()
       console.log('SMOKE_RUN', JSON.stringify({ total: run.total, passed: run.passed, failed: run.failed, error: run.error }))
     }
     win!.webContents.reload()
     await new Promise<void>((r) => win!.webContents.once('did-finish-load', () => r()))
     await new Promise((r) => setTimeout(r, 1500))
-    // GIRSKTOP_SMOKE_CLICK="도메인,기능 명세 표 (2층)" 처럼 버튼 텍스트를 차례로 누른다
-    for (const label of (process.env.GIRSKTOP_SMOKE_CLICK ?? '').split(',').filter(Boolean)) {
+    // ORBIT_SMOKE_CLICK="도메인,기능 명세 표 (2층)" 처럼 버튼 텍스트를 차례로 누른다
+    for (const label of (process.env.ORBIT_SMOKE_CLICK ?? '').split(',').filter(Boolean)) {
       await win!.webContents.executeJavaScript(
         `[...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(label)}))?.click()`
       )
       await new Promise((r) => setTimeout(r, 1200))
     }
-    if (process.env.GIRSKTOP_SMOKE_JS) {
-      const r = await win!.webContents.executeJavaScript(process.env.GIRSKTOP_SMOKE_JS)
+    if (process.env.ORBIT_SMOKE_JS) {
+      const r = await win!.webContents.executeJavaScript(process.env.ORBIT_SMOKE_JS)
       console.log('SMOKE_JS', JSON.stringify(r))
     }
     const text = await win!.webContents.executeJavaScript('document.body.innerText')
@@ -137,8 +157,8 @@ async function smoke(dir: string, out?: string) {
 
 app.whenReady().then(() => {
   createWindow()
-  if (process.env.GIRSKTOP_SMOKE) {
-    win!.webContents.once('did-finish-load', () => void smoke(process.env.GIRSKTOP_SMOKE!, process.env.GIRSKTOP_SMOKE_PNG))
+  if (process.env.ORBIT_SMOKE) {
+    win!.webContents.once('did-finish-load', () => void smoke(process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))
     return
   }
   // TK-F01: 어디서나 빠른 기록

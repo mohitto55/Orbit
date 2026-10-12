@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { createProject, type Ctx } from '../src/core/workspace'
 
-export async function tempDir(prefix = 'girsktop-'): Promise<string> {
+export async function tempDir(prefix = 'orbit-'): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix))
 }
 

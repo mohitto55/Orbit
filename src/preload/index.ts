@@ -11,6 +11,6 @@ const bridge = {
   }
 }
 
-contextBridge.exposeInMainWorld('girsktop', bridge)
+contextBridge.exposeInMainWorld('orbit', bridge)
 
 export type Bridge = typeof bridge

@@ -2,7 +2,9 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { exists, readMd, writeMd, nowIso } from './md'
 
-export const DATA_DIR = '.girsktop'
+export const DATA_DIR = '.orbit'
+/** 이름을 바꾸기 전(Girsktop) 데이터 폴더. 예전 프로젝트도 그대로 열리게 한다 */
+export const LEGACY_DATA_DIRS = ['.girsktop']
 export const SUBDIRS = [
   'domains',
   'changes',
@@ -36,10 +38,12 @@ const DEFAULTS: Omit<ProjectSettings, 'name'> = {
   reminderTime: '09:00'
 }
 
-/** 데이터 폴더 찾기: `.girsktop/project.md`가 우선, 없으면 `docs/domains`가 있는 `docs/`. */
+/** 데이터 폴더 찾기: `.orbit/project.md` → 예전 `.girsktop/project.md` → `docs/domains`가 있는 `docs/` 순. */
 export async function resolveDataRoot(projectDir: string): Promise<string | null> {
-  const g = path.join(projectDir, DATA_DIR)
-  if (await exists(path.join(g, 'project.md'))) return g
+  for (const dir of [DATA_DIR, ...LEGACY_DATA_DIRS]) {
+    const g = path.join(projectDir, dir)
+    if (await exists(path.join(g, 'project.md'))) return g
+  }
   const d = path.join(projectDir, 'docs')
   if (await exists(path.join(d, 'domains'))) return d
   return null
@@ -57,7 +61,7 @@ async function ensureGitignore(ctx: Ctx): Promise<void> {
 export async function createProject(projectDir: string, name?: string): Promise<Ctx> {
   const dataRoot = path.join(projectDir, DATA_DIR)
   if (await exists(path.join(dataRoot, 'project.md'))) {
-    throw new Error('이미 Girsktop 프로젝트입니다')
+    throw new Error('이미 Orbit 프로젝트입니다')
   }
   for (const d of SUBDIRS) await fs.mkdir(path.join(dataRoot, d), { recursive: true })
   const settings: ProjectSettings = {
@@ -73,7 +77,7 @@ export async function createProject(projectDir: string, name?: string): Promise<
 
 export async function openProject(projectDir: string): Promise<Ctx> {
   const dataRoot = await resolveDataRoot(projectDir)
-  if (!dataRoot) throw new Error('Girsktop 데이터 폴더를 찾을 수 없습니다 (.girsktop/ 또는 docs/domains/)')
+  if (!dataRoot) throw new Error('Orbit 데이터 폴더를 찾을 수 없습니다 (.orbit/ 또는 docs/domains/)')
   for (const d of SUBDIRS) await fs.mkdir(path.join(dataRoot, d), { recursive: true })
   const ctx = { projectDir, dataRoot }
   await ensureGitignore(ctx)
