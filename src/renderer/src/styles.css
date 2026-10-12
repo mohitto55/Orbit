@@ -271,3 +271,15 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 4px;
 }
+
+/* ---------- 터미널 ---------- */
+.terminals { flex-direction: column; gap: 8px; min-height: 0; }
+.term-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.term-tab { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; background: var(--side); font-size: 13px; }
+.term-tab.on { background: var(--panel); color: var(--accent); font-weight: 600; }
+.term-tab.dim { opacity: 0.55; }
+.term-area { flex: 1; min-height: 300px; position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.term-host { position: absolute; inset: 8px; }
+.dot.claude { background: #d97757; }
+.dot.codex { background: #10a37f; }
+.dot.shell { background: var(--muted); }

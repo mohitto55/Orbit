@@ -11,7 +11,7 @@ export default function Dashboard({ refreshKey, go }: PageProps) {
     { label: 'Inbox', value: d.inbox, hint: '분류하지 않은 할 일', page: 'tasks' as const, warn: d.inbox > 0 },
     { label: '시기 도래', value: d.dueTasks.length, hint: '기한이 지났거나 트리거 충족', page: 'tasks' as const, warn: d.dueTasks.length > 0 },
     { label: '진행 중 Task', value: d.openTasks, hint: '대기 + 진행', page: 'tasks' as const },
-    { label: '도메인 변경 요청', value: d.pendingRequests, hint: '작업 대화·할 일에서 온 요청', page: 'domains' as const, warn: d.pendingRequests > 0 },
+    { label: '도메인 변경 요청', value: d.pendingRequests, hint: '도메인 점검·할 일에서 온 요청', page: 'domains' as const, warn: d.pendingRequests > 0 },
     { label: '검토할 대화', value: d.pendingSessions, hint: d.driftDue ? '검토 주기가 지났습니다' : '지난 검토 이후 세션', page: 'drift' as const, warn: d.driftDue },
     {
       label: '테스트',

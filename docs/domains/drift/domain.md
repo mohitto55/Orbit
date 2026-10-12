@@ -1,13 +1,13 @@
 ---
 id: dom-drift
 kind: domain
-title: 작업 대화
+title: 도메인 점검
 subdomainType: Core
-version: 4
+version: 5
 status: draft
 ---
 
-# 작업 대화
+# 도메인 점검
 
 > 해결 문제: P3
 

@@ -13,6 +13,7 @@ import * as kn from '../core/knowledge'
 import * as kg from '../core/graph'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
+import { TerminalManager, type TerminalKind } from '../core/terminal'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
@@ -24,6 +25,23 @@ export interface ApiDeps {
 export function createApi(deps: ApiDeps) {
   let ctx: ws.Ctx | null = null
   let testProc: ChildProcess | null = null
+  let terminals: TerminalManager | null = null
+
+  /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
+  async function terms(): Promise<TerminalManager> {
+    if (terminals) return terminals
+    let spawnFn
+    try {
+      spawnFn = (await import('node-pty')).spawn
+    } catch (e) {
+      throw new Error(`이 환경에서는 터미널을 열 수 없습니다: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    terminals = new TerminalManager(spawnFn, {
+      onData: (id, data) => deps.send('term-data', { id, data }),
+      onExit: (id, code) => deps.send('term-exit', { id, code })
+    })
+    return terminals
+  }
 
   const need = (): ws.Ctx => {
     if (!ctx) throw new Error('프로젝트가 열려 있지 않습니다')
@@ -85,6 +103,7 @@ export function createApi(deps: ApiDeps) {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
     closeProject() {
+      terminals?.killAll()
       ctx = null
     },
     getSettings: () => ws.readSettings(need()),
@@ -252,7 +271,24 @@ export function createApi(deps: ApiDeps) {
     saveKnowledge: (input: kn.KnowledgeInput) => kn.saveKnowledge(need(), input),
 
     // Knowledge Graph
-    graph: () => kg.buildGraph(need())
+    graph: () => kg.buildGraph(need()),
+
+    // 연동: 내장 터미널 (IN-F09)
+    async termCreate(kind: TerminalKind, cols?: number, rows?: number) {
+      return (await terms()).create(kind, need().projectDir, cols, rows)
+    },
+    async termWrite(id: string, data: string) {
+      ;(await terms()).write(id, data)
+    },
+    async termResize(id: string, cols: number, rows: number) {
+      ;(await terms()).resize(id, cols, rows)
+    },
+    async termKill(id: string) {
+      ;(await terms()).kill(id)
+    },
+    killAllTerminals() {
+      terminals?.killAll()
+    }
   }
 }
 

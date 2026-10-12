@@ -1,14 +1,14 @@
 ---
 id: spec-drift
 kind: spec
-title: 작업 대화 기능 명세
+title: 도메인 점검 기능 명세
 basedOn:
   - { ref: dom-drift, version: 1 }
 version: 1
 status: draft
 ---
 
-# 작업 대화 기능 명세
+# 도메인 점검 기능 명세
 
 주기적으로 도메인 검토를 요청하고, 최근 작업 대화와 도메인을 나란히 보여준다. 판단은 사람이 한다. (P3 해결)
 

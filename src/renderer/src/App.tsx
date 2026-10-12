@@ -11,8 +11,9 @@ import Drift from './pages/Drift'
 import KnowledgePage from './pages/Knowledge'
 import GraphPage from './pages/Graph'
 import Settings from './pages/Settings'
+import Terminals from './pages/Terminals'
 
-export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'settings'
+export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'settings'
 
 const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드' },
@@ -20,9 +21,10 @@ const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] =
   { id: 'reviews', label: '확인표시', badge: (d) => d.pendingReviews },
   { id: 'tasks', label: '할 일', badge: (d) => d.inbox + d.dueTasks.length },
   { id: 'verification', label: '테스트', badge: (d) => d.lastRun?.failed ?? 0 },
-  { id: 'drift', label: '작업 대화', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
+  { id: 'drift', label: '도메인 점검', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
   { id: 'knowledge', label: '지식' },
   { id: 'graph', label: '관계도' },
+  { id: 'terminal', label: '터미널' },
   { id: 'settings', label: '프로젝트 설정' }
 ]
 
@@ -126,6 +128,7 @@ export default function App() {
         {page === 'knowledge' && <KnowledgePage {...props} />}
         {page === 'graph' && <GraphPage {...props} />}
         {page === 'settings' && <Settings {...props} onSaved={() => api.currentProject().then(setProject)} />}
+        <Terminals visible={page === 'terminal'} />
       </main>
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
       <ChangeDialog />
