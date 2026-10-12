@@ -541,17 +541,19 @@ function MapSide(props: {
     }
   }
 
+  const specPart = (
+    <>
+      <h4>{d.parent ? '규칙 명세' : '기능 명세'}</h4>
+      {!d.parent && <div className="muted small">기능을 누르면 그 기능이 쓰는 규칙이 있는 하위 도메인이 그래프에서 강조됩니다.</div>}
+      <SpecSummary domainId={d.id} domains={domains} specs={specs} statuses={statuses} active={activeFeature} onHighlight={onHighlight} onOpen={(x) => onOpen(x, 'spec')} />
+    </>
+  )
   return (
     <aside className="map-side">
       <div className="muted small">{domainLabel(domains, d.id)}</div>
       <h3>
         {d.title} <Badge kind={d.subdomainType.toLowerCase()}>{d.subdomainType}</Badge>
       </h3>
-      {d.role && (
-        <div className="small map-role">
-          <MdContent source={d.role} />
-        </div>
-      )}
       <div className="row">
         <button className="small primary" onClick={() => onOpen(d.id)}>
           문서 열기
@@ -562,6 +564,15 @@ function MapSide(props: {
           </button>
         )}
       </div>
+      {/* 루트는 기능 명세가 먼저. 역할은 접어 둔다 */}
+      {!d.parent && specPart}
+      {d.role && (
+        <details className="small map-role" open={!!d.parent}>
+          <summary>역할</summary>
+          <MdContent source={d.role} />
+        </details>
+      )}
+      {kids.length > 0 && <h4>하위 도메인</h4>}
       {kids.length > 0 && (
         <div className="chips">
           {kids.map((k) => (
@@ -571,7 +582,10 @@ function MapSide(props: {
           ))}
         </div>
       )}
-
+      {d.parent && specPart}
+      {/* 관계선은 같은 상위 안의 하위 도메인끼리만 있으므로 하위 도메인에서만 보인다 */}
+      {d.parent && (
+        <>
       <h4>관계</h4>
       {out.length + inc.length === 0 && <div className="muted small">{d.parent ? '같은 상위 안의 다른 하위 도메인과 이어진 선이 없습니다' : '최상위 도메인끼리는 선을 긋지 않습니다'}</div>}
       <ul className="small map-rels">
@@ -625,10 +639,8 @@ function MapSide(props: {
         </button>
       </div>
       )}
-
-      <h4>{d.parent ? '규칙' : '기능'}</h4>
-      {!d.parent && <div className="muted small">기능을 누르면 그 기능이 쓰는 규칙이 있는 하위 도메인이 그래프에서 강조됩니다.</div>}
-      <SpecSummary domainId={d.id} domains={domains} specs={specs} statuses={statuses} active={activeFeature} onHighlight={onHighlight} onOpen={(x) => onOpen(x, 'spec')} />
+        </>
+      )}
     </aside>
   )
 }

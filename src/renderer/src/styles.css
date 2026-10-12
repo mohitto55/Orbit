@@ -645,3 +645,4 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .rollup-uses { display: flex; flex-direction: column; padding-left: 72px; }
 .rule-picker input[type='checkbox'], .uc-rule input[type='checkbox'] { width: auto; flex: none; margin-top: 3px; }
 .rule-picker label { text-align: left; justify-content: flex-start; }
+.map-role summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
