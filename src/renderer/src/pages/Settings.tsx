@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { PageProps } from '../App'
-import type { HarnessTarget, ProjectSettings } from '../types'
+import type { ProjectSettings } from '../types'
 import { errorToast, toast, useLoad } from '../ui'
 
 export default function Settings({ onSaved }: PageProps & { onSaved: () => void }) {
@@ -12,7 +12,6 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
   }, [project])
   if (!s || !project) return null
   const set = (p: Partial<ProjectSettings>) => setS({ ...s, ...p })
-  const toggle = (t: HarnessTarget) => set({ harnessTargets: s.harnessTargets.includes(t) ? s.harnessTargets.filter((x) => x !== t) : [...s.harnessTargets, t] })
 
   return (
     <div className="page narrow-page">
@@ -45,17 +44,6 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
       <div className="field">
         <label>GitHub 저장소 (owner/repo)</label>
         <input value={s.githubRepo ?? ''} onChange={(e) => set({ githubRepo: e.target.value })} />
-      </div>
-      <div className="field">
-        <label>하네스 대상</label>
-        <div className="row">
-          <label className="chip">
-            <input type="checkbox" checked={s.harnessTargets.includes('claude')} onChange={() => toggle('claude')} /> Claude Code
-          </label>
-          <label className="chip">
-            <input type="checkbox" checked={s.harnessTargets.includes('codex')} onChange={() => toggle('codex')} /> Codex
-          </label>
-        </div>
       </div>
       <div className="row end">
         <button

@@ -2,7 +2,7 @@
   "name": "girsktop",
   "productName": "Girsktop",
   "version": "0.1.0",
-  "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하고 Claude Code / Codex 하네스를 만드는 데스크톱 앱",
+  "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하는 데스크톱 앱",
   "main": "./out/main/index.js",
   "author": "mohitto55",
   "license": "MIT",

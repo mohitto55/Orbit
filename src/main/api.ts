@@ -10,7 +10,6 @@ import * as tk from '../core/task'
 import * as vr from '../core/verification'
 import * as dr from '../core/drift'
 import * as kn from '../core/knowledge'
-import * as hn from '../core/harness'
 import * as kg from '../core/graph'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
@@ -251,11 +250,6 @@ export function createApi(deps: ApiDeps) {
     // Knowledge
     listKnowledge: () => kn.listKnowledge(need()),
     saveKnowledge: (input: kn.KnowledgeInput) => kn.saveKnowledge(need(), input),
-
-    // Harness
-    previewHarness: (target: ws.HarnessTarget) => hn.previewHarness(need(), target),
-    writeHarness: (target: ws.HarnessTarget) => hn.writeHarness(need(), target),
-    harnessStatus: (target: ws.HarnessTarget) => hn.harnessStaleness(need(), target),
 
     // Knowledge Graph
     graph: () => kg.buildGraph(need())

@@ -1,6 +1,6 @@
 # Girsktop
 
-도메인 모델, 기능 명세, 설계, 테스트, 나중에 할 일을 한곳에서 관리하고 Claude Code / Codex용 하네스를 만드는 데스크톱 앱.
+도메인 모델, 기능 명세, 설계, 테스트, 나중에 할 일을 한곳에서 관리하는 데스크톱 앱. Claude Code / Codex 작업 대화를 읽어 도메인 모델과 비교할 수 있다.
 
 위 층 문서가 바뀌면 아래 층에 **확인표시**를 띄워, 도메인과 명세와 코드가 서로 어긋나지 않게 한다.
 
@@ -33,7 +33,6 @@
 | 작업 대화 | 주기적으로 Claude Code / Codex 대화와 도메인을 나란히 보여주고, 사람이 표시한 부분을 도메인 변경 요청·할 일·지식으로 넘김 |
 | 지식 | 결정(ADR), 프로젝트 용어, 컨벤션, 교훈 |
 | 관계도 | 문서를 노드로, 관계를 링크로. 전체 / 로컬 / 계층 보기, `[[이름]]` 링크와 미정의 노드 |
-| 에이전트 지침 | `CLAUDE.md` / `AGENTS.md`의 관리 영역만 생성·갱신 (표식 밖 내용은 보존) |
 
 ## 데이터
 
@@ -45,7 +44,8 @@
   system-design.md    시스템 공통 설계
   domains/<도메인>/    domain.md · spec.md · design/<기능ID>.md
   changes/            변경 기록 (추가만 함)
-  reviews/ inbox/ tasks/ drift/ knowledge/ harness/ requests/ verification/
+  features/<앱 기능>/  spec.md (도메인이 아닌 기술 기능)
+  reviews/ inbox/ tasks/ drift/ knowledge/ requests/ verification/
 ```
 
 이 저장소의 [`docs/`](docs/domain-model.md)는 Girsktop 자신을 Girsktop으로 관리한 데이터 폴더다.

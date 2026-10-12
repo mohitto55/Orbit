@@ -1,6 +1,6 @@
 import path from 'path'
 import type { Ctx } from './workspace'
-import { exists, readMd, writeMd, nowIso } from './md'
+import { exists, listDirs, readMd, writeMd, nowIso } from './md'
 import { listDomains, type Domain } from './domain'
 import { recordChange, requireChange, majorChangesAfter, type ChangeInput, type ChangeSet } from './changes'
 
@@ -25,10 +25,16 @@ export interface BasedOn {
   version: number
 }
 
+export type SpecScope = 'domain' | 'feature'
+
 export interface Spec {
   id: string
+  /** 도메인의 표면 도메인 id, 앱 기능의 표면 빈 문자열 */
   domainId: string
+  /** domain: domains/<folder>/spec.md, feature: features/<folder>/spec.md */
+  scope: SpecScope
   folder: string
+  file: string
   title: string
   version: number
   basedOn: BasedOn[]
@@ -115,16 +121,17 @@ function specFile(ctx: Ctx, folder: string): string {
   return path.join(ctx.dataRoot, 'domains', folder, 'spec.md')
 }
 
-async function loadSpec(ctx: Ctx, domain: Domain): Promise<Spec | null> {
-  const file = specFile(ctx, domain.folder)
+async function loadSpecFile(file: string, folder: string, scope: SpecScope, domain?: Domain): Promise<Spec | null> {
   if (!(await exists(file))) return null
   const { data, content } = await readMd(file)
   const { features } = parseSpecTable(content)
   return {
-    id: data.id ?? `spec-${domain.folder}`,
-    domainId: domain.id,
-    folder: domain.folder,
-    title: data.title ?? `${domain.title} 기능 명세`,
+    id: data.id ?? `spec-${folder}`,
+    domainId: domain?.id ?? '',
+    scope,
+    folder,
+    file,
+    title: data.title ?? `${domain?.title ?? folder} 기능 명세`,
     version: Number(data.version ?? 1),
     basedOn: Array.isArray(data.basedOn) ? data.basedOn.map((b: any) => ({ ref: b.ref, version: Number(b.version) })) : [],
     features,
@@ -133,10 +140,20 @@ async function loadSpec(ctx: Ctx, domain: Domain): Promise<Spec | null> {
   }
 }
 
+function loadSpec(ctx: Ctx, domain: Domain): Promise<Spec | null> {
+  return loadSpecFile(specFile(ctx, domain.folder), domain.folder, 'domain', domain)
+}
+
+/** 도메인의 기능 명세 표 + 앱 기능(features/)의 기능 명세 표. 앱 기능의 표는 기준 도메인이 없다. */
 export async function listSpecs(ctx: Ctx, domains?: Domain[]): Promise<Spec[]> {
   const out: Spec[] = []
   for (const d of domains ?? (await listDomains(ctx))) {
     const s = await loadSpec(ctx, d)
+    if (s) out.push(s)
+  }
+  const featureRoot = path.join(ctx.dataRoot, 'features')
+  for (const folder of await listDirs(featureRoot)) {
+    const s = await loadSpecFile(path.join(featureRoot, folder, 'spec.md'), folder, 'feature')
     if (s) out.push(s)
   }
   return out
@@ -190,9 +207,8 @@ export async function addFeature(ctx: Ctx, specId: string, input: { name: string
 }
 
 async function writeSpecFeatures(ctx: Ctx, spec: Spec, features: Feature[], version: number, acSeq: Record<string, number>) {
-  const file = specFile(ctx, spec.folder)
-  const { data, content } = await readMd(file)
-  await writeMd(file, { ...data, version, acSeq }, replaceSpecTable(content, features))
+  const { data, content } = await readMd(spec.file)
+  await writeMd(spec.file, { ...data, version, acSeq }, replaceSpecTable(content, features))
 }
 
 function sameFeature(a: Feature, b: Feature): boolean {
@@ -285,7 +301,7 @@ export function specStaleness(spec: Spec, changes: ChangeSet[]): StaleReason[] {
 export async function reconfirmSpec(ctx: Ctx, specId: string, note: string, onlyRef?: string): Promise<Spec> {
   const spec = await getSpec(ctx, specId)
   const domains = await listDomains(ctx)
-  const file = specFile(ctx, spec.folder)
+  const file = spec.file
   const { data, content } = await readMd(file)
   const basedOn = spec.basedOn.map((b) => {
     if (onlyRef && b.ref !== onlyRef) return b

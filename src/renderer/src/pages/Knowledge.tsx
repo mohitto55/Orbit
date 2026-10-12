@@ -6,7 +6,7 @@ import { KN_TYPES } from '../types'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
 import { MdEditor } from '../Markdown'
 
-type Draft = { id?: string; type: KnowledgeType; title: string; content: string; status: Knowledge['status']; harness: boolean; supersedes?: string }
+type Draft = { id?: string; type: KnowledgeType; title: string; content: string; status: Knowledge['status']; supersedes?: string }
 
 export default function KnowledgePage({ refreshKey }: PageProps) {
   const [items, reload] = useLoad(() => api.listKnowledge(), [refreshKey])
@@ -32,7 +32,7 @@ export default function KnowledgePage({ refreshKey }: PageProps) {
       <div className="pane-list">
         <div className="row between">
           <h3>지식</h3>
-          <button className="small" onClick={() => setDraft({ type: '결정', title: '', content: '', status: '유효', harness: false })}>
+          <button className="small" onClick={() => setDraft({ type: '결정', title: '', content: '', status: '유효' })}>
             + 새 항목
           </button>
         </div>
@@ -48,7 +48,7 @@ export default function KnowledgePage({ refreshKey }: PageProps) {
           <button
             key={k.id}
             className={`tree-item ${draft?.id === k.id ? 'on' : ''} ${k.status === '폐기됨' ? 'dim' : ''}`}
-            onClick={() => setDraft({ id: k.id, type: k.type, title: k.title, content: k.content, status: k.status, harness: k.harness })}
+            onClick={() => setDraft({ id: k.id, type: k.type, title: k.title, content: k.content, status: k.status })}
           >
             <Badge>{k.type}</Badge> {k.title} {k.status === '초안' && <Badge kind="review">초안</Badge>}
           </button>
@@ -92,10 +92,6 @@ function Editor({ draft, setDraft, onSave, items }: { draft: Draft; setDraft: (d
             <option>유효</option>
             <option>폐기됨</option>
           </select>
-        </div>
-        <div className="field">
-          <label>하네스 포함</label>
-          <input type="checkbox" checked={local.harness} onChange={(e) => set({ harness: e.target.checked })} />
         </div>
         {local.type === '결정' && !local.id && (
           <div className="field">

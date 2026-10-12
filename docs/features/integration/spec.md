@@ -2,8 +2,8 @@
 id: spec-integration
 kind: spec
 title: 연동 기능 명세
-basedOn:
-  - { ref: dom-integration, version: 1 }
+basedOn: []
+scope: feature
 version: 1
 status: draft
 ---
@@ -19,7 +19,6 @@ GitHub, Claude Code, Codex, 테스트 실행기와 연결한다. 바깥 형식�
 | IN-F03 | Issue 연동 | Task와 Issue를 잇는다 | AC1: 요청 시 Issue를 만들고 번호를 돌려준다<br>AC2: 앱을 열 때와 수동 새로고침 때 연결된 Issue 상태를 가져온다 | 초안 |
 | IN-F04 | PR 연결 | 작업 결과를 문서에 잇는다 | AC1: PR 제목·본문의 기능·Task id를 찾아 해당 문서에 PR 링크를 붙인다 | 초안 |
 | IN-F05 | 세션 가져오기 | 작업 대화에 대화를 넘긴다 | AC1: 현재 프로젝트 폴더에서 진행된 세션만 찾는다<br>AC2: 시작 시각, 첫 요청, 대화 내용이 WorkSession 형식으로 넘어간다<br>AC3: 원본 세션 파일은 바뀌지 않는다 | 초안 |
-| IN-F06 | 하네스 파일 쓰기 | 생성된 하네스를 배포한다 | AC1: 에이전트별 위치(`CLAUDE.md`, `.claude/skills/`, `AGENTS.md` 등)에 쓴다<br>AC2: 관리 영역 표식 밖은 바뀌지 않는다 | 초안 |
 | IN-F07 | 테스트 실행기 | 테스트가 테스트를 돌린다 | AC1: 설정된 테스트 명령을 프로젝트 폴더에서 실행한다<br>AC2: 대상 테스트를 좁히는 인자(필터)를 넘길 수 있다<br>AC3: 실행 출력을 실시간으로 전달하고, 중단 요청을 받으면 프로세스를 종료한다<br>AC4: 결과 JUnit XML 파일 위치를 테스트에 넘긴다 | 초안 |
 | IN-F08 | 형식 변경 대응 | 외부 형식이 바뀌어도 앱이 멈추지 않는다 | AC1: 세션·결과 파일을 읽지 못하면 오류가 표시되고 다른 기능은 계속 동작한다 | 초안 |
 

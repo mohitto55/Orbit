@@ -12,7 +12,7 @@ export const SUBDIRS = [
   'tasks',
   'drift',
   'knowledge',
-  'harness',
+  'features',
   'verification',
   '.cache'
 ]
@@ -22,23 +22,19 @@ export interface Ctx {
   dataRoot: string
 }
 
-export type HarnessTarget = 'claude' | 'codex'
-
 export interface ProjectSettings {
   name: string
   created?: string
   driftIntervalDays: number
   reminderTime: string
   githubRepo?: string
-  harnessTargets: HarnessTarget[]
   testCommand?: string
   junitPath?: string
 }
 
 const DEFAULTS: Omit<ProjectSettings, 'name'> = {
   driftIntervalDays: 7,
-  reminderTime: '09:00',
-  harnessTargets: ['claude']
+  reminderTime: '09:00'
 }
 
 /** 데이터 폴더 찾기: `.girsktop/project.md`가 우선, 없으면 `docs/domains`가 있는 `docs/`. */

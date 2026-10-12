@@ -54,9 +54,11 @@ export async function listDesigns(ctx: Ctx): Promise<Design[]> {
   const out: Design[] = []
   const sys = path.join(ctx.dataRoot, 'system-design.md')
   if (await exists(sys)) out.push(await loadDesign(sys, undefined))
-  for (const folder of await listDirs(path.join(ctx.dataRoot, 'domains'))) {
-    for (const f of await listMd(path.join(ctx.dataRoot, 'domains', folder, 'design'))) {
-      out.push(await loadDesign(f, folder))
+  for (const root of ['domains', 'features']) {
+    for (const folder of await listDirs(path.join(ctx.dataRoot, root))) {
+      for (const f of await listMd(path.join(ctx.dataRoot, root, folder, 'design'))) {
+        out.push(await loadDesign(f, folder))
+      }
     }
   }
   return out
@@ -86,7 +88,7 @@ export async function createDesign(ctx: Ctx, specId: string, featureId: string):
   const spec = await getSpec(ctx, specId)
   const feature = spec.features.find((f) => f.id === featureId)
   if (!feature) throw new Error(`기능을 찾을 수 없습니다: ${featureId}`)
-  const file = path.join(ctx.dataRoot, 'domains', spec.folder, 'design', `${featureId}.md`)
+  const file = path.join(path.dirname(spec.file), 'design', `${featureId}.md`)
   if (await exists(file)) throw new Error(`이미 설계가 있습니다: ${featureId}`)
   await writeMd(
     file,

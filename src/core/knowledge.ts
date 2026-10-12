@@ -12,7 +12,6 @@ export interface Knowledge {
   title: string
   content: string
   status: KnowledgeStatus
-  harness: boolean
   sources: string[]
   supersedes?: string
   supersededBy?: string
@@ -25,16 +24,11 @@ export interface KnowledgeInput {
   title: string
   content?: string
   status?: KnowledgeStatus
-  harness?: boolean
   sources?: string[]
   supersedes?: string
 }
 
 const ADR_TEMPLATE = `## 배경\n\n## 결정\n\n## 대안\n\n## 결과\n`
-
-export function defaultHarness(type: KnowledgeType): boolean {
-  return type === '컨벤션' || type === '주의'
-}
 
 export async function listKnowledge(ctx: Ctx): Promise<Knowledge[]> {
   const out: Knowledge[] = []
@@ -46,7 +40,6 @@ export async function listKnowledge(ctx: Ctx): Promise<Knowledge[]> {
       title: data.title ?? '',
       content,
       status: data.status ?? '유효',
-      harness: data.harness ?? defaultHarness(data.type),
       sources: data.sources ?? [],
       supersedes: data.supersedes,
       supersededBy: data.supersededBy,
@@ -70,7 +63,6 @@ export async function saveKnowledge(ctx: Ctx, input: KnowledgeInput): Promise<Kn
     type: input.type,
     title: input.title.trim(),
     status,
-    harness: input.harness ?? existing?.harness ?? defaultHarness(input.type),
     sources: input.sources ?? existing?.sources ?? [],
     ...(input.supersedes ? { supersedes: input.supersedes } : {}),
     ...(existing?.supersededBy ? { supersededBy: existing.supersededBy } : {}),

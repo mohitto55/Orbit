@@ -4,9 +4,9 @@ import type { Domain, Feature, FeatureStatus } from '../types'
 import { AC_LABEL, Badge, Empty, askChange, errorToast, toast, useLoad } from '../ui'
 import { History } from './Domains'
 
-export default function SpecTable({ domain, refreshKey, onChanged }: { domain: Domain; refreshKey: number; onChanged: () => void }) {
+export default function SpecTable({ domain, specId, refreshKey, onChanged }: { domain?: Domain; specId?: string; refreshKey: number; onChanged: () => void }) {
   const [specs, reload] = useLoad(() => api.listSpecs(), [refreshKey])
-  const spec = specs?.find((s) => s.domainId === domain.id)
+  const spec = specs?.find((s) => (specId ? s.id === specId : s.domainId === domain?.id))
   const [status, reloadStatus] = useLoad(() => (spec ? api.specStatus(spec.id) : Promise.resolve(null)), [spec?.id, spec?.version, refreshKey])
   const [designs] = useLoad(() => api.listDesigns(), [refreshKey])
   const [rows, setRows] = useState<Feature[]>([])
@@ -19,6 +19,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
 
   if (!specs) return null
   if (!spec) {
+    if (!domain) return <Empty>기능 명세 표를 찾을 수 없습니다</Empty>
     return (
       <Empty>
         이 도메인에는 기능 명세 표가 없습니다.{' '}
@@ -68,13 +69,13 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
     }
   }
 
-  const ownDesigns = (designs ?? []).filter((d) => d.folder === domain.folder)
+  const ownDesigns = (designs ?? []).filter((d) => d.folder === spec.folder)
 
   return (
     <div>
       <div className="row between">
         <div className="muted small">
-          {spec.id} · v{spec.version} · 기준: {spec.basedOn.map((b) => `${b.ref} v${b.version}`).join(', ')}
+          {spec.id} · v{spec.version} · {spec.scope === 'feature' ? '앱 기능 (기준 도메인 없음)' : `기준: ${spec.basedOn.map((b) => `${b.ref} v${b.version}`).join(', ')}`}
         </div>
         <button className="small ghost" onClick={() => setShowHistory((s) => !s)}>
           {showHistory ? '표 보기' : '변경 이력'}

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { createDomain, saveDomain } from '../src/core/domain'
 import { addFeature, createSpec, getSpec, parseSpecTable, renderSpecTable, saveFeatures, specStaleness, reconfirmSpec, type Feature } from '../src/core/spec'
 import { listChanges } from '../src/core/changes'
+import { listSpecs } from '../src/core/spec'
+import { promises as fs } from 'fs'
+import path from 'path'
 import { newProject } from './helpers'
 
 async function setup() {
@@ -106,5 +109,47 @@ describe('Spec', () => {
     ]
     const parsed = parseSpecTable(renderSpecTable(features).join('\n')).features
     expect(parsed).toEqual(features)
+  })
+
+  it('[SP-F08-AC1] features/<기능>/spec.md도 기능 명세 표로 읽힌다', async () => {
+    const ctx = await newProject()
+    const dir = path.join(ctx.dataRoot, 'features', 'integration')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(
+      path.join(dir, 'spec.md'),
+      `---
+id: spec-integration
+kind: spec
+title: 연동 기능 명세
+version: 1
+---
+
+| ID | 기능 | 목적 | 수용 기준 | 상태 |
+|---|---|---|---|---|
+| IN-F01 | 연결 상태 | 안다 | AC1: 표시된다 | 초안 |
+`
+    )
+    const spec = (await listSpecs(ctx)).find((s) => s.id === 'spec-integration')!
+    expect(spec).toMatchObject({ scope: 'feature', domainId: '' })
+    expect(spec.features[0].acs[0].id).toBe('IN-F01-AC1')
+  })
+
+  it('[SP-F08-AC2] 앱 기능의 표는 기준 도메인 없이 존재하고 고칠 수 있다', async () => {
+    const ctx = await newProject()
+    const dir = path.join(ctx.dataRoot, 'features', 'graph')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'spec.md'), `---
+id: spec-graph
+kind: spec
+title: 관계도 기능 명세
+version: 1
+---
+
+| ID | 기능 | 목적 | 수용 기준 | 상태 |
+|---|---|---|---|---|
+`)
+    const s = await addFeature(ctx, 'spec-graph', { name: '보기' })
+    expect(s.basedOn).toEqual([])
+    expect(s.features[0].id).toBe('GR-F01')
   })
 })

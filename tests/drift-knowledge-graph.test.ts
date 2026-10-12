@@ -2,7 +2,6 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { encodeClaudeProjectDir, finishCheck, isDriftDue, listClaudeSessions, listCodexSessions, listChecks, listRequests, pendingSessions } from '../src/core/drift'
-import { applyManagedBlock, MARK_END, MARK_START, previewHarness, writeHarness, harnessStaleness } from '../src/core/harness'
 import { buildGraph, resolveName } from '../src/core/graph'
 import { createDomain, listDomains, saveDomain } from '../src/core/domain'
 import { listInbox } from '../src/core/task'
@@ -71,34 +70,6 @@ describe('Integration · Drift', () => {
   })
 })
 
-describe('Harness', () => {
-  it('[HN-F03-AC2] 표식 밖 내용은 생성 전후가 동일하다', () => {
-    const before = `# 내 규칙\n\n직접 쓴 내용\n\n${MARK_START}\nold\n${MARK_END}\n\n꼬리\n`
-    const after = applyManagedBlock(before, 'new')
-    expect(after).toBe(`# 내 규칙\n\n직접 쓴 내용\n\n${MARK_START}\nnew\n${MARK_END}\n\n꼬리\n`)
-    expect(applyManagedBlock('기존\n', 'x')).toBe(`기존\n\n${MARK_START}\nx\n${MARK_END}\n`)
-  })
-
-  it('[HN-F04-AC4] 할 일 기록 방법과 AC ID 테스트 규칙이 포함된다', async () => {
-    const ctx = await newProject()
-    await createDomain(ctx, { title: '주문', folder: 'order', role: '주문을 확정한다' })
-    const p = await previewHarness(ctx, 'claude')
-    expect(p.after).toContain('.girsktop/inbox/')
-    expect(p.after).toContain('[TK-F03-AC2]')
-    expect(p.after).toContain('주문을 확정한다')
-  })
-
-  it('[HN-F05-AC2] 도메인의 작은 변경으로는 낡음을 알리지 않는다', async () => {
-    const ctx = await newProject()
-    const d = await createDomain(ctx, { title: '주문', folder: 'order' })
-    await writeHarness(ctx, 'claude')
-    await saveDomain(ctx, d.id, { title: '주문' }, { size: 'minor', summary: '오타' })
-    expect((await harnessStaleness(ctx, 'claude')).changed).toEqual([])
-    await saveDomain(ctx, d.id, { title: '주문' }, { size: 'major', summary: '규칙' })
-    expect((await harnessStaleness(ctx, 'claude')).changed).toEqual([d.id])
-  })
-})
-
 describe('Knowledge', () => {
   it('[KN-F04-AC2] 새 결정으로 대체하면 이전 항목이 폐기되고 서로 연결된다', async () => {
     const ctx = await newProject()
@@ -106,12 +77,6 @@ describe('Knowledge', () => {
     const neu = await saveKnowledge(ctx, { type: '결정', title: 'GraphQL로 전환', supersedes: old.id })
     const all = await listKnowledge(ctx)
     expect(all.find((k) => k.id === old.id)).toMatchObject({ status: '폐기됨', supersededBy: neu.id })
-  })
-
-  it('[KN-F03-AC2] 기본값은 컨벤션·주의 포함, 나머지 미포함이다', async () => {
-    const ctx = await newProject()
-    expect((await saveKnowledge(ctx, { type: '컨벤션', title: 'a' })).harness).toBe(true)
-    expect((await saveKnowledge(ctx, { type: '교훈', title: 'b' })).harness).toBe(false)
   })
 })
 

@@ -3,9 +3,13 @@ id: spec-verification
 kind: spec
 title: 테스트 기능 명세
 basedOn:
-  - { ref: dom-verification, version: 1 }
+  - ref: dom-verification
+    version: 4
 version: 1
 status: draft
+reconfirmed:
+  - at: '2026-10-12T13:15:51.852Z'
+    note: 수정 후 재확인
 ---
 
 # 테스트 기능 명세

@@ -7,7 +7,7 @@ export type { Task, InboxItem, TaskType, Horizon, TaskStatus } from '../../core/
 export type { TestLink, RunSummary, AcStatus } from '../../core/verification'
 export type { SessionInfo, SessionMessage, Mark, DomainRequest } from '../../core/drift'
 export type { Knowledge, KnowledgeType } from '../../core/knowledge'
-export type { ProjectSettings, HarnessTarget } from '../../core/workspace'
+export type { ProjectSettings } from '../../core/workspace'
 export type { Graph, GNode, GEdge } from '../../core/graph'
 
 export const TASK_TYPES = ['feature', 'bug', 'refactor', 'tech-debt', 'research', 'docs', 'test', 'spec-sync', 'design-sync', 'domain-sync'] as const

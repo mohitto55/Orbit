@@ -2,8 +2,6 @@
 name: Girsktop
 driftIntervalDays: 7
 reminderTime: '09:00'
-harnessTargets:
-  - claude
 testCommand: npx vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml
 junitPath: test-results/junit.xml
 ---

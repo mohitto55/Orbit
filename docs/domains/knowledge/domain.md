@@ -3,7 +3,7 @@ id: dom-knowledge
 kind: domain
 title: 지식
 subdomainType: Supporting
-version: 4
+version: 5
 status: draft
 ---
 
@@ -24,7 +24,6 @@ status: draft
 | 결정 (ADR) | 배경 / 결정 / 대안 / 결과로 쓴 지식 |  |
 | 프로젝트 용어 | 도메인 경계를 넘어 프로젝트 전반에서 쓰는 용어 | 한 도메인 안에서만 쓰는 용어는 담지 않는다 |
 | 근거 출처 | 지식이 나온 곳 (세션 발췌, 명세, 도메인, Task) |  |
-| 하네스 포함 | 하네스에 넣을지 여부 |  |
 | 대체 | 새 결정이 이전 결정을 폐기하고 연결되는 것 |  |
 
 ## 하지 않는 것

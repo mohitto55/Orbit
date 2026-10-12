@@ -10,10 +10,9 @@ import Verification from './pages/Verification'
 import Drift from './pages/Drift'
 import KnowledgePage from './pages/Knowledge'
 import GraphPage from './pages/Graph'
-import Harness from './pages/Harness'
 import Settings from './pages/Settings'
 
-export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'harness' | 'settings'
+export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'settings'
 
 const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드' },
@@ -24,7 +23,6 @@ const NAV: { id: Page; label: string; badge?: (d: DashboardData) => number }[] =
   { id: 'drift', label: '작업 대화', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
   { id: 'knowledge', label: '지식' },
   { id: 'graph', label: '관계도' },
-  { id: 'harness', label: '에이전트 지침' },
   { id: 'settings', label: '프로젝트 설정' }
 ]
 
@@ -127,7 +125,6 @@ export default function App() {
         {page === 'drift' && <Drift {...props} />}
         {page === 'knowledge' && <KnowledgePage {...props} />}
         {page === 'graph' && <GraphPage {...props} />}
-        {page === 'harness' && <Harness {...props} />}
         {page === 'settings' && <Settings {...props} onSaved={() => api.currentProject().then(setProject)} />}
       </main>
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
