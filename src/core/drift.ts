@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs'
+import { promises as fs, type Stats } from 'fs'
 import os from 'os'
 import path from 'path'
 import type { Ctx, ProjectSettings } from './workspace'
@@ -110,19 +110,76 @@ export function parseSessionLines(raw: string, agent: Agent): { messages: Sessio
   return { messages, cwd, id }
 }
 
-async function toInfo(file: string, agent: Agent, raw: string): Promise<SessionInfo | null> {
-  const { messages, id } = parseSessionLines(raw, agent)
-  if (messages.length === 0) return null
+/**
+ * 대화 기록 요약 캐시. 대화 파일(jsonl)은 끝에 줄이 붙기만 하므로, 파일마다 어디까지 읽었는지 기억해 두고
+ * 새로 붙은 줄만 더 읽는다. 대시보드·배지가 자주 부르는데, 매번 수십 MB를 다시 읽으면 앱 전체가 멈칫한다.
+ */
+interface SessionScan {
+  size: number
+  mtimeMs: number
+  /** 여기까지 읽었다 (바이트) */
+  offset: number
+  count: number
+  firstAt?: string
+  firstPrompt?: string
+  cwd?: string
+  id?: string
+}
+const scans = new Map<string, SessionScan>()
+
+async function scanSession(file: string, agent: Agent): Promise<{ scan: SessionScan; st: Stats }> {
   const st = await fs.stat(file)
-  const first = messages.find((m) => m.role === 'user')
+  const cached = scans.get(file)
+  if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) return { scan: cached, st }
+  // 처음 보거나 파일이 줄었으면(새로 쓰임) 처음부터 읽는다
+  const scan: SessionScan = cached && st.size >= cached.offset ? { ...cached } : { size: 0, mtimeMs: 0, offset: 0, count: 0 }
+  const len = st.size - scan.offset
+  if (len > 0) {
+    const buf = Buffer.alloc(len)
+    const fh = await fs.open(file, 'r')
+    try {
+      await fh.read(buf, 0, len, scan.offset)
+    } finally {
+      await fh.close()
+    }
+    // 아직 쓰는 중인 마지막 줄은 남겨 두었다가 다음에 읽는다. 줄바꿈 없이 끝났어도 완전한 JSON이면 읽는다.
+    let used = buf.lastIndexOf(0x0a) + 1
+    const tail = buf.subarray(used).toString('utf8').trim()
+    if (tail) {
+      try {
+        JSON.parse(tail)
+        used = len
+      } catch {
+        // 쓰는 중
+      }
+    }
+    const { messages, cwd, id } = parseSessionLines(buf.subarray(0, used).toString('utf8'), agent)
+    scan.cwd ??= cwd
+    scan.id ??= id
+    scan.firstAt ??= messages[0]?.at
+    if (scan.firstPrompt === undefined) {
+      const first = messages.find((m) => m.role === 'user')
+      if (first) scan.firstPrompt = first.text.slice(0, 200)
+    }
+    scan.count += messages.length
+    scan.offset += used
+  }
+  scan.size = st.size
+  scan.mtimeMs = st.mtimeMs
+  scans.set(file, scan)
+  return { scan, st }
+}
+
+function toInfo(file: string, agent: Agent, scan: SessionScan, st: Stats): SessionInfo | null {
+  if (scan.count === 0) return null
   return {
-    id: `${agent}:${id ?? path.basename(file, '.jsonl')}`,
+    id: `${agent}:${scan.id ?? path.basename(file, '.jsonl')}`,
     agent,
     file,
-    startedAt: messages[0].at ?? st.birthtime.toISOString(),
+    startedAt: scan.firstAt ?? st.birthtime.toISOString(),
     updatedAt: st.mtime.toISOString(),
-    firstPrompt: (first?.text ?? '').slice(0, 200),
-    messages: messages.length
+    firstPrompt: scan.firstPrompt ?? '',
+    messages: scan.count
   }
 }
 
@@ -133,7 +190,8 @@ export async function listClaudeSessions(projectDir: string, home = os.homedir()
   for (const name of await fs.readdir(dir)) {
     if (!name.endsWith('.jsonl')) continue
     const file = path.join(dir, name)
-    const info = await toInfo(file, 'claude', await fs.readFile(file, 'utf8'))
+    const { scan, st } = await scanSession(file, 'claude')
+    const info = toInfo(file, 'claude', scan, st)
     if (info) out.push(info)
   }
   return out
@@ -160,10 +218,9 @@ export async function listCodexSessions(projectDir: string, home = os.homedir(),
   await walkJsonl(path.join(home, '.codex', 'sessions'), since, files)
   const out: SessionInfo[] = []
   for (const file of files) {
-    const raw = await fs.readFile(file, 'utf8')
-    const { cwd } = parseSessionLines(raw, 'codex')
-    if (!cwd || !samePath(cwd, projectDir)) continue
-    const info = await toInfo(file, 'codex', raw)
+    const { scan, st } = await scanSession(file, 'codex')
+    if (!scan.cwd || !samePath(scan.cwd, projectDir)) continue
+    const info = toInfo(file, 'codex', scan, st)
     if (info) out.push(info)
   }
   return out

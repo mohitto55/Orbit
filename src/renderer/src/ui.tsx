@@ -189,6 +189,20 @@ export function Badge({ children, kind = '' }: { children: ReactNode; kind?: str
   return <span className={`badge ${kind}`}>{children}</span>
 }
 
+const darkQuery = () => window.matchMedia('(prefers-color-scheme: dark)')
+
+/** 지금 어두운 화면인가. 설정에서 테마를 바꾸거나 시스템 설정이 바뀌면 다시 그린다. */
+export function useDark(): boolean {
+  const [dark, setDark] = useState(() => darkQuery().matches)
+  useEffect(() => {
+    const q = darkQuery()
+    const onChange = () => setDark(q.matches)
+    q.addEventListener('change', onChange)
+    return () => q.removeEventListener('change', onChange)
+  }, [])
+  return dark
+}
+
 export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]): [T | null, () => void] {
   const [data, setData] = useState<T | null>(null)
   const [tick, setTick] = useState(0)

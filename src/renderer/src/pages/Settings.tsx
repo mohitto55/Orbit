@@ -2,11 +2,30 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { PageProps } from '../App'
 import type { ProjectSettings } from '../types'
+import type { ThemeMode } from '../../../core/theme'
 import { errorToast, toast, useLoad } from '../ui'
+
+const THEMES: [ThemeMode, string][] = [
+  ['system', '시스템 설정 따라가기'],
+  ['light', '밝게'],
+  ['dark', '어둡게']
+]
 
 export default function Settings({ onSaved }: PageProps & { onSaved: () => void }) {
   const [project] = useLoad(() => api.currentProject(), [])
   const [s, setS] = useState<ProjectSettings | null>(null)
+  const [themeMode, setThemeMode] = useState<ThemeMode | null>(null)
+  useEffect(() => {
+    api.themeMode().then(setThemeMode).catch(errorToast)
+  }, [])
+  const changeTheme = async (m: ThemeMode) => {
+    setThemeMode(m)
+    try {
+      setThemeMode(await api.setThemeMode(m))
+    } catch (e) {
+      errorToast(e)
+    }
+  }
   useEffect(() => {
     if (project) setS(project.settings)
   }, [project])
@@ -15,7 +34,20 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
 
   return (
     <div className="page narrow-page">
-      <h2>프로젝트 설정</h2>
+      <h2>설정</h2>
+      <h3 className="settings-section">화면</h3>
+      <div className="field">
+        <label>테마 (이 컴퓨터의 Orbit 전체에 바로 적용)</label>
+        <div className="seg">
+          {THEMES.map(([m, label]) => (
+            <button key={m} className={themeMode === m ? 'on' : ''} onClick={() => void changeTheme(m)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <h3 className="settings-section">프로젝트</h3>
       <div className="muted small">
         {project.projectDir} · 데이터 폴더 {project.dataRoot} {project.isGit ? '' : '· git 저장소 아님'}
       </div>

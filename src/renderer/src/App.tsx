@@ -27,7 +27,7 @@ const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData)
   { id: 'knowledge', label: '지식', group: '자료' },
   { id: 'graph', label: '관계도' },
   { id: 'terminal', label: '터미널', group: '도구' },
-  { id: 'settings', label: '프로젝트 설정' }
+  { id: 'settings', label: '설정' }
 ]
 
 export interface PageProps {

@@ -40,6 +40,27 @@ describe('Integration · Drift', () => {
     expect(await pendingSessions(ctx, home)).toHaveLength(2)
   })
 
+  it('진행 중인 대화 파일에 줄이 붙으면 붙은 줄만 더 읽어 반영한다 (쓰는 중인 줄은 다 쓴 뒤에)', async () => {
+    const ctx = await newProject()
+    const home = await tempDir('home-')
+    const claudeDir = path.join(home, '.claude', 'projects', encodeClaudeProjectDir(ctx.projectDir))
+    await fs.mkdir(claudeDir, { recursive: true })
+    const file = path.join(claudeDir, 's2.jsonl')
+    const line = (role: 'user' | 'assistant', text: string) =>
+      JSON.stringify({ type: role, sessionId: 's2', timestamp: '2026-10-12T02:00:00Z', message: { role, content: text } }) + '\n'
+
+    await fs.writeFile(file, line('user', '첫 질문'))
+    expect(await listClaudeSessions(ctx.projectDir, home)).toMatchObject([{ firstPrompt: '첫 질문', messages: 1 }])
+
+    // 답이 붙고, 다음 줄은 아직 쓰는 중
+    const next = line('user', '두 번째 질문')
+    await fs.appendFile(file, line('assistant', '답') + next.slice(0, 20))
+    expect(await listClaudeSessions(ctx.projectDir, home)).toMatchObject([{ firstPrompt: '첫 질문', messages: 2 }])
+
+    await fs.appendFile(file, next.slice(20))
+    expect(await listClaudeSessions(ctx.projectDir, home)).toMatchObject([{ firstPrompt: '첫 질문', messages: 3 }])
+  })
+
   it('[DR-F01-AC2] 지난 검토 이후 새 세션이 없으면 알리지 않는다', async () => {
     const ctx = await newProject()
     const settings = await readSettings(ctx)

@@ -35,9 +35,16 @@ export default function Terminals({ visible }: { visible: boolean }) {
       setTabs((t) => t.map((x) => (x.id === id ? { ...x, exited: code } : x)))
       xterms.get(id)?.term.write(`\r\n\x1b[90m[프로세스 종료: ${code}]\x1b[0m\r\n`)
     })
+    // 테마를 바꾸면 열려 있는 터미널 색도 바꾼다
+    const q = window.matchMedia('(prefers-color-scheme: dark)')
+    const onTheme = () => {
+      for (const x of xterms.values()) x.term.options.theme = theme()
+    }
+    q.addEventListener('change', onTheme)
     return () => {
       offData()
       offExit()
+      q.removeEventListener('change', onTheme)
     }
   }, [])
 

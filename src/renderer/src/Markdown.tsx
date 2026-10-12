@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { canSerialize, serializeBlock } from './mdSerialize'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -48,7 +49,7 @@ export function Markdown({ source, onWiki, onTerm, terms, className = '' }: Mark
 }
 
 /** 감싸는 .md 없이 렌더링만 한다. 블록 단위로 나눠 그릴 때 쓴다. */
-function MdContent({ source, onWiki, onTerm, terms }: Omit<MarkdownProps, 'className'>) {
+export function MdContent({ source, onWiki, onTerm, terms }: Omit<MarkdownProps, 'className'>) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -59,7 +60,7 @@ function MdContent({ source, onWiki, onTerm, terms }: Omit<MarkdownProps, 'class
           if (href.startsWith('wiki:')) {
             const target = decodeURIComponent(href.slice(5))
             return (
-              <button className="wikilink" title={`[[${target}]]`} onClick={() => onWiki?.(target)}>
+              <button className="wikilink" title={`[[${target}]]`} contentEditable={false} onClick={() => onWiki?.(target)}>
                 {children}
               </button>
             )
@@ -119,124 +120,314 @@ export function joinBlocks(blocks: { text: string; sep: string }[]): string {
   return blocks.map((b) => b.text + b.sep).join('')
 }
 
-/** 렌더링된 상태 그대로 블록을 눌러 그 자리에서 고친다. */
+/* ---------- 보기 모양 그대로 고치는 편집기 ---------- */
+
+interface Item {
+  id: number
+  /** 지금 md */
+  text: string
+  /** 블록 뒤 빈 줄 */
+  sep: string
+  /** 화면에 그려 둔 md. 고치는 동안에는 바꾸지 않는다 (React가 사람이 고친 DOM을 건드리지 않게) */
+  shown: string
+}
+
+let nextId = 1
+const toItems = (src: string): Item[] => splitBlocks(src).map((b) => ({ id: nextId++, text: b.text, sep: b.sep, shown: b.text }))
+const joinItems = (items: Item[]) => joinBlocks(items)
+
+/** 그려 둔 md가 같으면 다시 그리지 않는다 */
+const FrozenContent = memo(
+  function FrozenContent({ source, onWiki }: { source: string; onWiki: (t: string) => void }) {
+    return <MdContent source={source} onWiki={onWiki} />
+  },
+  (a, b) => a.source === b.source
+)
+
+/** 커서가 블록 맨 앞/맨 뒤에 있는가 (글자 기준) */
+function caretAt(el: HTMLElement, where: 'start' | 'end'): boolean {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return false
+  const r = sel.getRangeAt(0)
+  const probe = document.createRange()
+  probe.selectNodeContents(el)
+  if (where === 'start') probe.setEnd(r.startContainer, r.startOffset)
+  else probe.setStart(r.endContainer, r.endOffset)
+  return probe.toString().length === 0
+}
+
+function placeCaret(el: HTMLElement, where: 'start' | 'end') {
+  el.focus()
+  const sel = window.getSelection()
+  if (!sel) return
+  const r = document.createRange()
+  r.selectNodeContents(el)
+  r.collapse(where === 'start')
+  sel.removeAllRanges()
+  sel.addRange(r)
+}
+
+/**
+ * 렌더링된 모양 그대로 글자를 고친다. 블록(빈 줄로 나뉜 md 덩어리)마다 고칠 수 있는 영역이고,
+ * 고친 블록만 md로 되돌린다(mdSerialize). 되돌릴 수 없는 HTML 블록은 누르면 원문을 고친다.
+ * Enter: 새 단락 · Shift+Enter: 줄바꿈 · ↑↓: 블록 이동 · Esc: 편집 끝.
+ */
 function LiveMarkdown({ value, onChange, onWiki }: { value: string; onChange: (v: string) => void; onWiki?: (t: string) => void }) {
-  // 편집 중에는 시작 시점의 블록 목록을 고정해, 빈 줄을 쳐도 블록이 쪼개져 커서가 튀지 않게 한다.
-  const [editing, setEditing] = useState<{ index: number; blocks: { text: string; sep: string }[]; orig: string; fresh: boolean } | null>(null)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  const blocks = editing?.blocks ?? splitBlocks(value)
+  const [items, setItems] = useState<Item[]>(() => toItems(value))
+  const emitted = useRef(value)
+  const refs = useRef(new Map<number, HTMLDivElement>())
+  const focusNext = useRef<{ id: number; where: 'start' | 'end' } | null>(null)
+  const wikiRef = useRef(onWiki)
+  wikiRef.current = onWiki
+  const wiki = useCallback((t: string) => wikiRef.current?.(t), [])
 
-  const fit = () => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight + 2}px`
-  }
+  // 바깥에서 내용이 바뀌면(다른 문서를 열거나 저장 후 다시 읽음) 새로 나눈다
   useEffect(() => {
-    if (!editing) return
-    const el = ref.current
-    if (el && document.activeElement !== el) {
-      el.focus()
-      el.setSelectionRange(el.value.length, el.value.length)
+    if (value !== emitted.current) {
+      emitted.current = value
+      setItems(toItems(value))
     }
-    fit()
-  }, [editing])
+  }, [value])
 
-  const start = (index: number, list = splitBlocks(value), fresh = false) => setEditing({ index, blocks: list, orig: value, fresh })
-  const finish = () => {
-    if (!editing) return
-    // 비운 블록은 지운다. 새로 추가했다가 비워 둔 단락이면 원래대로 돌린다.
-    const next = editing.blocks.filter((b, i) => i !== editing.index || b.text.trim())
-    const joined = editing.fresh && next.length < editing.blocks.length ? editing.orig : joinBlocks(next)
-    if (joined !== value) onChange(joined)
-    setEditing(null)
+  useLayoutEffect(() => {
+    const f = focusNext.current
+    if (!f) return
+    focusNext.current = null
+    const el = refs.current.get(f.id)
+    if (el) placeCaret(el, f.where)
+  })
+
+  const commit = (next: Item[]) => {
+    setItems(next)
+    const joined = joinItems(next)
+    if (joined !== emitted.current) {
+      emitted.current = joined
+      onChange(joined)
+    }
   }
-  const edit = (text: string) => {
-    if (!editing) return
-    const next = editing.blocks.map((b, i) => (i === editing.index ? { ...b, text } : b))
-    setEditing({ ...editing, blocks: next })
-    onChange(joinBlocks(next))
+  const indexOf = (id: number) => items.findIndex((x) => x.id === id)
+
+  /** 글자를 칠 때: 이 블록만 md로 되돌려 반영한다. 화면은 그대로 둔다. */
+  const input = (id: number) => {
+    const el = refs.current.get(id)
+    const i = indexOf(id)
+    if (!el || i < 0) return
+    const text = serializeBlock(el, items[i].shown)
+    if (text === null || text === items[i].text) return
+    commit(items.map((x) => (x.id === id ? { ...x, text } : x)))
   }
+
+  /** 블록을 떠날 때: 바뀐 블록은 새 md로 다시 그린다. 비었으면 지우고, 빈 줄이 생겼으면 블록을 나눈다. */
+  const settle = (id: number) => {
+    const i = indexOf(id)
+    if (i < 0) return
+    const it = items[i]
+    if (it.text === it.shown) return
+    const next = [...items]
+    if (!it.text.trim()) {
+      next.splice(i, 1)
+      if (i === next.length && i > 0) next[i - 1] = { ...next[i - 1], sep: it.sep }
+    } else {
+      const parts = toItems(it.text)
+      parts[parts.length - 1].sep = it.sep
+      next.splice(i, 1, ...parts)
+    }
+    commit(next)
+  }
+
+  /** Enter: 커서 뒤 내용을 새 단락으로 떼어 낸다 */
+  const split = (id: number) => {
+    const el = refs.current.get(id)
+    const sel = window.getSelection()
+    const i = indexOf(id)
+    if (!el || !sel || !sel.rangeCount || i < 0) return
+    const r = sel.getRangeAt(0)
+    r.deleteContents()
+    const tail = document.createRange()
+    tail.setStart(r.endContainer, r.endOffset)
+    tail.setEnd(el, el.childNodes.length)
+    const box = document.createElement('div')
+    box.appendChild(tail.extractContents())
+    // 제목 끝에서 Enter를 치면 다음 줄은 보통 단락이다
+    const head = box.firstElementChild
+    if (head && /^H[1-6]$/.test(head.tagName)) {
+      const p = document.createElement('p')
+      p.append(...Array.from(head.childNodes))
+      head.replaceWith(p)
+    }
+    const before = serializeBlock(el, items[i].shown) ?? items[i].text
+    const after = serializeBlock(box) ?? ''
+    const created: Item = { id: nextId++, text: after, sep: items[i].sep, shown: after }
+    const next = [...items]
+    next.splice(i, 1, { id: nextId++, text: before, sep: '\n\n', shown: before }, created)
+    focusNext.current = { id: created.id, where: 'start' }
+    commit(next)
+  }
+
+  const remove = (id: number) => {
+    const i = indexOf(id)
+    if (i < 0) return
+    const next = [...items]
+    const [gone] = next.splice(i, 1)
+    if (i === next.length && i > 0) next[i - 1] = { ...next[i - 1], sep: gone.sep }
+    if (i > 0) focusNext.current = { id: next[i - 1].id, where: 'end' }
+    commit(next)
+  }
+
+  const key = (e: React.KeyboardEvent<HTMLDivElement>, id: number) => {
+    // 한글 조합 중의 Enter·화살표는 조합을 끝내는 키다
+    if (e.nativeEvent.isComposing) return
+    const el = e.currentTarget
+    const i = indexOf(id)
+    const inside = (window.getSelection()?.anchorNode as Node | null)?.parentElement?.closest('li, td, th, pre, blockquote')
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      el.blur()
+    } else if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault()
+      document.execCommand('insertLineBreak')
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (inside?.matches('pre')) {
+        e.preventDefault()
+        document.execCommand('insertText', false, '\n')
+      } else if (inside?.matches('td, th')) {
+        e.preventDefault()
+        document.execCommand('insertLineBreak')
+      } else if (!inside) {
+        e.preventDefault()
+        split(id)
+      }
+      // 목록·인용 안에서는 브라우저 기본 동작(새 항목·새 줄)
+    } else if (e.key === 'Backspace' && !(el.textContent ?? '').length && !el.querySelector('hr, img, table')) {
+      e.preventDefault()
+      remove(id)
+    } else if (e.key === 'ArrowUp' && i > 0 && caretAt(el, 'start')) {
+      e.preventDefault()
+      refs.current.get(items[i - 1].id) && placeCaret(refs.current.get(items[i - 1].id)!, 'end')
+    } else if (e.key === 'ArrowDown' && i < items.length - 1 && caretAt(el, 'end')) {
+      e.preventDefault()
+      refs.current.get(items[i + 1].id) && placeCaret(refs.current.get(items[i + 1].id)!, 'start')
+    }
+  }
+
   const append = () => {
-    const list = splitBlocks(value)
-    if (list.length) list[list.length - 1] = { ...list[list.length - 1], sep: list[list.length - 1].sep.replace(/\n*$/, '') + '\n\n' }
-    list.push({ text: '', sep: value.endsWith('\n') ? '\n' : '' })
-    start(list.length - 1, list, true)
-  }
-  const clickBlock = (e: React.MouseEvent, i: number) => {
-    // 링크·위키링크·용어 강조를 누른 것은 편집이 아니라 이동이다
-    if ((e.target as HTMLElement).closest('a, button, mark, input')) return
-    if (window.getSelection()?.toString()) return
-    if (editing) finish()
-    start(i)
+    const next = [...items]
+    const last = next[next.length - 1]
+    if (last) next[next.length - 1] = { ...last, sep: last.sep.replace(/\n*$/, '') + '\n\n' }
+    const created: Item = { id: nextId++, text: '', sep: value.endsWith('\n') ? '\n' : '', shown: '' }
+    next.push(created)
+    focusNext.current = { id: created.id, where: 'start' }
+    setItems(next)
   }
 
-  const visible = blocks.map((b, i) => ({ ...b, i })).filter((b) => b.text || editing?.index === b.i)
   return (
     <div className="md live-md">
-      {visible.map((b) =>
-        editing?.index === b.i ? (
-          <textarea
-            key={`e${b.i}`}
-            ref={ref}
-            className="mono md-live-input"
-            value={b.text}
-            spellCheck={false}
-            onChange={(e) => {
-              edit(e.target.value)
-              fit()
-            }}
-            onBlur={finish}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
-                e.preventDefault()
-                finish()
-              }
-            }}
-          />
-        ) : (
-          <div key={b.i} className="md-block" onClick={(e) => clickBlock(e, b.i)}>
-            <MdContent source={b.text} onWiki={onWiki} />
-          </div>
-        )
-      )}
-      {!editing && (
-        <div className="md-add" onClick={append}>
-          {value.trim() ? '+ 단락 추가' : '눌러서 작성'}
-        </div>
-      )}
+      {items.map((it) => (
+        <Block
+          key={it.id}
+          item={it}
+          setRef={(el) => (el ? refs.current.set(it.id, el) : refs.current.delete(it.id))}
+          onWiki={wiki}
+          onInput={() => input(it.id)}
+          onSettle={() => settle(it.id)}
+          onKey={(e) => key(e, it.id)}
+          onRaw={(text) => commit(items.map((x) => (x.id === it.id ? { ...x, text } : x)))}
+        />
+      ))}
+      <div className="md-add" onClick={append}>
+        {value.trim() ? '+ 단락 추가' : '눌러서 작성'}
+      </div>
     </div>
   )
 }
 
-type Mode = 'view' | 'edit' | 'split'
+function Block(props: {
+  item: Item
+  setRef: (el: HTMLDivElement | null) => void
+  onWiki: (t: string) => void
+  onInput: () => void
+  onSettle: () => void
+  onKey: (e: React.KeyboardEvent<HTMLDivElement>) => void
+  onRaw: (text: string) => void
+}) {
+  const { item } = props
+  const ref = useRef<HTMLDivElement | null>(null)
+  // 화면을 md로 되돌릴 수 있는 블록만 그 자리에서 고친다
+  const [editable, setEditable] = useState(true)
+  const [raw, setRaw] = useState(false)
+  const area = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    if (ref.current) setEditable(canSerialize(ref.current))
+  }, [item.shown])
+  useEffect(() => {
+    const el = area.current
+    if (!raw || !el) return
+    el.focus()
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight + 2}px`
+  }, [raw])
 
-/** md 편집기: 보기(기본, 블록을 눌러 그 자리에서 편집) / 편집 / 나란히. */
+  if (raw) {
+    return (
+      <textarea
+        ref={area}
+        className="mono md-live-input"
+        value={item.text}
+        spellCheck={false}
+        onChange={(e) => {
+          props.onRaw(e.target.value)
+          e.target.style.height = 'auto'
+          e.target.style.height = `${e.target.scrollHeight + 2}px`
+        }}
+        onBlur={() => {
+          setRaw(false)
+          props.onSettle()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+            e.preventDefault()
+            e.currentTarget.blur()
+          }
+        }}
+      />
+    )
+  }
+  return (
+    <div
+      ref={(el) => {
+        ref.current = el
+        props.setRef(el)
+      }}
+      className={`md-block ${editable ? '' : 'raw-only'}`}
+      contentEditable={editable}
+      suppressContentEditableWarning
+      spellCheck={false}
+      data-placeholder="여기에 입력"
+      onInput={props.onInput}
+      onBlur={props.onSettle}
+      onKeyDown={props.onKey}
+      onPaste={(e) => {
+        // 서식 없는 글자로만 붙여 넣는다
+        e.preventDefault()
+        document.execCommand('insertText', false, e.clipboardData.getData('text/plain'))
+      }}
+      onClick={(e) => {
+        if (editable || (e.target as HTMLElement).closest('a, button, mark, input') || window.getSelection()?.toString()) return
+        setRaw(true)
+      }}
+    >
+      <FrozenContent source={item.shown} onWiki={props.onWiki} />
+    </div>
+  )
+}
+
+/** md 편집기: 보기 모양 그대로 고친다. */
 export function MdEditor({ value, onChange, onWiki, label }: { value: string; onChange: (v: string) => void; onWiki?: (t: string) => void; label?: string }) {
-  const [mode, setMode] = useState<Mode>('view')
   return (
     <div className="md-editor">
-      <div className="row between">
-        {label ? <span className="muted small">{label}</span> : <span />}
-        <div className="seg small">
-          {(
-            [
-              ['view', '보기'],
-              ['edit', '편집'],
-              ['split', '나란히']
-            ] as [Mode, string][]
-          ).map(([m, l]) => (
-            <button key={m} className={mode === m ? 'on' : ''} onClick={() => setMode(m)}>
-              {l}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className={`md-editor-body ${mode}`}>
-        {mode !== 'view' && <textarea className="mono" value={value} onChange={(e) => onChange(e.target.value)} spellCheck={false} />}
-        {mode !== 'edit' && (
-          <div className="md-scroll">{mode === 'view' ? <LiveMarkdown value={value} onChange={onChange} onWiki={onWiki} /> : <Markdown source={value} onWiki={onWiki} />}</div>
-        )}
+      {label && <div className="md-editor-label muted small">{label}</div>}
+      <div className="md-scroll">
+        <LiveMarkdown value={value} onChange={onChange} onWiki={onWiki} />
       </div>
     </div>
   )

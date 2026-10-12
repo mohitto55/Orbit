@@ -5,6 +5,7 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import { createApi } from './api'
 import { createAiCheckApi } from './aiCheckApi'
 import { createUpdater } from './updater'
+import { createTheme } from './theme'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 
@@ -69,7 +70,9 @@ const aiCheckApi = createAiCheckApi({
 
 const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion() })
 
-for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api })) {
+const theme = createTheme({ userData: app.getPath('userData') })
+
+for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api, ...theme.api })) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 
@@ -155,7 +158,8 @@ async function smoke(dir: string, out?: string) {
   app.quit()
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await theme.load()
   createWindow()
   if (process.env.ORBIT_SMOKE) {
     win!.webContents.once('did-finish-load', () => void smoke(process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))
