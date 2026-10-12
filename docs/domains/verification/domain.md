@@ -3,10 +3,13 @@ id: dom-verification
 kind: domain
 title: 테스트
 subdomainType: Core
-version: 4
+version: 6
 status: draft
 parent: dom-domain-modeling
 order: 3
+links:
+  - type: AC 검증
+    to: dom-spec
 ---
 
 # 테스트
@@ -30,6 +33,16 @@ order: 3
 | 검증 상태 | AC별 상태: `통과` / `실패` / `테스트 없음` / `미실행` / `확인 필요` | 연결된 테스트가 하나라도 실패하면 AC는 실패 |
 | 확인 버전 | 테스트 연결마다 마지막으로 확인한 기능 명세 표 버전 |  |
 | 검증률 | 통과한 AC 수 / 활성 AC 수 |  |
+
+## 모델
+
+이 도메인이 소유한 개념의 상태·행위·불변식과 관계다. 응용 서비스의 호출 순서는 적지 않는다 (그건 설계에).
+
+| 개념 | 종류 | 상태·행위 | 불변식 | 관계 | 코드 |
+|---|---|---|---|---|---|
+| 실행 결과 | Aggregate | 명령, 종료 코드, 통과·실패 수, 테스트별 결과 / 저장 |  |  | `saveRun` |
+| 테스트 연결 | Value Object | AC ID, 파일, 줄 | 테스트 이름의 [AC ID]로만 잇는다 | 가리킴 [[기능 명세/수용 기준]] | `scanTestLinks` |
+| 검증 상태 | Value Object | 통과 / 실패 / 테스트 없음 / 미실행 / 확인 필요 | 연결된 테스트가 하나라도 실패하면 실패 | 근거 [[실행 결과]]<br>대상 [[기능 명세/수용 기준]] | `acStatuses` |
 
 ## 하지 않는 것
 

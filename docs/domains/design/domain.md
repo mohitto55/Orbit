@@ -3,10 +3,13 @@ id: dom-design
 kind: domain
 title: 설계
 subdomainType: Core
-version: 4
+version: 6
 status: draft
 parent: dom-domain-modeling
 order: 2
+links:
+  - type: 기준
+    to: dom-spec
 ---
 
 # 설계
@@ -29,6 +32,15 @@ order: 2
 | 기준 기능 버전 | 설계를 쓸 때 기준으로 삼은 기능 명세 표 버전 |  |
 | 참조 (refs) | 기능별 설계가 공통 설계 섹션을 가리키는 것 |  |
 | 낡음 | 기준 기능 또는 참조한 공통 설계 섹션에 큰 변경이 있었던 상태 |  |
+
+## 모델
+
+이 도메인이 소유한 개념의 상태·행위·불변식과 관계다. 응용 서비스의 호출 순서는 적지 않는다 (그건 설계에).
+
+| 개념 | 종류 | 상태·행위 | 불변식 | 관계 | 코드 |
+|---|---|---|---|---|---|
+| 설계 | Aggregate | 본문, 버전, 기준 기능 / 저장, 기준 갱신 | 기준 기능이 크게 바뀌면 낡음 | 기준 [[기능 명세/기능]]<br>참조 [[시스템 공통 설계]] | `saveDesign` |
+| 시스템 공통 설계 | Entity | 섹션(S1~), 버전 | 섹션 id는 바뀌지 않는다 |  | `createSystemDesign` |
 
 ## 하지 않는 것
 

@@ -3,10 +3,13 @@ id: dom-drift
 kind: domain
 title: 도메인 점검
 subdomainType: Core
-version: 9
+version: 11
 status: draft
 parent: dom-domain-modeling
 order: 5
+links:
+  - type: 변경 요청
+    to: dom-impact-review
 ---
 
 # 도메인 점검
@@ -31,6 +34,16 @@ order: 5
 | 표시 (Mark) | 사람이 대화 일부에 남기는 판단: `도메인 반영` / `할 일` / `지식` | 앱과 AI는 표시를 만들지 않는다 |
 | 발췌 | 표시한 대화 부분. 세션 원본 대신 이것만 저장 |  |
 | 검토됨 | 한 회차에서 이미 본 세션. 다음 회차에서 제외 |  |
+
+## 모델
+
+이 도메인이 소유한 개념의 상태·행위·불변식과 관계다. 응용 서비스의 호출 순서는 적지 않는다 (그건 설계에).
+
+| 개념 | 종류 | 상태·행위 | 불변식 | 관계 | 코드 |
+|---|---|---|---|---|---|
+| AI 점검 | Aggregate | 대상 기간, 본 세션, 요약 / 실행 | 실패하면 점검 기준 시각은 바뀌지 않는다 | 읽음 [[세션]]<br>소유 [[점검 항목]] | `runAiCheck` |
+| 점검 항목 | Entity | 종류, 제안, 근거, 상태 / 받아들임, 무시 | 한 번 처리한 항목은 다시 처리할 수 없다 | 만듦 [[변경 검토/변경 요청]] | `decideFinding` |
+| 세션 | Entity | 에이전트, 대화, 갱신 시각 |  |  | `readSessionMessages` |
 
 ## 하지 않는 것
 
