@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
+import cytoscape, { type Core, type Layouts, type NodeSingular } from 'cytoscape'
 import { api } from '../api'
 import type { PageProps } from '../App'
 import type { GNode } from '../types'
@@ -35,6 +35,7 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
   const [graph] = useLoad(() => api.graph(), [refreshKey])
   const ref = useRef<HTMLDivElement>(null)
   const cy = useRef<Core | null>(null)
+  const running = useRef<Layouts | null>(null)
   const [kinds, setKinds] = useState<Set<string>>(new Set(['domain', 'spec', 'design', 'ghost']))
   const [mode, setMode] = useState<Mode>('all')
   const [selected, setSelected] = useState<string | null>(null)
@@ -50,6 +51,8 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     if (!graph || !ref.current) return
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
     const prev = cy.current
+    running.current?.stop()
+    running.current = null
     const positions = new Map<string, { x: number; y: number }>()
     prev?.nodes().forEach((n) => {
       positions.set(n.id(), { ...n.position() })
@@ -125,7 +128,13 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature])
 
-  useEffect(() => () => cy.current?.destroy(), [])
+  useEffect(
+    () => () => {
+      running.current?.stop()
+      cy.current?.destroy()
+    },
+    []
+  )
 
   /* 2) 보기 바꾸기: 필터·모드·단계 — 그래프는 그대로 두고 보이는 요소만 바꾼 뒤 부드럽게 재배치 */
   useEffect(() => {
@@ -165,17 +174,32 @@ export default function GraphPage({ refreshKey, go }: PageProps) {
   /** layout: none = 보이는 요소만 바꿈, instant = 애니메이션 없이 배치(처음 열 때), animate = 부드럽게 재배치 */
   function applyView(c: Core, layout: 'none' | 'instant' | 'animate') {
     const { nodes, edges } = visibleSet(c)
-    c.batch(() => {
-      c.elements().style('display', 'none')
-      nodes.style('display', 'element')
-      edges.style('display', 'element')
-    })
     const shown = nodes.union(edges)
+    // 바뀌는 요소만 숨기거나 보인다 (전부 껐다 켜면 매번 전체를 다시 그린다)
+    const hidden = c.elements(':hidden')
+    const appearing = shown.intersection(hidden)
+    c.batch(() => {
+      c.elements(':visible').difference(shown).style('display', 'none')
+      appearing.style('display', 'element')
+    })
+    // 새로 나타난 노드는 이미 보이는 이웃 곁에서 출발하게 해, 원점에서 날아오지 않게 한다
+    appearing.nodes().forEach((n) => {
+      const anchor = n.neighborhood('node:visible').difference(appearing).nodes().first()
+      if (anchor.nonempty()) n.position({ x: anchor.position('x') + Math.random() * 40 - 20, y: anchor.position('y') + Math.random() * 40 - 20 })
+    })
     if (shown.empty() || layout === 'none') return
+    // 앞 배치가 아직 돌고 있으면 멈추고 새로 시작한다 (빠르게 여러 번 눌러도 겹치지 않게)
+    running.current?.stop()
     const animate = layout === 'animate'
-    const motion = { animate, animationDuration: ANIM.duration, animationEasing: ANIM.easing, padding: 30 }
+    // cose의 animate:true는 계산하는 내내 화면을 다시 그려 끊겨 보인다. 'end'는 다 계산한 뒤 한 번에 부드럽게 옮긴다.
+    const motion = { animate: animate ? 'end' : false, animationDuration: ANIM.duration, animationEasing: ANIM.easing, padding: 30 }
     const opts = mode === 'tree' ? { name: 'breadthfirst', directed: true, ...motion } : { name: 'cose', randomize: !animate, nodeDimensionsIncludeLabels: true, ...motion }
-    shown.layout(opts as cytoscape.LayoutOptions).run()
+    const l = shown.layout(opts as cytoscape.LayoutOptions)
+    running.current = l
+    l.one('layoutstop', () => {
+      if (running.current === l) running.current = null
+    })
+    l.run()
   }
 
   function openNode(n: { id: string; kind: string }) {

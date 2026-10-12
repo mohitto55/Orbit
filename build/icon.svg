@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Orbit: 궤도 링(= O)과 그 위를 도는 위성 하나. 위성 둘레는 링을 잘라 띄운다. -->
+  <defs>
+    <mask id="gap">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="360.65" cy="151.35" r="50" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0b0b0c"/>
+  <circle cx="256" cy="256" r="148" fill="none" stroke="#fff" stroke-width="34" mask="url(#gap)"/>
+  <circle cx="360.65" cy="151.35" r="28" fill="#fff"/>
+</svg>

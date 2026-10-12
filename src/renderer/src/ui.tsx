@@ -3,7 +3,7 @@ import type { ChangeInput, ChangeSize } from './types'
 
 /* ---------- 알림 ---------- */
 
-type Toast = { id: number; text: string; kind: 'ok' | 'error' }
+type Toast = { id: number; text: string; kind: 'ok' | 'error'; leaving?: boolean }
 let pushToast: (t: Omit<Toast, 'id'>) => void = () => {}
 
 export function toast(text: string, kind: Toast['kind'] = 'ok') {
@@ -14,23 +14,104 @@ export function errorToast(e: unknown) {
   toast(e instanceof Error ? e.message : String(e), 'error')
 }
 
+const LEAVE_MS = 260
+
+/** 우측 위 알림. 들어올 때와 나갈 때 모두 미끄러지듯 움직인다. */
 export function Toasts() {
   const [items, setItems] = useState<Toast[]>([])
   useEffect(() => {
     let n = 0
+    const dismiss = (id: number) => {
+      setItems((s) => s.map((x) => (x.id === id ? { ...x, leaving: true } : x)))
+      setTimeout(() => setItems((s) => s.filter((x) => x.id !== id)), LEAVE_MS)
+    }
     pushToast = (t) => {
       const id = ++n
-      setItems((s) => [...s, { ...t, id }])
-      setTimeout(() => setItems((s) => s.filter((x) => x.id !== id)), t.kind === 'error' ? 6000 : 3000)
+      setItems((s) => [...s.slice(-4), { ...t, id }])
+      setTimeout(() => dismiss(id), t.kind === 'error' ? 6000 : 2800)
     }
+    dismissToast = dismiss
   }, [])
   return (
     <div className="toasts">
       {items.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`}>
+        <div key={t.id} className={`toast ${t.kind} ${t.leaving ? 'leaving' : ''}`} onClick={() => dismissToast(t.id)}>
           {t.text}
         </div>
       ))}
+    </div>
+  )
+}
+let dismissToast: (id: number) => void = () => {}
+
+/* ---------- 되돌리기 ---------- */
+
+type UndoOffer = { id: number; text: string; undo: () => Promise<void>; leaving?: boolean }
+let pushUndo: (o: Omit<UndoOffer, 'id'>) => void = () => {}
+const UNDO_MS = 7000
+
+/** 좌측 아래에 "되돌리기"를 띄운다. 새 제안이 오면 이전 것은 사라진다. Ctrl+Z로도 실행된다. */
+export function offerUndo(text: string, undo: () => Promise<void>) {
+  pushUndo({ text, undo })
+}
+
+export function UndoBar() {
+  const [offer, setOffer] = useState<UndoOffer | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let n = 0
+    pushUndo = (o) => setOffer({ ...o, id: ++n })
+  }, [])
+
+  const close = (id: number) => {
+    setOffer((o) => (o && o.id === id ? { ...o, leaving: true } : o))
+    setTimeout(() => setOffer((o) => (o && o.id === id ? null : o)), LEAVE_MS)
+  }
+
+  const run = async () => {
+    if (!offer || offer.leaving || busy) return
+    setBusy(true)
+    try {
+      await offer.undo()
+      toast('되돌렸습니다')
+    } catch (e) {
+      errorToast(e)
+    } finally {
+      setBusy(false)
+      close(offer.id)
+    }
+  }
+
+  useEffect(() => {
+    if (!offer || offer.leaving) return
+    const timer = setTimeout(() => close(offer.id), UNDO_MS)
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement
+      if (el.closest('input, textarea, select, [contenteditable="true"], .xterm')) return
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        run()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('keydown', onKey)
+    }
+  })
+
+  if (!offer) return null
+  return (
+    <div key={offer.id} className={`undo-bar ${offer.leaving ? 'leaving' : ''}`}>
+      <span className="grow">{offer.text}</span>
+      <button className="undo-btn" disabled={busy} onClick={run} title="Ctrl+Z">
+        되돌리기
+      </button>
+      <button className="icon" onClick={() => close(offer.id)} title="닫기">
+        ✕
+      </button>
+      <div className="undo-timer" style={{ animationDuration: `${UNDO_MS}ms` }} />
     </div>
   )
 }
@@ -89,10 +170,10 @@ export function ChangeDialog() {
 
 /* ---------- 공통 조각 ---------- */
 
-export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
   return (
-    <div className="modal-back" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+    <div className={`modal-back ${wide ? 'wide' : ''}`} onMouseDown={onClose}>
+      <div className={`modal ${wide ? 'wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
         <h3>{title}</h3>
         {children}
       </div>

@@ -196,8 +196,8 @@ mark { background: #ffe066; color: #000; cursor: pointer; border-radius: 2px; }
 .modal { width: 520px; background: var(--panel); border-radius: 12px; padding: 20px; border: 1px solid var(--line); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); }
 .modal input { width: 100%; }
 
-.toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
-.toast { padding: 10px 14px; border-radius: 8px; background: var(--text); color: var(--bg); max-width: 420px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); }
+.toasts { position: fixed; right: 16px; top: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 30; pointer-events: none; }
+.toast { padding: 10px 14px; border-radius: 8px; background: var(--text); color: var(--bg); max-width: 420px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); pointer-events: auto; cursor: pointer; }
 .toast.error { background: var(--bad); color: #fff; }
 
 /* ---------- md 문서 ---------- */
@@ -256,7 +256,7 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
-.main > .page, .main > .split, .pane-main > *, .md-editor-body > *, .modal, .toast, .banner, .graph-info {
+.main > .page, .main > .split, .pane-main > *, .md-editor-body > *, .modal, .banner, .graph-info {
   animation: fade-in 0.18s ease-out;
 }
 .modal-back { animation: fade-in 0.12s ease-out; }
@@ -283,6 +283,14 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .dot.claude { background: #d97757; }
 .dot.codex { background: #10a37f; }
 .dot.shell { background: var(--muted); }
+
+/* 보기 모드에서 블록을 눌러 그 자리에서 편집 */
+.live-md > .md-block:first-child > :first-child { margin-top: 0; }
+.live-md .md-block { cursor: text; border-radius: 4px; transition: box-shadow 0.12s; }
+.live-md .md-block:hover { box-shadow: -8px 0 0 0 var(--accent-soft), 8px 0 0 0 var(--accent-soft); background: var(--accent-soft); }
+.live-md .md-live-input { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; padding: 8px 10px; min-height: 40px; resize: none; overflow: hidden; line-height: 1.6; font-size: 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--text); outline: none; }
+.live-md .md-add { margin-top: 10px; padding: 6px 8px; color: var(--muted); font-size: 12.5px; border: 1px dashed var(--line); border-radius: 6px; cursor: text; text-align: center; opacity: 0.6; }
+.live-md .md-add:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
 /* ---------- 변경 검토: 원인 → 영향, 비교 ---------- */
 .review-item { display: flex; flex-direction: column; gap: 2px; }
@@ -316,8 +324,38 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 @media (prefers-color-scheme: dark) {
   .diff-add .code { color: #8ce99a; }
   .diff-del .code { color: #ffa8a8; }
+}
+
+.date-range { display: flex; gap: 4px; align-items: center; }
+.date-range input { width: auto; min-width: 0; flex: 1; }
+
+.timeline-wrap { margin-top: 6px; }
+.timeline { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 8px 0 14px; }
+.tl-line { display: grid; position: relative; width: max-content; min-width: 100%; }
+.tl-label { position: sticky; left: 0; z-index: 2; background: var(--panel); border-right: 1px solid var(--line); padding: 0 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.tl-month { font-size: 12px; font-weight: 600; padding: 6px 6px 2px; border-left: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+.tl-day { text-align: center; font-size: 11.5px; padding: 2px 0 4px; border-bottom: 1px solid var(--line); line-height: 1.2; }
+.tl-day small { color: var(--muted); font-size: 10px; }
+.tl-day.weekend, .tl-cell.weekend { background: var(--side); }
+.tl-day.today { color: var(--accent); font-weight: 700; }
+.tl-row { height: 34px; border-bottom: 1px solid var(--line); }
+.tl-row:last-of-type { border-bottom: none; }
+.tl-row.focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tl-cell { border-left: 1px dashed var(--line); }
+.tl-today { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); opacity: 0.5; pointer-events: none; }
+.tl-bar { position: absolute; top: 6px; height: 22px; border-radius: 5px; background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent); font-size: 12px; line-height: 20px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 1; }
+.tl-bar.st-진행 { background: var(--accent); color: #fff; }
+.tl-bar.st-완료 { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.tl-bar.st-취소 { background: var(--side); border-color: var(--line); color: var(--muted); text-decoration: line-through; }
+.tl-bar.due { box-shadow: inset 3px 0 0 var(--warn); }
+.tl-bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-style: dashed; }
+.tl-bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right-style: dashed; }
 .decision-help { margin-top: 10px; line-height: 1.6; }
 .decision-help b { color: var(--text); }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.tl-label.clickable, .tl-bar { cursor: pointer; }
+.tl-label.clickable:hover { color: var(--accent); }
+.tl-bar:hover { filter: brightness(0.95); }
 
 /* ---------- 도메인 점검: AI 점검 ---------- */
 .drift-page { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -330,6 +368,26 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .req-notice { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 6px 12px; margin: 6px 0; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
 .req-notice-head { font-weight: 600; color: var(--warn); }
 .req-notice-item { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.table tr.todo td { vertical-align: middle; }
+.todo-check { width: 32px; text-align: center; }
+.todo-check input { width: 16px !important; height: 16px; cursor: pointer; accent-color: var(--ok); }
+.todo-title { font-size: 14px; color: var(--text); }
+.todo-title:hover { color: var(--accent); }
+tr.todo.closed .todo-title { text-decoration: line-through; color: var(--muted); }
+tr.todo.closed td { opacity: 0.75; }
+select.prio { font-weight: 600; }
+.prio-높음 { color: var(--bad); }
+.prio-보통 { color: var(--text); }
+.prio-낮음 { color: var(--muted); }
+.prio-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
+.prio-dot.prio-높음 { background: var(--bad); }
+.prio-dot.prio-보통 { background: var(--accent); }
+.prio-dot.prio-낮음 { background: var(--line); }
+
+/* 변경 요청: AI 수정안 */
+.ai-draft { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
+.ai-draft h4 { margin: 0; }
 
 /* ---------- 앱 업데이트 ---------- */
 .version-btn { border: none; background: none; color: var(--muted); font-size: 12px; text-align: left; padding: 4px 8px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
@@ -345,3 +403,32 @@ button, .tree-item, .card, .seg button, .tabs button, input, select, textarea, .
 .progress-bar { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width 0.3s ease; }
 .progress span { position: relative; padding: 0 8px; }
 .update-settings { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); padding-top: 10px; }
+
+/* ---------- 알림 토스트 (우측 위) · 되돌리기 (좌측 아래) ---------- */
+@keyframes toast-in { from { opacity: 0; transform: translateX(24px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { from { opacity: 1; transform: none; max-height: 120px; } to { opacity: 0; transform: translateX(24px); max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: -8px; } }
+.toast { animation: toast-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); overflow: hidden; }
+.toast.leaving { animation: toast-out 0.26s ease-in forwards; }
+
+@keyframes undo-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes undo-out { to { opacity: 0; transform: translateY(16px); } }
+@keyframes undo-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.undo-bar { position: fixed; left: 16px; bottom: 16px; z-index: 30; display: flex; align-items: center; gap: 10px; min-width: 280px; max-width: 460px; padding: 10px 10px 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25); overflow: hidden; animation: undo-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.undo-bar.leaving { animation: undo-out 0.26s ease-in forwards; }
+.undo-bar .grow { flex: 1; }
+.undo-bar .undo-btn { background: none; border: none; color: var(--accent-soft); font-weight: 700; padding: 4px 8px; }
+.undo-bar .undo-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.undo-bar .icon { color: var(--bg); opacity: 0.6; }
+.undo-timer { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--accent); transform-origin: left; animation: undo-timer linear forwards; }
+
+/* ---------- Task 순서 바꾸기 · 넓은 편집 창 ---------- */
+.reorderable tbody tr { user-select: none; cursor: grab; transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease; }
+.reorderable tbody tr.pressing { background: var(--accent-soft); transition-duration: 0.35s; }
+.reorderable tbody tr.dragging { position: relative; z-index: 5; background: var(--panel); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); outline: 1px solid var(--accent); cursor: grabbing; }
+.reorderable.is-dragging, .reorderable.is-dragging * { cursor: grabbing !important; }
+.modal-back.wide { padding-top: 4vh; }
+.modal.wide { width: min(1100px, 94vw); max-height: 92vh; overflow: auto; display: flex; flex-direction: column; }
+.modal.wide .field input, .modal.wide .field select { width: 100%; }
+textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-height: 1.6; }
+.brand-name { display: flex; align-items: center; gap: 8px; }
+.logo { flex: none; }

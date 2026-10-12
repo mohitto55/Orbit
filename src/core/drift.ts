@@ -51,6 +51,8 @@ export interface DomainRequest {
   /** 반영·반려할 때 남긴 메모 */
   resolution?: string
   created: string
+  /** AI 수정안이 요청 파일에 저장돼 있으면 그 시각 */
+  draftAt?: string
   file: string
 }
 

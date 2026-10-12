@@ -7,6 +7,7 @@ import * as sp from '../core/spec'
 import * as ds from '../core/design'
 import * as ir from '../core/impact'
 import * as tk from '../core/task'
+import * as undo from '../core/undo'
 import * as vr from '../core/verification'
 import * as dr from '../core/drift'
 import * as kn from '../core/knowledge'
@@ -210,7 +211,7 @@ export function createApi(deps: ApiDeps) {
       if (!change) throw new Error(`변경 기록을 찾을 수 없습니다: ${changeId}`)
       const r = await df.changeDiff(c, change)
       if ('unavailable' in r) return { change, unavailable: r.unavailable }
-      return { change, source: r.source, file: r.file, diff: df.lineDiff(r.before, r.after, full ? -1 : 3) }
+      return { change, file: r.file, diff: df.lineDiff(r.before, r.after, full ? -1 : 3) }
     },
     /** 문서 id → 이름·종류·현재 버전·기준 (변경 검토에서 원인 → 영향을 보여줄 때 씀) */
     async docIndex() {
@@ -246,6 +247,12 @@ export function createApi(deps: ApiDeps) {
     listTasks: () => tk.listTasks(need()),
     createTask: (input: tk.ClassifyInput & { title: string; body?: string }) => tk.createTask(need(), input),
     updateTask: (id: string, patch: Partial<tk.Task>) => tk.updateTask(need(), id, patch),
+    deleteTask: (id: string) => tk.deleteTask(need(), id),
+    reorderTasks: (ids: string[]) => tk.reorderTasks(need(), ids),
+
+    // 되돌리기
+    snapshotFiles: (files: string[]) => undo.snapshotFiles(need(), files),
+    restoreFiles: (snaps: undo.FileSnap[]) => undo.restoreFiles(need(), snaps),
     async dueTasks() {
       const c = need()
       return tk.dueTasks(await tk.listTasks(c), await listChanges(c))

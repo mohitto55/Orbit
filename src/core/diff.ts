@@ -1,14 +1,6 @@
-import { execFile } from 'child_process'
-import path from 'path'
-import { promisify } from 'util'
 import { diffLines } from 'diff'
 import type { Ctx } from './workspace'
 import { readSnapshot, type ChangeSet } from './changes'
-import { listDomains, domainFile } from './domain'
-import { listSpecs } from './spec'
-import { listDesigns } from './design'
-
-const run = promisify(execFile)
 
 export type LineType = 'add' | 'del' | 'ctx'
 
@@ -78,57 +70,14 @@ export function lineDiff(before: string, after: string, context = 3): LineDiff {
 
 export interface ChangeDiff {
   change: ChangeSet
-  source: 'snapshot' | 'git'
   file: string
   before: string
   after: string
 }
 
-/** 변경 대상 문서의 파일 경로 (데이터 폴더 기준). */
-async function targetFile(ctx: Ctx, target: string): Promise<string | null> {
-  const domain = (await listDomains(ctx)).find((d) => d.id === target)
-  if (domain) return domainFile(ctx, domain.folder)
-  const spec = (await listSpecs(ctx)).find((s) => s.id === target)
-  if (spec) return spec.file
-  const design = (await listDesigns(ctx)).find((d) => d.id === target)
-  return design?.file ?? null
-}
-
-async function git(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const { stdout } = await run('git', ['-C', cwd, ...args], { maxBuffer: 20 * 1024 * 1024, encoding: 'utf8' })
-    return stdout.replace(/\r\n/g, '\n')
-  } catch {
-    return null
-  }
-}
-
-/**
- * 변경 전·후 원문. 저장할 때 남긴 스냅샷을 쓰고,
- * 스냅샷이 없는 예전 변경은 그 변경 기록이 들어간 git 커밋 직전·직후의 파일에서 꺼낸다.
- */
+/** 변경 전·후 원문. 저장할 때 남긴 스냅샷만 쓴다. */
 export async function changeDiff(ctx: Ctx, change: ChangeSet): Promise<ChangeDiff | { change: ChangeSet; unavailable: string }> {
   const snap = await readSnapshot(ctx, change.id)
-  if (snap) return { change, source: 'snapshot', file: snap.file, before: snap.before, after: snap.after }
-
-  const abs = await targetFile(ctx, change.target)
-  if (!abs) return { change, unavailable: '대상 문서를 찾을 수 없습니다' }
-  const rel = (p: string) => path.relative(ctx.projectDir, p).replace(/\\/g, '/')
-  const changeFile = rel(path.join(ctx.dataRoot, 'changes', `${change.id}.md`))
-  const commit = (await git(ctx.projectDir, ['log', '--diff-filter=A', '--format=%H', '--', changeFile]))?.trim().split('\n').pop()
-  if (!commit) return { change, unavailable: '이 변경은 스냅샷이 없고, git 커밋에서도 찾을 수 없습니다 (커밋 전이거나 git 저장소가 아님)' }
-  const after = await git(ctx.projectDir, ['show', `${commit}:${rel(abs)}`])
-  if (after === null) return { change, unavailable: '그 커밋에서는 문서가 다른 위치에 있었습니다' }
-  // 직전 커밋에 파일이 없으면(지웠다가 되살린 경우 등) 파일이 있던 가장 최근 커밋까지 거슬러 올라간다
-  let before = await git(ctx.projectDir, ['show', `${commit}^:${rel(abs)}`])
-  if (before === null) {
-    const earlier = (await git(ctx.projectDir, ['log', '--format=%H', '-n', '10', `${commit}^`, '--', rel(abs)]))?.trim().split('\n') ?? []
-    for (const c of earlier) {
-      if (!c) continue
-      before = await git(ctx.projectDir, ['show', `${c}:${rel(abs)}`])
-      if (before !== null) break
-    }
-  }
-  before ??= ''
-  return { change, source: 'git', file: path.relative(ctx.dataRoot, abs).replace(/\\/g, '/'), before, after }
+  if (!snap) return { change, unavailable: '이 변경은 저장 시 스냅샷이 없습니다' }
+  return { change, file: snap.file, before: snap.before, after: snap.after }
 }

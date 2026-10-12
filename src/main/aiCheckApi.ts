@@ -6,6 +6,8 @@ import type { Ctx } from '../core/workspace'
 import { cleanEnv } from '../core/terminal'
 import { decideFinding, lastCheckAt, listAiChecks, runAiCheck, type AgentRunner, type CheckAgent } from '../core/aicheck'
 import { resolveRequest } from '../core/drift'
+import { lineDiff } from '../core/diff'
+import { clearDraft, parseDraft, readDraft, requestDraftInput, writeDraft } from '../core/requestDraft'
 
 const TIMEOUT_MS = 10 * 60 * 1000
 
@@ -58,8 +60,28 @@ export const runAgent: AgentRunner = (agent, prompt, cwd, onOutput) =>
     proc.stdin.end()
   })
 
+/** 요청 파일의 수정안을 지금 도메인 문서와 비교한다. */
+async function draftView(ctx: Ctx, id: string) {
+  const { request, domain } = await requestDraftInput(ctx, id)
+  const draft = await readDraft(request.file)
+  if (!draft) return null
+  // 문서 앞의 빈 줄(앞머리 다음 줄바꿈)은 원래대로 둬서 비교에 가짜 변경이 생기지 않게 한다
+  const after = (domain.content.match(/^\s*/)?.[0] ?? '') + draft.content
+  return {
+    agent: draft.agent,
+    at: draft.at,
+    base: draft.base,
+    currentVersion: domain.version,
+    before: domain.content,
+    after,
+    diff: lineDiff(domain.content, after, 3),
+    fullDiff: lineDiff(domain.content, after, -1)
+  }
+}
+
 export function createAiCheckApi(deps: { send: (channel: string, payload: unknown) => void; getCtx: () => Promise<Ctx | null> }) {
   let running = false
+  let drafting = false
   const need = async () => {
     const ctx = await deps.getCtx()
     if (!ctx) throw new Error('프로젝트가 열려 있지 않습니다')
@@ -87,6 +109,39 @@ export function createAiCheckApi(deps: { send: (channel: string, payload: unknow
     /** IR-F08: 변경 요청을 반영 완료 또는 반려로 닫는다. */
     async requestResolve(id: string, status: 'done' | 'rejected', note?: string) {
       return resolveRequest(await need(), id, status, note)
+    },
+    /** IR-F08: 변경 요청을 AI에게 넘겨 도메인 문서 수정안을 받고, 그 요청 파일에 저장한다. 도메인 문서는 고치지 않는다. */
+    async requestAiDraft(id: string, agent: CheckAgent) {
+      if (drafting) throw new Error('AI가 이미 수정안을 만드는 중입니다')
+      drafting = true
+      try {
+        const ctx = await need()
+        const { request, domain, prompt } = await requestDraftInput(ctx, id)
+        const out = await runAgent(agent, prompt, ctx.projectDir, (chunk) => deps.send('request-draft-output', chunk))
+        await writeDraft(request.file, { agent, base: domain.version, content: parseDraft(out) })
+        return draftView(ctx, id)
+      } finally {
+        drafting = false
+      }
+    },
+    /** IR-F08: 요청 파일에 저장된 수정안과 지금 도메인 문서의 비교. 없으면 null. */
+    async requestDraft(id: string) {
+      return draftView(await need(), id)
+    },
+    /** IR-F08: 사람이 다듬은 수정안을 요청 파일에 다시 저장한다. */
+    async requestSaveDraft(id: string, content: string) {
+      const ctx = await need()
+      const { request } = await requestDraftInput(ctx, id)
+      const cur = await readDraft(request.file)
+      if (!cur) throw new Error('저장된 수정안이 없습니다')
+      await writeDraft(request.file, { agent: cur.agent, base: cur.base, content: content.replace(/^\s+/, '') })
+      return draftView(ctx, id)
+    },
+    /** IR-F08: 수정안을 요청 파일에서 지운다. 요청은 그대로 둔다. */
+    async requestDiscardDraft(id: string) {
+      const ctx = await need()
+      const { request } = await requestDraftInput(ctx, id)
+      await clearDraft(request.file)
     },
     /** DR-F08: 점검 항목을 받아들이거나 무시한다. */
     async aiDecide(checkId: string, findingId: string, accept: boolean) {

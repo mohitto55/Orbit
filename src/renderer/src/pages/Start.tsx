@@ -1,5 +1,6 @@
 import { api, type Project } from '../api'
 import { errorToast, useLoad } from '../ui'
+import { Logo } from '../Logo'
 
 export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
   const [recent] = useLoad(() => api.recentProjects(), [])
@@ -30,7 +31,9 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
   return (
     <div className="start">
       <div className="start-card">
-        <h1>Girsktop</h1>
+        <h1 className="brand-name">
+          <Logo size={40} /> Girsktop
+        </h1>
         <p className="muted">도메인 → 기능 명세 → 설계 → 검증을 한곳에서. 위 층이 바뀌면 아래 층에 확인표시를 띄웁니다.</p>
         <div className="row">
           <button className="primary" onClick={() => open()}>

@@ -3,9 +3,13 @@ id: spec-integration
 kind: spec
 title: 연동 기능 명세
 basedOn:
-  - { ref: dom-integration, version: 1 }
+  - ref: dom-integration
+    version: 5
 version: 1
 status: draft
+reconfirmed:
+  - at: '2026-10-12T13:55:57.295Z'
+    note: 변경 불필요
 ---
 
 # 연동 기능 명세

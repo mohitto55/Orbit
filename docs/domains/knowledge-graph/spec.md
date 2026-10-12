@@ -3,9 +3,13 @@ id: spec-knowledge-graph
 kind: spec
 title: 관계도 기능 명세
 basedOn:
-  - { ref: dom-knowledge-graph, version: 1 }
+  - ref: dom-knowledge-graph
+    version: 5
 version: 1
 status: draft
+reconfirmed:
+  - at: '2026-10-12T13:55:56.856Z'
+    note: 변경 불필요
 ---
 
 # 관계도 기능 명세

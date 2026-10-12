@@ -23,7 +23,6 @@ describe('변경 검토 · 비교', () => {
     const r = await changeDiff(ctx, change)
     expect('unavailable' in r).toBe(false)
     if ('unavailable' in r) return
-    expect(r.source).toBe('snapshot')
     expect(r.file).toBe('domains/order/domain.md')
     const diff = lineDiff(r.before, r.after)
     const changed = diff.hunks.flatMap((h) => h.lines).filter((l) => l.type !== 'ctx').map((l) => `${l.type}:${l.text}`)

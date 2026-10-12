@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, on, type Dashboard as DashboardData, type Project } from './api'
-import { ChangeDialog, Modal, Toasts, errorToast, toast } from './ui'
+import { ChangeDialog, Modal, Toasts, UndoBar, errorToast, toast } from './ui'
 import Start from './pages/Start'
 import Dashboard from './pages/Dashboard'
 import Domains from './pages/Domains'
@@ -13,6 +13,7 @@ import GraphPage from './pages/Graph'
 import Settings from './pages/Settings'
 import Terminals from './pages/Terminals'
 import UpdateButton from './UpdatePanel'
+import { Logo } from './Logo'
 
 export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'settings'
 
@@ -83,6 +84,7 @@ export default function App() {
           <UpdateButton />
         </div>
         <Toasts />
+        <UndoBar />
       </>
     )
   }
@@ -93,7 +95,9 @@ export default function App() {
     <div className="app">
       <aside className="side">
         <div className="brand">
-          Girsktop
+          <span className="brand-name">
+            <Logo size={22} /> Girsktop
+          </span>
           <small title={project.projectDir}>{project.settings.name}</small>
         </div>
         <nav>
@@ -138,6 +142,7 @@ export default function App() {
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
       <ChangeDialog />
       <Toasts />
+      <UndoBar />
     </div>
   )
 }

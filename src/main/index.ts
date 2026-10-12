@@ -81,6 +81,8 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     title: 'Girsktop',
+    // 설치본은 electron-builder가 build/icon.* 으로 실행 파일 아이콘을 넣는다. 개발 중에는 창 아이콘만 직접 지정한다.
+    ...(app.isPackaged ? {} : { icon: path.join(__dirname, '../../build/icon.png') }),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
