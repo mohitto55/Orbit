@@ -3,8 +3,10 @@ id: dom-drift
 kind: domain
 title: 도메인 점검
 subdomainType: Core
-version: 5
+version: 6
 status: draft
+parent: dom-domain-modeling
+order: 5
 ---
 
 # 도메인 점검

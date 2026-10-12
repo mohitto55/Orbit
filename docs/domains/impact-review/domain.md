@@ -1,13 +1,15 @@
 ---
 id: dom-impact-review
 kind: domain
-title: 확인표시
+title: 변경 검토
 subdomainType: Core
-version: 4
+version: 5
 status: draft
+parent: dom-domain-modeling
+order: 4
 ---
 
-# 확인표시
+# 변경 검토
 
 > 해결 문제: P1
 

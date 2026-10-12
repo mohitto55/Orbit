@@ -19,6 +19,8 @@ export interface Domain {
   subdomainType: SubdomainType
   version: number
   status: string
+  /** 같은 상위 아래에서의 표시 순서 (작을수록 앞). 없으면 유형 → 이름 순 */
+  order?: number
   links: DomainLink[]
   content: string
   role: string
@@ -42,6 +44,7 @@ export async function listDomains(ctx: Ctx): Promise<Domain[]> {
       subdomainType: data.subdomainType ?? 'Supporting',
       version: Number(data.version ?? 1),
       status: data.status ?? 'draft',
+      order: data.order == null ? undefined : Number(data.order),
       links: Array.isArray(data.links) ? data.links : [],
       content,
       role: sectionText(content, '역할')

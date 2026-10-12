@@ -6,6 +6,7 @@ subdomainType: Core
 version: 4
 status: draft
 parent: dom-domain-modeling
+order: 2
 ---
 
 # 설계

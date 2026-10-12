@@ -6,7 +6,7 @@ export default function Dashboard({ refreshKey, go }: PageProps) {
   const [d] = useLoad(() => api.dashboard(), [refreshKey])
   if (!d) return null
   const cards = [
-    { label: '확인표시', value: d.pendingReviews, hint: '위 층 큰 변경으로 생긴 확인표시', page: 'reviews' as const, warn: d.pendingReviews > 0 },
+    { label: '변경 검토', value: d.pendingReviews, hint: '위 층이 크게 바뀌어 확인할 아래 문서', page: 'reviews' as const, warn: d.pendingReviews > 0 },
     { label: '낡은 기능 명세', value: d.staleSpecs.length, hint: '기준 도메인에 큰 변경이 있음', page: 'domains' as const, warn: d.staleSpecs.length > 0 },
     { label: 'Inbox', value: d.inbox, hint: '분류하지 않은 할 일', page: 'tasks' as const, warn: d.inbox > 0 },
     { label: '시기 도래', value: d.dueTasks.length, hint: '기한이 지났거나 트리거 충족', page: 'tasks' as const, warn: d.dueTasks.length > 0 },

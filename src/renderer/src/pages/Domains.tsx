@@ -29,7 +29,14 @@ export default function Domains({ refreshKey, focus, reloadBadges }: PageProps) 
   const [systemDesign, setSystemDesign] = useState(false)
 
   useEffect(() => {
-    if (!selected && domains?.length) setSelected(domains[0].id)
+    if (!selected && domains?.length) {
+      // 트리 맨 위(최상위 중 첫 번째)를 기본으로 연다
+      const rank = { Core: 0, Supporting: 1, Generic: 2 } as Record<string, number>
+      const roots = domains
+        .filter((d) => !d.parent)
+        .sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || (rank[a.subdomainType] ?? 9) - (rank[b.subdomainType] ?? 9) || a.title.localeCompare(b.title, 'ko'))
+      setSelected((roots[0] ?? domains[0]).id)
+    }
   }, [domains, selected])
 
   if (!domains) return null
@@ -129,7 +136,7 @@ function Tree(props: { domains: Domain[]; parent: string | undefined; depth: num
   const rank = { Core: 0, Supporting: 1, Generic: 2 } as Record<string, number>
   const kids = props.domains
     .filter((d) => (d.parent ?? undefined) === props.parent)
-    .sort((a, b) => (rank[a.subdomainType] ?? 9) - (rank[b.subdomainType] ?? 9) || a.title.localeCompare(b.title, 'ko'))
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || (rank[a.subdomainType] ?? 9) - (rank[b.subdomainType] ?? 9) || a.title.localeCompare(b.title, 'ko'))
   return (
     <>
       {kids.map((d) => (
