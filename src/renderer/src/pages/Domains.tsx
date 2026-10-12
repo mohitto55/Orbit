@@ -8,7 +8,7 @@ import { MdEditor } from '../Markdown'
 import DesignPanel from './DesignPanel'
 import ModelPanel from './ModelPanel'
 import DomainGraph from './DomainGraph'
-import FeatureRollup from './FeatureRollup'
+import SpecSummary from './FeatureRollup'
 import { MdContent } from '../Markdown'
 import type { DomainMap as MapData } from '../types'
 
@@ -40,6 +40,8 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
   const [map, reloadMap] = useLoad(() => api.domainMap(), [refreshKey])
   // 그래프로 볼 최상위 도메인 (애그리거트 루트 단위)
   const [rootId, setRootId] = useState<string | null>(null)
+  // 기능을 눌렀을 때 그 기능이 쓰는 규칙이 있는 하위 도메인들
+  const [hl, setHl] = useState<{ feature: string | null; domains: string[] }>({ feature: null, domains: [] })
   const [scope, reloadScope] = useLoad(() => (rootId ? api.domainScope(rootId) : Promise.resolve(null)), [rootId, refreshKey])
   const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
   const [statuses] = useLoad(() => api.allAcStatuses(), [refreshKey])
@@ -120,7 +122,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             const feats = map?.nodes.filter((n) => n.id === r.id || subs.some((x) => x.id === n.id)).reduce((a, n) => a + n.features, 0) ?? 0
             const concepts = [r, ...subs].reduce((a, x) => a + x.model.length, 0)
             return (
-              <button key={r.id} className={`tree-item root-card ${rootId === r.id ? 'on' : ''}`} onClick={() => { setRootId(r.id); setMapSel(null) }}>
+              <button key={r.id} className={`tree-item root-card ${rootId === r.id ? 'on' : ''}`} onClick={() => { setRootId(r.id); setMapSel(null); setHl({ feature: null, domains: [] }) }}>
                 <span className="row between">
                   <b>
                     <span className={`dot ${r.subdomainType.toLowerCase()}`} /> {r.title}
@@ -155,7 +157,11 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
                 <DomainGraph
                   scope={scope}
                   selected={mapSel}
-                  onSelect={setMapSel}
+                  highlight={hl.domains}
+                  onSelect={(id) => {
+                    setMapSel(id)
+                    setHl({ feature: null, domains: [] })
+                  }}
                   onOpen={(id) => {
                     const n = scope.nodes.find((x) => x.id === id)
                     if (n) openDoc(n.domainId, n.kind === 'concept' ? 'model' : undefined)
@@ -175,6 +181,8 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
                   onSelect={setMapSel}
                   onOpen={openDoc}
                   onChanged={changed}
+                  activeFeature={hl.feature}
+                  onHighlight={(feature, ds) => setHl({ feature, domains: ds })}
                 />
               )}
             </div>
@@ -249,10 +257,9 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             <div className="tabs">
               {(
                 [
-                  ...(domains.some((d) => d.parent === domain.id) ? ([['features', '기능 모아보기']] as [Tab, string][]) : []),
                   ['role', '역할 (1층)'],
                   ['model', `모델${domain.model.length ? ` ${domain.model.length}` : ''}`],
-                  ['spec', '기능 명세 표 (2층)'],
+                  ['spec', domain.parent ? '규칙 명세 (2층)' : '기능 명세 (2층)'],
                   ['design', '설계 (3층)'],
                   ['history', '변경 이력']
                 ] as [Tab, string][]
@@ -263,7 +270,6 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
               ))}
             </div>
             {tab === 'role' && <RoleEditor key={domain.id + domain.version} domain={domain} domains={domains} onWiki={openWiki} onSaved={() => { reload(); reloadBadges() }} />}
-            {tab === 'features' && <FeatureRollup rootId={domain.id} domains={domains} specs={specs ?? []} statuses={statuses ?? {}} onOpen={(id) => openDoc(id, 'spec')} />}
             {tab === 'model' && <ModelPanel key={domain.id} domain={domain} domains={domains} refreshKey={refreshKey} go={go} onEdit={() => setTab('role')} onSaved={() => { reload(); reloadBadges() }} />}
             {tab === 'spec' && <SpecTable key={domain.id} domain={domain} refreshKey={refreshKey} onChanged={reloadBadges} />}
             {tab === 'design' && <DesignPanel key={domain.id} folder={domain.folder} refreshKey={refreshKey} onChanged={reloadBadges} />}
@@ -486,8 +492,10 @@ function MapSide(props: {
   onSelect: (id: string | null) => void
   onOpen: (id: string, tab?: Tab) => void
   onChanged: () => void
+  activeFeature: string | null
+  onHighlight: (feature: string | null, domainIds: string[]) => void
 }) {
-  const { id, map, domains, specs, statuses, onSelect, onOpen, onChanged } = props
+  const { id, map, domains, specs, statuses, onSelect, onOpen, onChanged, activeFeature, onHighlight } = props
   const [type, setType] = useState('의존')
   const [to, setTo] = useState('')
   const d = domains.find((x) => x.id === id)
@@ -618,8 +626,9 @@ function MapSide(props: {
       </div>
       )}
 
-      <h4>기능{kids.length > 0 ? ' (하위 포함)' : ''}</h4>
-      <FeatureRollup compact rootId={d.id} domains={domains} specs={specs} statuses={statuses} onOpen={(x) => onOpen(x, 'spec')} />
+      <h4>{d.parent ? '규칙' : '기능'}</h4>
+      {!d.parent && <div className="muted small">기능을 누르면 그 기능이 쓰는 규칙이 있는 하위 도메인이 그래프에서 강조됩니다.</div>}
+      <SpecSummary domainId={d.id} domains={domains} specs={specs} statuses={statuses} active={activeFeature} onHighlight={onHighlight} onOpen={(x) => onOpen(x, 'spec')} />
     </aside>
   )
 }

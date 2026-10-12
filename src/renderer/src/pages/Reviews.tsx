@@ -7,8 +7,8 @@ import { MdViewer } from '../Markdown'
 import DiffView from './DiffView'
 import Requests from './Requests'
 
-const LAYER: Record<string, string> = { spec: '기능 명세 표', design: '설계', test: '테스트' }
-const KIND: Record<string, string> = { domain: '도메인', spec: '기능 명세 표', design: '설계' }
+const LAYER: Record<string, string> = { spec: '명세', design: '설계', test: '테스트' }
+const KIND: Record<string, string> = { domain: '도메인', spec: '명세', design: '설계' }
 
 /** 변경 검토: 변경에 대해 사람이 결정할 것을 모은다. 변경 요청(바깥 → 도메인)과 확인할 문서(도메인 → 아래). */
 export default function Reviews(props: PageProps) {

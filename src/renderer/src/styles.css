@@ -629,3 +629,19 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .root-card b { display: inline-flex; align-items: center; gap: 6px; }
 .map-main { gap: 10px; }
 .map-main h2 { margin: 0; display: flex; gap: 8px; align-items: center; }
+/* 기능 명세의 쓰는 규칙 */
+.uses { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.uses .chip { gap: 4px; max-width: 100%; cursor: default; }
+.uses .uses-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.uses .chip button.icon { padding: 0 2px; height: auto; font-size: 13px; }
+.rule-picker { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; }
+.uc-rules { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
+.uc-rule { padding: 3px 0; }
+.uc-rule > label, .uc-rule-acs label { display: flex; gap: 6px; align-items: flex-start; }
+.uc-rule-acs { padding-left: 24px; display: flex; flex-direction: column; gap: 2px; }
+.rollup-item { border-radius: 6px; padding: 2px 4px; }
+.rollup-item.clickable { cursor: pointer; }
+.rollup-item.clickable:hover, .rollup-item.on { background: var(--accent-soft); }
+.rollup-uses { display: flex; flex-direction: column; padding-left: 72px; }
+.rule-picker input[type='checkbox'], .uc-rule input[type='checkbox'] { width: auto; flex: none; margin-top: 3px; }
+.rule-picker label { text-align: left; justify-content: flex-start; }

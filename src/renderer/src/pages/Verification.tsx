@@ -121,7 +121,7 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
 function SpecAcs({ spec, status, links, onTask, go }: { spec: Spec; status: Record<string, AcStatus>; links: { acId: string; file: string; line: number }[]; onTask: () => void; go: PageProps['go'] }) {
   const rows = spec.features.filter((f) => f.status !== '폐기').flatMap((f) => f.acs.map((a) => ({ f, a })))
   if (!rows.length) return null
-  const domainName = spec.title.replace(/\s*기능 명세$/, '')
+  const domainName = spec.title.replace(/\s*(기능|규칙) 명세$/, '')
   const makeTask = async (f: Spec['features'][number], a: Spec['features'][number]['acs'][number], type: 'test' | 'bug') => {
     const tests = links.filter((x) => x.acId === a.id).map((x) => `- \`${x.file}:${x.line}\``)
     const title = `${f.name}(${domainName}) ${type === 'test' ? '테스트 추가' : '실패한 테스트 고치기'} — ${a.text}`

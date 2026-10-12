@@ -250,7 +250,7 @@ export function createApi(deps: ApiDeps) {
       for (const d of domains) out[d.id] = { kind: 'domain', title: dm.domainPathLabel(domains, d.id), version: d.version, basedOn: [] }
       for (const s of specs) {
         const base = dm.domainPathLabel(domains, s.domainId)
-        out[s.id] = { kind: 'spec', title: `${base} › 기능 명세 표`, version: s.version, domainId: s.domainId, basedOn: s.basedOn }
+        out[s.id] = { kind: 'spec', title: `${base} › ${sp.SPEC_LABEL[s.role]}`, version: s.version, domainId: s.domainId, basedOn: s.basedOn }
         // 테스트 항목(test:<AC ID>)도 어느 도메인의 수용 기준인지 보이게
         for (const f of s.features) for (const a of f.acs) out[`test:${a.id}`] = { kind: 'spec', title: `${base} › ${a.id}`, version: s.version, domainId: s.domainId, basedOn: [] }
       }

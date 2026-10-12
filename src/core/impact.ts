@@ -3,7 +3,7 @@ import type { Ctx } from './workspace'
 import { exists, listMd, readMd, writeMd, nowIso } from './md'
 import { listChanges, type ChangeSet } from './changes'
 import { listDomains, type Domain } from './domain'
-import { listSpecs, reconfirmSpec, type Spec } from './spec'
+import { listSpecs, reconfirmSpec, usesTouched, type Spec } from './spec'
 import { listDesigns, rebaseDesign, SYSTEM_DESIGN_ID } from './design'
 import { createTask } from './task'
 import type { TestLink } from './verification'
@@ -94,6 +94,11 @@ export async function openReview(ctx: Ctx, change: ChangeSet, testLinks: TestLin
       else spec.features.find((f) => f.id === id)?.acs.forEach((a) => acIds.add(a.id))
     }
     if (changed.size === 0) spec.features.forEach((f) => f.acs.forEach((a) => acIds.add(a.id)))
+    // 하위 도메인 규칙이 바뀌면 그 규칙을 쓰는 루트 도메인의 기능 명세
+    for (const s of specs) {
+      const b = s.basedOn.find((x) => x.ref === spec.id)
+      if (s.id !== spec.id && b && b.version < change.to && usesTouched(s, change)) candidates.push({ target: s.id, layer: 'spec' })
+    }
     for (const ac of acIds) if (testLinks.some((l) => l.acId === ac)) candidates.push({ target: `test:${ac}`, layer: 'test' })
   } else if (change.target === SYSTEM_DESIGN_ID) {
     const changed = new Set(change.changed)

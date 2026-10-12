@@ -1,7 +1,7 @@
 import path from 'path'
 import type { Ctx } from './workspace'
 import { exists, readMd, writeMd, nowIso } from './md'
-import { listDomains, type Domain } from './domain'
+import { listDomains, descendants, type Domain } from './domain'
 import { readRaw, recordChange, requireChange, majorChangesAfter, type ChangeInput, type ChangeSet } from './changes'
 
 export type FeatureStatus = '초안' | '활성' | '폐기'
@@ -18,7 +18,16 @@ export interface Feature {
   purpose: string
   acs: AC[]
   status: FeatureStatus
+  /** 루트 도메인의 기능이 쓰는 하위 도메인 규칙 (규칙 명세의 기능 ID 또는 AC ID) */
+  uses?: string[]
 }
+
+/**
+ * 명세의 역할. 하위 도메인은 그 도메인이 혼자 지키는 규칙을 적는 '규칙 명세',
+ * 루트 도메인은 하위 도메인 규칙을 조정해 이루는 사용자 기능을 적는 '기능 명세'.
+ */
+export type SpecRole = 'rule' | 'feature'
+export const SPEC_LABEL: Record<SpecRole, string> = { rule: '규칙 명세', feature: '기능 명세' }
 
 export interface BasedOn {
   ref: string
@@ -31,6 +40,7 @@ export interface Spec {
   folder: string
   file: string
   title: string
+  role: SpecRole
   version: number
   basedOn: BasedOn[]
   features: Feature[]
@@ -121,13 +131,16 @@ async function loadSpec(ctx: Ctx, domain: Domain): Promise<Spec | null> {
   const folder = domain.folder
   if (!(await exists(file))) return null
   const { data, content } = await readMd(file)
-  const { features } = parseSpecTable(content)
+  const uses: Record<string, string[]> = data.uses ?? {}
+  const features = parseSpecTable(content).features.map((f) => (uses[f.id]?.length ? { ...f, uses: uses[f.id] } : f))
+  const role: SpecRole = domain.parent ? 'rule' : 'feature'
   return {
     id: data.id ?? `spec-${folder}`,
     domainId: domain.id,
     folder,
     file,
-    title: data.title ?? `${domain.title} 기능 명세`,
+    title: data.title ?? `${domain.title} ${SPEC_LABEL[role]}`,
+    role,
     version: Number(data.version ?? 1),
     basedOn: Array.isArray(data.basedOn) ? data.basedOn.map((b: any) => ({ ref: b.ref, version: Number(b.version) })) : [],
     features,
@@ -154,16 +167,19 @@ export async function getSpec(ctx: Ctx, specId: string): Promise<Spec> {
 export async function createSpec(ctx: Ctx, domainId: string): Promise<Spec> {
   const domain = (await listDomains(ctx)).find((d) => d.id === domainId)
   if (!domain) throw new Error(`도메인을 찾을 수 없습니다: ${domainId}`)
-  if (await exists(specFile(ctx, domain.folder))) throw new Error('이 도메인에는 이미 기능 명세 표가 있습니다')
+  if (await exists(specFile(ctx, domain.folder))) throw new Error('이 도메인에는 이미 명세가 있습니다')
+  const label = SPEC_LABEL[domain.parent ? 'rule' : 'feature']
   const data = {
     id: `spec-${domain.folder}`,
     kind: 'spec',
-    title: `${domain.title} 기능 명세`,
+    title: `${domain.title} ${label}`,
     basedOn: [{ ref: domain.id, version: domain.version }],
     version: 1,
     status: 'draft'
   }
-  const content = `# ${domain.title} 기능 명세
+  const content = `# ${domain.title} ${label}
+
+${domain.parent ? '이 도메인이 혼자 지키는 규칙(조건, 상태 전이, 계산, 불변식)과 수용 기준.' : '하위 도메인의 규칙을 조정해 이루는 사용자 기능과 수용 기준. 기능마다 쓰는 규칙을 참조한다.'}
 
 ${renderSpecTable([]).join('\n')}
 
@@ -192,9 +208,11 @@ export async function addFeature(ctx: Ctx, specId: string, input: { name: string
   return getSpec(ctx, specId)
 }
 
-async function writeSpecFeatures(ctx: Ctx, spec: Spec, features: Feature[], version: number, acSeq: Record<string, number>) {
+async function writeSpecFeatures(ctx: Ctx, spec: Spec, features: Feature[], version: number, acSeq: Record<string, number>, basedOn = spec.basedOn) {
   const { data, content } = await readMd(spec.file)
-  await writeMd(spec.file, { ...data, version, acSeq }, replaceSpecTable(content, features))
+  const uses = Object.fromEntries(features.filter((f) => f.uses?.length).map((f) => [f.id, f.uses]))
+  const { uses: _old, ...rest } = data
+  await writeMd(spec.file, { ...rest, version, acSeq, basedOn, ...(Object.keys(uses).length ? { uses } : {}) }, replaceSpecTable(content, features))
 }
 
 function sameFeature(a: Feature, b: Feature): boolean {
@@ -202,6 +220,7 @@ function sameFeature(a: Feature, b: Feature): boolean {
     a.name === b.name &&
     a.purpose === b.purpose &&
     a.status === b.status &&
+    (a.uses ?? []).join(',') === (b.uses ?? []).join(',') &&
     a.acs.length === b.acs.length &&
     a.acs.every((x, i) => x.num === b.acs[i].num && x.text === b.acs[i].text)
   )
@@ -245,8 +264,19 @@ export async function saveFeatures(
         return { id: `${f.id}-AC${num}`, num, text: a.text.trim() }
       })
     acSeq[f.id] = Math.max(seq, ...acs.map((a) => a.num), 0)
-    return { ...f, name: f.name.trim(), purpose: f.purpose.trim(), acs }
+    const uses = spec.role === 'feature' ? [...new Set((f.uses ?? []).map((u) => u.trim()).filter(Boolean))] : []
+    return { id: f.id, name: f.name.trim(), purpose: f.purpose.trim(), acs, status: f.status, ...(uses.length ? { uses } : {}) }
   })
+  // 루트의 기능은 자기 아래 하위 도메인의 규칙만 쓸 수 있다
+  const { ruleSpecs, owner } = await rulesUnder(ctx, spec)
+  for (const f of features) for (const u of f.uses ?? []) if (!owner.has(u)) throw new Error(`${f.id}: 이 도메인 아래 규칙이 아닙니다: ${u}`)
+  // 쓰는 규칙이 있는 규칙 명세는 기준으로 기록한다 (이미 있던 기준 버전은 그대로)
+  const basedOn = [
+    ...spec.basedOn.filter((b) => !ruleSpecs.some((r) => r.id === b.ref)),
+    ...ruleSpecs
+      .filter((r) => features.some((f) => f.uses?.some((u) => owner.get(u) === r.id)))
+      .map((r) => spec.basedOn.find((b) => b.ref === r.id) ?? { ref: r.id, version: r.version })
+  ]
   for (const f of features) {
     if (f.status === '활성' && f.acs.length === 0) {
       throw new Error(`${f.id}: 수용 기준이 1개 이상 있어야 활성으로 바꿀 수 있습니다`)
@@ -254,12 +284,12 @@ export async function saveFeatures(
   }
   const changedIds = diffActive(spec.features, features)
   if (changedIds.length === 0) {
-    await writeSpecFeatures(ctx, spec, features, spec.version, acSeq)
+    await writeSpecFeatures(ctx, spec, features, spec.version, acSeq, basedOn)
     return { spec: await getSpec(ctx, specId), change: null }
   }
   const change = requireChange(changeInput)
   const before = await readRaw(spec.file)
-  await writeSpecFeatures(ctx, spec, features, spec.version + 1, acSeq)
+  await writeSpecFeatures(ctx, spec, features, spec.version + 1, acSeq, basedOn)
   const recorded = await recordChange(ctx, {
     target: spec.id,
     from: spec.version,
@@ -272,6 +302,27 @@ export async function saveFeatures(
   return { spec: await getSpec(ctx, specId), change: recorded }
 }
 
+/** 루트 명세 아래 하위 도메인들의 규칙 명세와, 규칙 ID(기능·AC) → 그 규칙 명세 id */
+export async function rulesUnder(ctx: Ctx, spec: Spec): Promise<{ ruleSpecs: Spec[]; owner: Map<string, string> }> {
+  if (spec.role !== 'feature') return { ruleSpecs: [], owner: new Map() }
+  const domains = await listDomains(ctx)
+  const under = descendants(domains, spec.domainId)
+  const ruleSpecs = (await listSpecs(ctx, domains)).filter((s) => under.has(s.domainId))
+  const owner = new Map<string, string>()
+  for (const r of ruleSpecs) for (const f of r.features) {
+    owner.set(f.id, r.id)
+    for (const a of f.acs) owner.set(a.id, r.id)
+  }
+  return { ruleSpecs, owner }
+}
+
+/** 규칙 명세의 변경이 이 명세의 기능이 쓰는 규칙을 건드렸는가 (바뀐 항목이 비면 전체가 바뀐 것) */
+export function usesTouched(spec: Spec, change: ChangeSet): boolean {
+  if (change.changed.length === 0) return true
+  const changed = new Set(change.changed)
+  return spec.features.some((f) => f.uses?.some((u) => changed.has(u) || changed.has(u.replace(/-AC\d+$/, ''))))
+}
+
 export interface StaleReason {
   ref: string
   basedOnVersion: number
@@ -280,7 +331,12 @@ export interface StaleReason {
 
 export function specStaleness(spec: Spec, changes: ChangeSet[]): StaleReason[] {
   return spec.basedOn
-    .map((b) => ({ ref: b.ref, basedOnVersion: b.version, changes: majorChangesAfter(changes, b.ref, b.version) }))
+    .map((b) => ({
+      ref: b.ref,
+      basedOnVersion: b.version,
+      // 규칙 명세를 기준으로 삼은 경우 기능이 쓰는 규칙이 바뀐 것만 본다
+      changes: majorChangesAfter(changes, b.ref, b.version).filter((c) => !c.target.startsWith('spec-') || usesTouched(spec, c))
+    }))
     .filter((r) => r.changes.length > 0)
 }
 
@@ -288,12 +344,13 @@ export function specStaleness(spec: Spec, changes: ChangeSet[]): StaleReason[] {
 export async function reconfirmSpec(ctx: Ctx, specId: string, note: string, onlyRef?: string): Promise<Spec> {
   const spec = await getSpec(ctx, specId)
   const domains = await listDomains(ctx)
+  const specs = await listSpecs(ctx, domains)
   const file = spec.file
   const { data, content } = await readMd(file)
   const basedOn = spec.basedOn.map((b) => {
     if (onlyRef && b.ref !== onlyRef) return b
-    const d = domains.find((x) => x.id === b.ref)
-    return d ? { ref: b.ref, version: d.version } : b
+    const v = domains.find((x) => x.id === b.ref)?.version ?? specs.find((x) => x.id === b.ref)?.version
+    return v != null ? { ref: b.ref, version: v } : b
   })
   const reconfirmed = [...(Array.isArray(data.reconfirmed) ? data.reconfirmed : []), { at: nowIso(), note }]
   await writeMd(file, { ...data, basedOn, reconfirmed }, content)

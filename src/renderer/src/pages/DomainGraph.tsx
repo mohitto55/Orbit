@@ -159,7 +159,7 @@ function packLayout(scope: DomainScope, aspect = 1.4): Positions {
  * 도메인 하나의 그래프 (그림 3.3처럼): 하위 도메인은 회색 상자, 그 안에 개념(객체)이 흰 네모로,
  * 개념끼리는 상자 안팎으로 선. 관계 이름은 고른 노드의 선에만 보인다.
  */
-export default function DomainGraph({ scope, selected, onSelect, onOpen, relayout }: { scope: DomainScope; selected: string | null; onSelect: (id: string | null) => void; onOpen: (id: string) => void; relayout: number }) {
+export default function DomainGraph({ scope, selected, highlight = [], onSelect, onOpen, relayout }: { scope: DomainScope; selected: string | null; highlight?: string[]; onSelect: (id: string | null) => void; onOpen: (id: string) => void; relayout: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const cy = useRef<Core | null>(null)
   const dark = useDark()
@@ -263,6 +263,7 @@ export default function DomainGraph({ scope, selected, onSelect, onOpen, relayou
         },
         { selector: 'edge[kind = "relation"]', style: { width: 1.6 } },
         { selector: '.faded', style: { opacity: 0.18 } },
+        { selector: 'node.hl', style: { 'border-width': 2.5, 'border-color': dark ? '#3fbfae' : '#0b7a70' } },
         { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', width: 2.2, 'text-opacity': 1 } }
       ]
     })
@@ -312,7 +313,15 @@ export default function DomainGraph({ scope, selected, onSelect, onOpen, relayou
     const c = cy.current
     if (!c) return
     c.batch(() => {
-      c.elements().removeClass('faded near').unselect()
+      c.elements().removeClass('faded near hl').unselect()
+      // 기능이 쓰는 규칙이 있는 하위 도메인 강조 (그 상자와 안의 개념만 밝게)
+      if (highlight.length) {
+        const boxes = c.nodes().filter((n) => highlight.includes(n.id()))
+        const keep = boxes.union(boxes.descendants())
+        boxes.addClass('hl')
+        c.elements().not(keep.union(keep.edgesWith(keep))).addClass('faded')
+        return
+      }
       if (!selected) return
       const n = c.getElementById(selected)
       if (n.empty()) return
@@ -321,7 +330,7 @@ export default function DomainGraph({ scope, selected, onSelect, onOpen, relayou
       c.elements().not(keep.union(keep.nodes().ancestors())).addClass('faded')
       n.connectedEdges().union(n.descendants().connectedEdges()).addClass('near')
     })
-  }, [selected, signature])
+  }, [selected, signature, highlight.join(',')])
 
   return <div ref={ref} className="graph domain-map" />
 }
