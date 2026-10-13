@@ -271,10 +271,11 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
             'transition-duration': 200
           }
         },
+        { selector: 'edge[kind = "concept"]', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'target-arrow-color': dark ? '#8b93a1' : '#6b7280' } },
         { selector: 'edge[kind = "relation"]', style: { width: 1.6 } },
         { selector: '.faded', style: { opacity: 0.18 } },
         { selector: 'node.hl', style: { 'border-width': 2.5, 'border-color': dark ? '#3fbfae' : '#0b7a70' } },
-        { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', width: 2.2, 'text-opacity': 1 } }
+        { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', 'target-arrow-color': dark ? '#3fbfae' : '#0b7a70', width: 2.2, 'text-opacity': 1 } }
       ]
     })
     instance.on('tap', 'node', (e) => handlers.current.onSelect((e.target as NodeSingular).id()))

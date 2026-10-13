@@ -5,7 +5,7 @@ import { createDomain, listDomains, saveDomain } from '../src/core/domain'
 import { buildGraph } from '../src/core/graph'
 import { ensureModelSection, parseModel, withoutModel } from '../src/core/model'
 import { checkAnchors } from '../src/core/codecheck'
-import { buildDomainMap, buildDomainScope } from '../src/core/domainmap'
+import { buildDomainMap, buildDomainScope, buildDomainScopeFrom } from '../src/core/domainmap'
 import { buildCheckPrompt } from '../src/core/aicheck'
 import { addFeature, createSpec } from '../src/core/spec'
 import { newProject } from './helpers'
@@ -156,10 +156,52 @@ describe('도메인 지도', () => {
     expect(scope.nodes.find((n) => n.label === '턴')?.parent).toBe(room.id)
     // 상자 안 관계는 개념끼리 그대로
     expect(scope.edges).toContainEqual({ source: `concept:${room.id}/방 진행`, target: `concept:${room.id}/트리거`, label: '사용', kind: 'concept' })
-    // 상자 사이는 각 상자의 애그리거트 루트끼리 한 줄. 어떤 개념이 무엇을 가리켰는지는 이름에 남는다
-    expect(scope.edges).toContainEqual({ source: `concept:${room.id}/방 진행`, target: `concept:${item.id}/지급 의도`, label: '트리거 요청 지급 의도', kind: 'relation' })
-    expect(scope.edges.filter((e) => e.kind === 'relation')).toHaveLength(1)
+    // 소속이 달라도 실제 참조하는 데이터끼리 연결한다.
+    expect(scope.edges).toContainEqual({ source: `concept:${room.id}/트리거`, target: `concept:${item.id}/지급 의도`, label: '요청', kind: 'concept' })
+    expect(scope.edges.some((e) => e.source === `concept:${room.id}/방 진행` && e.target === `concept:${item.id}/지급 의도`)).toBe(false)
     // 범위 밖(상점)은 이 그래프에 없다
     expect((await buildDomainScope(ctx, shop.id)).nodes.map((n) => n.id)).toEqual([shop.id])
+  })
+
+  it('양쪽 루트 대신 참조 데이터끼리 연결하고 방향·관계 종류를 보존한다', async () => {
+    const { ctx, chat, room, item } = await mapSetup()
+    const domains = await listDomains(ctx)
+    const roomDomain = domains.find((d) => d.id === room.id)!
+    const itemDomain = domains.find((d) => d.id === item.id)!
+    itemDomain.model.unshift({ name: '보관함', kind: 'Aggregate', behavior: '', invariants: '', relations: [], code: [] })
+    const trigger = roomDomain.model.find((c) => c.name === '트리거')!
+    trigger.relations.push({ type: '요청', to: `${item.id}/지급 의도` }, { type: '참조', to: `${item.id}/지급 의도` })
+    itemDomain.model.find((c) => c.name === '지급 의도')!.relations.push({ type: '발생근거', to: `${room.id}/트리거` })
+
+    const scope = buildDomainScopeFrom(domains, chat.id)
+    const from = `concept:${room.id}/트리거`
+    const to = `concept:${item.id}/지급 의도`
+    expect(scope.edges.filter((e) => e.source === from && e.target === to)).toEqual([
+      { source: from, target: to, label: '요청', kind: 'concept' },
+      { source: from, target: to, label: '참조', kind: 'concept' }
+    ])
+    expect(scope.edges).toContainEqual({ source: to, target: from, label: '발생근거', kind: 'concept' })
+    expect(scope.edges.some((e) => e.target === `concept:${item.id}/보관함`)).toBe(false)
+    expect(scope.edges.every((e) => scope.nodes.some((n) => n.id === e.source) && scope.nodes.some((n) => n.id === e.target))).toBe(true)
+  })
+
+  it('범위 밖 데이터 참조는 제외하고, 개념이 없는 도메인 관계는 방향대로 표시한다', async () => {
+    const { ctx, chat, room, item, shop } = await mapSetup()
+    const domains = await listDomains(ctx)
+    const roomDomain = domains.find((d) => d.id === room.id)!
+    const itemDomain = domains.find((d) => d.id === item.id)!
+    const shopDomain = domains.find((d) => d.id === shop.id)!
+    shopDomain.model = [...itemDomain.model]
+    itemDomain.model = []
+    itemDomain.content = ''
+    roomDomain.model[0].relations.push({ type: '외부참조', to: `${shop.id}/지급 의도` })
+    roomDomain.links = [{ type: '요청', to: item.id }]
+    itemDomain.links = [{ type: '응답', to: room.id }]
+
+    const scope = buildDomainScopeFrom(domains, chat.id)
+    expect(scope.edges).toContainEqual({ source: room.id, target: item.id, label: '요청', kind: 'relation' })
+    expect(scope.edges).toContainEqual({ source: item.id, target: room.id, label: '응답', kind: 'relation' })
+    expect(scope.edges.some((e) => e.label === '외부참조')).toBe(false)
+    expect(scope.nodes.some((n) => n.domainId === shop.id)).toBe(false)
   })
 })

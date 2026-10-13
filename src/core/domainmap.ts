@@ -163,36 +163,21 @@ export function buildDomainScopeFrom(domains: Domain[], rootId: string, featureC
   }
   const concepts = inScope.flatMap((d) => d.model.map((c) => ({ ...c, domainId: d.id, domainTitle: d.title })))
   const all = domains.flatMap((d) => d.model.map((c) => ({ ...c, domainId: d.id, domainTitle: d.title })))
-  // 상자 안: 개념끼리 그대로. 상자 사이: 각 상자의 대표 개념(애그리거트 루트)끼리 선 하나로 합친다
-  // (책 그림의 Order — Member처럼. 어떤 개념이 무엇을 가리켰는지는 선 이름에 남긴다)
-  const rootOf = (domainId: string) => {
-    const model = domains.find((d) => d.id === domainId)?.model ?? []
-    const r = model.find((m) => /aggregate/i.test(m.kind)) ?? model[0]
-    return r ? conceptId(domainId, r.name) : domainId
-  }
-  const cross = new Map<string, ScopeEdge>()
+  // 소속 도메인이 달라도 실제 참조하는 개념과 참조 대상에 선을 붙인다.
+  const seen = new Set<string>()
   for (const c of concepts) {
     for (const r of c.relations) {
       const hit = resolveConcept(r.to, c.domainId, all)
       if (!hit || !scope.has(hit.domainId)) continue
-      if (hit.domainId === c.domainId) {
-        edges.push({ source: conceptId(c.domainId, c.name), target: conceptId(hit.domainId, hit.name), label: r.type, kind: 'concept' })
-        continue
-      }
-      const [a, b] = [c.domainId, hit.domainId].sort()
-      const key = `${a}|${b}`
-      const label = `${c.name} ${r.type} ${hit.name}`
-      const e = cross.get(key)
-      if (e) e.label = `${e.label}\n${label}`
-      else cross.set(key, { source: rootOf(c.domainId), target: rootOf(hit.domainId), label, kind: 'relation' })
+      const source = conceptId(c.domainId, c.name)
+      const target = conceptId(hit.domainId, hit.name)
+      const key = JSON.stringify([source, target, r.type])
+      if (seen.has(key)) continue
+      seen.add(key)
+      edges.push({ source, target, label: r.type, kind: 'concept' })
     }
   }
-  // 같은 두 상자 사이 선은 방향과 출처에 상관없이 하나만 (개념 관계로 만든 선이 먼저)
-  for (const e of domainEdges) {
-    const key = [e.source, e.target].sort().join('|')
-    if (!cross.has(key)) cross.set(key, e)
-  }
-  edges.push(...cross.values())
+  edges.push(...domainEdges)
   return { rootId, nodes, edges }
 }
 
