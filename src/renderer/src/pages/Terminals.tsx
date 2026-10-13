@@ -96,13 +96,18 @@ export default function Terminals({ visible }: { visible: boolean }) {
       // Shift+Enter / Ctrl+Enter는 xterm이 그냥 Enter(\r)로 보내 입력이 바로 전송된다.
       // 에이전트가 줄바꿈으로 알아듣는 신호로 바꿔 보낸다: Claude Code는 Alt+Enter(ESC CR), Codex는 Ctrl+J(LF)
       const newline = kind === 'claude' ? '\x1b\r' : kind === 'codex' ? '\n' : null
-      if (newline) {
-        term.attachCustomKeyEventHandler((e) => {
-          if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey) || e.altKey || e.metaKey) return true
-          if (e.type === 'keydown') void api.termWrite(info.id, newline)
+      const isMac = navigator.platform.startsWith('Mac')
+      term.attachCustomKeyEventHandler((e) => {
+        // Ctrl+V를 제어 문자(\x16)로 보내면 브라우저의 paste 이벤트가 취소된다.
+        // 기본 붙여넣기를 허용해 xterm이 텍스트·줄바꿈·bracketed paste를 처리하게 한다.
+        const pasteModifier = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
+        if (pasteModifier && !e.altKey && (e.code === 'KeyV' || e.key.toLowerCase() === 'v')) {
           return false
-        })
-      }
+        }
+        if (!newline || e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey) || e.altKey || e.metaKey) return true
+        if (e.type === 'keydown') void api.termWrite(info.id, newline)
+        return false
+      })
       setTabs((t) => [...t, { id: info.id, kind, title: info.title }])
       setActive(info.id)
     } catch (e) {
