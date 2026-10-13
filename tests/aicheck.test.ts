@@ -1,14 +1,22 @@
-import { describe, expect, it } from 'vitest'
+import os from 'os'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildCheckPrompt, decideFinding, lastCheckAt, listAiChecks, parseCheckResult, runAiCheck, type AgentRunner } from '../src/core/aicheck'
 import { createDomain } from '../src/core/domain'
 import { listRequests } from '../src/core/drift'
 import { listInbox } from '../src/core/task'
 import { listKnowledge } from '../src/core/knowledge'
-import { newProject } from './helpers'
+import { newProject, tempDir } from './helpers'
 
 const reply = (findings: object[]) => `점검했습니다.\n\`\`\`json\n${JSON.stringify({ summary: '주문 취소 규칙이 문서에 없음', findings })}\n\`\`\``
 
 describe('도메인 점검 · AI 점검', () => {
+  beforeEach(async () => {
+    // AI 점검의 저장·반영 테스트는 실제 사용자 대화 기록에 의존하지 않는다.
+    vi.spyOn(os, 'homedir').mockReturnValue(await tempDir('orbit-aicheck-sessions-'))
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
   it('[DR-F07-AC1] 점검 요청문에 현재 도메인 문서와 대화·커밋이 들어간다', async () => {
     const ctx = await newProject()
     await createDomain(ctx, { title: '주문', folder: 'order', role: '주문을 받는다' })
