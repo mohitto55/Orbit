@@ -30,6 +30,9 @@ export interface ApiDeps {
 export function createApi(deps: ApiDeps) {
   let ctx: ws.Ctx | null = null
   let testProc: ChildProcess | null = null
+  let testBusy = false
+  let testRevision = 0
+  let testSession: { projectDir: string; state: vr.TestRunState } | null = null
   let terminals: TerminalManager | null = null
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
@@ -268,7 +271,7 @@ export function createApi(deps: ApiDeps) {
     discardInbox: (id: string) => tk.discardInbox(need(), id),
     listTasks: () => tk.listTasks(need()),
     createTask: (input: tk.ClassifyInput & { title: string; body?: string }) => tk.createTask(need(), input),
-    updateTask: (id: string, patch: Partial<tk.Task>) => tk.updateTask(need(), id, patch),
+    updateTask: (id: string, patch: Partial<tk.Task>, expectedBody?: string) => tk.updateTask(need(), id, patch, expectedBody),
     deleteTask: (id: string) => tk.deleteTask(need(), id),
     reorderTasks: (ids: string[]) => tk.reorderTasks(need(), ids),
 
@@ -293,30 +296,71 @@ export function createApi(deps: ApiDeps) {
     // Verification
     scanTests: () => vr.scanTestLinks(need().projectDir),
     lastRun: () => vr.loadLastRun(need()),
+    async testState(): Promise<vr.TestRunState> {
+      const c = need()
+      if (testSession?.projectDir === c.projectDir) return testSession.state
+      const run = await vr.loadLastRun(c)
+      // 파일을 읽는 사이 실행이 시작됐으면 현재 상태를 돌려준다.
+      if (testSession?.projectDir === c.projectDir) return testSession.state
+      return { revision: 0, running: false, log: run?.output ?? '', run }
+    },
     async runTests(filter?: string) {
       const c = need()
-      const settings = await ws.readSettings(c)
-      if (!settings.testCommand) throw new Error('프로젝트 설정에 테스트 명령을 먼저 등록하세요')
-      if (testProc) throw new Error('테스트가 이미 실행 중입니다')
-      const command = filter ? `${settings.testCommand} ${filter}` : settings.testCommand
-      const junit = path.join(c.projectDir, settings.junitPath || 'test-results/junit.xml')
-      await fs.rm(junit, { force: true })
-      deps.send('test-output', `$ ${command}\n`)
-      const exitCode: number | null = await new Promise((resolve) => {
-        const proc = spawn(command, { cwd: c.projectDir, shell: true, env: process.env })
-        testProc = proc
-        proc.stdout?.on('data', (d) => deps.send('test-output', d.toString()))
-        proc.stderr?.on('data', (d) => deps.send('test-output', d.toString()))
-        proc.on('error', (e) => deps.send('test-output', `\n${e.message}\n`))
-        proc.on('close', (code) => resolve(code))
-      })
-      testProc = null
-      let summary: vr.RunSummary
-      if (await exists(junit)) summary = vr.summarize(command, exitCode, vr.parseJUnit(await fs.readFile(junit, 'utf8')))
-      else summary = vr.summarize(command, exitCode, [], `결과 파일을 찾을 수 없습니다: ${junit}`)
-      await vr.saveRun(c, summary)
-      deps.send('test-done', summary)
-      return summary
+      if (testBusy) throw new Error('테스트가 이미 실행 중입니다')
+      testBusy = true
+      try {
+        const settings = await ws.readSettings(c)
+        if (!settings.testCommand) throw new Error('프로젝트 설정에 테스트 명령을 먼저 등록하세요')
+        const command = filter ? `${settings.testCommand} ${filter}` : settings.testCommand
+        const junit = path.join(c.projectDir, settings.junitPath || 'test-results/junit.xml')
+        const run = await vr.loadLastRun(c)
+        const session = { projectDir: c.projectDir, state: { revision: ++testRevision, running: true, log: '', run } }
+        testSession = session
+        const send = (event: vr.TestRunEvent) => {
+          if (ctx?.projectDir === c.projectDir) deps.send('test-state', event)
+        }
+        const output = (chunk: string) => {
+          session.state = { ...session.state, revision: ++testRevision, log: (session.state.log + chunk).slice(-vr.TEST_OUTPUT_LIMIT) }
+          send({ type: 'output', revision: session.state.revision, chunk })
+        }
+        send({ type: 'state', state: session.state })
+        output(`$ ${command}\n`)
+        let exitCode: number | null = null
+        let results: vr.TestResult[] = []
+        let error: string | undefined
+        try {
+          await fs.rm(junit, { force: true })
+          exitCode = await new Promise<number | null>((resolve) => {
+            const proc = spawn(command, { cwd: c.projectDir, shell: true, env: process.env })
+            testProc = proc
+            proc.stdout?.on('data', (d: Buffer) => output(d.toString()))
+            proc.stderr?.on('data', (d: Buffer) => output(d.toString()))
+            proc.on('error', (e) => output(`\n${e.message}\n`))
+            proc.on('close', resolve)
+          })
+          if (!(await exists(junit))) throw new Error(`결과 파일을 찾을 수 없습니다: ${junit}`)
+          results = vr.parseJUnit(await fs.readFile(junit, 'utf8'))
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e)
+          output(`\n${error}\n`)
+        }
+        const summary = { ...vr.summarize(command, exitCode, results, error), output: session.state.log }
+        try {
+          await vr.saveRun(c, summary)
+        } catch (e) {
+          const message = `실행 기록을 저장할 수 없습니다: ${e instanceof Error ? e.message : String(e)}`
+          summary.error = [summary.error, message].filter(Boolean).join('\n')
+          output(`\n${message}\n`)
+          summary.output = session.state.log
+        }
+        session.state = { revision: ++testRevision, running: false, log: summary.output, run: summary }
+        send({ type: 'state', state: session.state })
+        if (ctx?.projectDir === c.projectDir) deps.send('test-done', summary)
+        return summary
+      } finally {
+        testProc = null
+        testBusy = false
+      }
     },
     stopTests() {
       if (!testProc?.pid) return

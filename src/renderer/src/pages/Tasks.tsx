@@ -4,6 +4,8 @@ import type { PageProps } from '../App'
 import type { InboxItem, Priority, Task, TaskStatus } from '../types'
 import { HORIZONS, PRIORITIES, TASK_STATUSES, TASK_TYPES } from '../types'
 import { Badge, Empty, Modal, errorToast, offerUndo, toast, useLoad } from '../ui'
+import { TaskChecklist } from '../TaskChecklist'
+import { setChecklistChecked, type ChecklistItem } from '../checklistMarkdown'
 
 const PRIO_RANK: Record<string, number> = { 높음: 0, 보통: 1, 낮음: 2 }
 const isClosed = (t: Task) => t.status === '완료' || t.status === '취소'
@@ -218,6 +220,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
                       <span className="mono">{t.id}</span>
                       {t.links.length > 0 && ` · ${t.links.join(', ')}`}
                     </div>
+                    <InlineTaskChecklist task={t} track={track} onReload={reloadTasks} />
                   </td>
                   <td style={{ width: 84 }}>
                     <select className={`prio prio-${t.priority}`} value={t.priority} onChange={(e) => setPriority(t, e.target.value as Priority)} title="중요도">
@@ -256,6 +259,36 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
 }
 
 type Track = <T>(label: string, files: string[], action: () => Promise<T>, created?: (r: T) => string[]) => Promise<T>
+
+function InlineTaskChecklist({ task, track, onReload }: { task: Task; track: Track; onReload: () => void }) {
+  const [body, setBody] = useState(task.body)
+  const [saving, setSaving] = useState(false)
+  const busy = useRef(false)
+  useEffect(() => setBody(task.body), [task.body])
+
+  const toggle = async (item: ChecklistItem, checked: boolean) => {
+    if (busy.current) return
+    busy.current = true
+    setSaving(true)
+    try {
+      const nextBody = setChecklistChecked(body, item.offset, checked)
+      const saved = await track(
+        checked ? '완료 조건을 체크했습니다' : '완료 조건의 체크를 해제했습니다',
+        [task.file],
+        () => api.updateTask(task.id, { body: nextBody }, body)
+      )
+      setBody(saved.body)
+    } catch (e) {
+      errorToast(e)
+      onReload()
+    } finally {
+      busy.current = false
+      setSaving(false)
+    }
+  }
+
+  return <TaskChecklist body={body} onToggle={toggle} disabled={saving} collapsible />
+}
 
 function InboxRow({ item, track, onPromote }: { item: InboxItem; track: Track; onPromote: () => void }) {
   return (
@@ -314,7 +347,7 @@ function TaskEditor({
     const title = f.title.trim()
     try {
       if (task) {
-        onSaved(await track(`"${title}" 저장했습니다`, [task.file], () => api.updateTask(task.id, { ...f, type: f.type as Task['type'], horizon: f.horizon as Task['horizon'], links })))
+        onSaved(await track(`"${title}" 저장했습니다`, [task.file], () => api.updateTask(task.id, { ...f, type: f.type as Task['type'], horizon: f.horizon as Task['horizon'], links }, task.body)))
         return
       }
       const input = { title, body: f.body, type: f.type, horizon: f.horizon, priority: f.priority, start: f.start || undefined, end: f.end || undefined, due: f.due || undefined, links }
@@ -401,9 +434,11 @@ function TaskEditor({
         <label>연결 (쉼표로 구분, 예: 도메인·기능 ID)</label>
         <input value={f.links} onChange={(e) => set('links', e.target.value)} />
       </div>
+      <TaskChecklist body={f.body} onToggle={(item, checked) => setF((current) => ({ ...current, body: setChecklistChecked(current.body, item.offset, checked) }))} />
       <div className="field">
         <label>세부 내용</label>
         <textarea className="task-body" value={f.body} onChange={(e) => set('body', e.target.value)} placeholder="세부 내용, 메모 (마크다운)" />
+        <span className="small muted">완료 조건은 - [ ] 항목으로 적으면 위에서 체크할 수 있습니다. 편집 내용은 저장을 누르면 반영됩니다.</span>
       </div>
       <div className="row between">
         {task ? (

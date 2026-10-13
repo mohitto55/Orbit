@@ -531,6 +531,19 @@ button.link.todo-title { color: var(--text); font-size: 14px; font-weight: 550; 
 button.link.todo-title:hover:not(:disabled) { color: var(--accent); text-decoration: none; }
 tr.todo.closed .todo-title { text-decoration: line-through; color: var(--muted); }
 tr.todo.closed td { opacity: 0.7; }
+.task-checklist { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); }
+.checklist-heading { font-size: 13px; font-weight: 600; }
+.checklist-count { margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.checklist-count.complete { color: var(--ok); }
+.task-checklist.compact { margin: 8px 0 0; padding: 0; border: none; background: none; }
+.task-checklist summary { width: fit-content; cursor: pointer; color: var(--text-2); font-size: 12px; }
+.task-checklist summary:hover { color: var(--accent); }
+.task-checklist-items { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.task-checklist-items li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6; }
+.task-checklist-items input[type='checkbox'] { flex: none; width: 16px; height: 16px; margin: 3px 0 0; cursor: pointer; accent-color: var(--ok); }
+.task-checklist-items label { margin: 0; color: var(--text); cursor: pointer; white-space: pre-line; overflow-wrap: anywhere; }
+.task-checklist-items .checked label { color: var(--muted); text-decoration: line-through; }
+.task-checklist-items input:disabled, .task-checklist-items input:disabled + label { cursor: wait; }
 select.prio { font-weight: 600; }
 .prio-높음 { color: var(--bad); }
 .prio-보통 { color: var(--text); }

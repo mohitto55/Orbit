@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "productName": "Orbit",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하는 데스크톱 앱",
   "main": "./out/main/index.js",
   "author": "mohitto55",
@@ -33,11 +33,14 @@
     "react-markdown": "^9.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.0"
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.5",
     "@types/diff": "^5.2.1",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^20.14.15",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

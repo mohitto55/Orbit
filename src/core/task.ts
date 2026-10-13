@@ -204,7 +204,7 @@ export async function discardInbox(ctx: Ctx, inboxId: string): Promise<void> {
   if (item) await fs.rm(item.file, { force: true })
 }
 
-export async function updateTask(ctx: Ctx, id: string, patch: Partial<Omit<Task, 'id' | 'file'>>): Promise<Task> {
+export async function updateTask(ctx: Ctx, id: string, patch: Partial<Omit<Task, 'id' | 'file'>>, expectedBody?: string): Promise<Task> {
   const task = (await listTasks(ctx)).find((t) => t.id === id)
   if (!task) throw new Error(`Task를 찾을 수 없습니다: ${id}`)
   if (patch.type || patch.horizon || patch.priority)
@@ -214,6 +214,9 @@ export async function updateTask(ctx: Ctx, id: string, patch: Partial<Omit<Task,
   if (patch.title) patch = { ...patch, title: patch.title.trim() }
   validateDates('start' in patch ? patch.start : task.start, 'end' in patch ? patch.end : task.end)
   const { data, content } = await readMd(task.file)
+  if (expectedBody !== undefined && content.trim() !== expectedBody) {
+    throw new Error('세부 내용이 다른 곳에서 바뀌었습니다. 최신 내용을 확인한 뒤 다시 시도하세요')
+  }
   const { body, ...rest } = patch
   const next: Record<string, unknown> = { ...data, ...rest }
   // 빈 값으로 보낸 날짜는 지운다

@@ -1,26 +1,49 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, on } from '../api'
 import type { PageProps } from '../App'
-import type { AcStatus, Spec } from '../types'
+import type { AcStatus, Spec, TestRunEvent, TestRunState } from '../types'
 import { AC_LABEL, Badge, Empty, errorToast, toast, useLoad } from '../ui'
 
 export default function Verification({ refreshKey, reloadBadges, go }: PageProps) {
   const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
   const [links, reloadLinks] = useLoad(() => api.scanTests(), [refreshKey])
-  const [run, setRun] = useState<Awaited<ReturnType<typeof api.lastRun>>>(null)
+  const [testState, setTestState] = useState<TestRunState | null>(null)
   const [statuses, setStatuses] = useState<Record<string, Record<string, AcStatus>>>({})
-  const [running, setRunning] = useState(false)
-  const [log, setLog] = useState('')
+  const [starting, setStarting] = useState(false)
   const [filter, setFilter] = useState('')
   const logRef = useRef<HTMLPreElement>(null)
+  const run = testState?.run ?? null
+  const running = starting || testState?.running === true
+  const log = testState?.log ?? ''
 
   useEffect(() => {
-    api.lastRun().then(setRun).catch(errorToast)
-    const off1 = on('test-output', (chunk: string) => setLog((l) => (l + chunk).slice(-200000)))
-    const off2 = on('test-done', () => setRunning(false))
+    let alive = true
+    let current: TestRunState | null = null
+    const pending: Extract<TestRunEvent, { type: 'output' }>[] = []
+    const apply = (state: TestRunState) => {
+      if (!alive || (current && state.revision < current.revision)) return
+      // 조회 응답을 기다리는 동안 받은 출력은 이미 포함된 부분을 빼고 이어 붙인다.
+      for (const event of pending) {
+        if (event.revision > state.revision) state = { ...state, revision: event.revision, log: (state.log + event.chunk).slice(-200000) }
+      }
+      pending.length = 0
+      current = state
+      setTestState(state)
+    }
+    const off = on('test-state', (event: TestRunEvent) => {
+      if (event.type === 'state') {
+        apply(event.state)
+        if (!event.state.running) reloadLinks()
+      } else if (!current) {
+        pending.push(event)
+      } else if (event.revision > current.revision) {
+        apply({ ...current, revision: event.revision, log: (current.log + event.chunk).slice(-200000) })
+      }
+    })
+    api.testState().then(apply).catch((e: unknown) => alive && errorToast(e))
     return () => {
-      off1()
-      off2()
+      alive = false
+      off()
     }
   }, [])
 
@@ -30,25 +53,20 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
 
   useEffect(() => {
     if (!specs) return
-    api.allAcStatuses().then(setStatuses).catch(errorToast)
-  }, [specs, refreshKey])
+    let alive = true
+    api.allAcStatuses().then((value) => alive && setStatuses(value)).catch((e: unknown) => alive && errorToast(e))
+    return () => { alive = false }
+  }, [specs, refreshKey, run])
 
   const start = async () => {
-    setLog('')
-    setRunning(true)
+    setStarting(true)
     try {
       const r = await api.runTests(filter || undefined)
-      // 실행 결과와 검증률이 함께 바뀌도록 상태를 먼저 받아 둔다
-      const st = await api.allAcStatuses().catch(() => null)
-      setRun(r)
-      if (st) setStatuses(st)
-      reloadLinks()
-      reloadBadges()
       toast(r.error ? r.error : `통과 ${r.passed} / 실패 ${r.failed} / 전체 ${r.total}`, r.error || r.failed ? 'error' : 'ok')
     } catch (e) {
       errorToast(e)
     } finally {
-      setRunning(false)
+      setStarting(false)
     }
   }
 
@@ -64,11 +82,11 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
         <div className="row">
           <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="필터 인자 (선택)" />
           {running ? (
-            <button className="danger" onClick={() => api.stopTests()}>
+            <button className="danger" onClick={() => api.stopTests().catch(errorToast)}>
               중단
             </button>
           ) : (
-            <button className="primary" onClick={start}>
+            <button className="primary" onClick={start} disabled={!testState}>
               테스트 실행
             </button>
           )}
@@ -87,12 +105,13 @@ export default function Verification({ refreshKey, reloadBadges, go }: PageProps
           <div className="card-label">테스트 연결</div>
           <div className="muted small">테스트 이름의 [AC ID]</div>
         </div>
-        <div className={`card ${run?.failed ? 'warn' : ''}`}>
-          <div className="card-value">{run ? `${run.passed}/${run.total}` : '-'}</div>
+        <div className={`card ${run && (run.failed || run.error || run.exitCode !== 0) ? 'warn' : ''}`}>
+          <div className="card-value">{run?.error ? '실행 오류' : run ? `${run.passed}/${run.total}` : '-'}</div>
           <div className="card-label">마지막 실행</div>
-          <div className="muted small">{run ? new Date(run.at).toLocaleString() : '실행 기록 없음'}</div>
+          <div className="muted small">{run ? new Date(run.at).toLocaleString() : testState ? '실행 기록 없음' : '기록 불러오는 중…'}</div>
         </div>
       </div>
+      {!running && run?.error && <div className="banner warn">{run.error}</div>}
       {(running || log) && (
         <pre className="log" ref={logRef}>
           {log}

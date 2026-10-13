@@ -59,6 +59,7 @@ export default function App() {
 
   useEffect(() => {
     const offFiles = on('files-changed', () => setRefreshKey((k) => k + 1))
+    const offTests = on('test-done', () => setRefreshKey((k) => k + 1))
     const offCapture = on('quick-capture', () => setCapture(true))
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'Space') setCapture(true)
@@ -66,6 +67,7 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => {
       offFiles()
+      offTests()
       offCapture()
       window.removeEventListener('keydown', onKey)
     }
