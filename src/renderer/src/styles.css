@@ -419,8 +419,22 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 /* ---------- 터미널 ---------- */
 .terminals { flex-direction: column; gap: 0; min-height: 0; }
 .terminals > .row:first-child { margin-bottom: 12px; }
-.term-tabs { display: flex; gap: 2px; padding: 0 6px; }
-.term-tab { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; color: var(--muted); font-size: 13px; }
+.term-group-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.term-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.term-group { display: inline-flex; align-items: center; gap: 8px; max-width: 240px; }
+.term-group > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-group.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.term-group-count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.term-group-actions { display: flex; gap: 4px; }
+.term-group-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 6px 2px; }
+.term-group-tools label { display: inline-flex; align-items: center; gap: 8px; }
+.term-group-tools select { width: 170px; }
+.term-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 6px; }
+.term-tab { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 5px 8px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 13px; }
+.term-tab[draggable='true'] { cursor: grab; }
+.term-tab .term-tab-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 4px; color: inherit; font: inherit; border: 0; background: none; }
+.term-tab-select > span:nth-child(2) { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-tab-group { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 400; background: var(--sunken); color: var(--muted); }
 .term-tab:hover { color: var(--text); }
 .term-tab.on { background: var(--panel); border-color: var(--line); color: var(--text); font-weight: 600; margin-bottom: -1px; position: relative; z-index: 1; }
 .term-tab.dim { opacity: 0.55; }
@@ -631,9 +645,6 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .map-add { flex-wrap: nowrap; gap: 6px; }
 .map-add select { flex: 1; min-width: 0; }
 .map-legend { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
-.map-legend .lg { display: inline-block; width: 28px; border-top: 2px solid var(--muted); vertical-align: middle; margin-right: 6px; }
-.map-legend .lg.dashed { border-top-style: dashed; }
-.map-legend .lg.dotted { border-top-style: dotted; }
 .rollup { display: flex; flex-direction: column; gap: 12px; }
 .rollup.compact { gap: 8px; }
 .rollup-head { font-weight: 650; margin-bottom: 2px; }
@@ -645,6 +656,25 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .root-card b { display: inline-flex; align-items: center; gap: 6px; }
 .map-main { gap: 10px; }
 .map-main h2 { margin: 0; display: flex; gap: 8px; align-items: center; }
+.domain-graph-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.domain-graph-filters > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 240px; font-size: 12px; color: var(--muted); }
+.domain-graph-filters input, .domain-graph-filters select { width: 100%; min-width: 0; }
+.domain-graph-filters .graph-search { flex: 1 1 170px; }
+.domain-graph-filters .graph-label-toggle { flex-direction: row; align-items: center; align-self: center; white-space: nowrap; }
+.domain-graph-filters input[type='checkbox'] { width: auto; }
+.domain-graph-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.domain-graph-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.relation-mark { color: var(--muted); flex: none; vertical-align: middle; }
+.relation-mark.ownership { color: var(--accent); }
+.relation-mark.reference { color: var(--supporting); }
+.relation-mark .relation-line { fill: none; stroke: currentColor; stroke-width: 1.8; }
+.relation-mark.reference .relation-line { stroke-dasharray: 5 3; }
+.relation-mark.domain .relation-line { stroke-dasharray: 1.5 3; }
+.domain-graph-empty { position: absolute; inset: 0; display: grid; place-items: center; background: var(--panel); }
+.domain-graph-empty button { display: block; margin: 12px auto 0; }
+.concept-connections { display: flex; flex-direction: column; gap: 6px; }
+.concept-connection { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.concept-connection > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
 /* 기능 명세의 쓰는 규칙 */
 .uses { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .uses .chip { gap: 4px; max-width: 100%; cursor: default; }
