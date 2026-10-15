@@ -157,7 +157,8 @@ function caretAt(el: HTMLElement, where: 'start' | 'end'): boolean {
 }
 
 function placeCaret(el: HTMLElement, where: 'start' | 'end') {
-  el.focus()
+  const host = el.closest<HTMLElement>('[contenteditable="true"]') ?? el
+  host.focus()
   const sel = window.getSelection()
   if (!sel) return
   const r = document.createRange()
@@ -354,10 +355,14 @@ function Block(props: {
   const ref = useRef<HTMLDivElement | null>(null)
   // 화면을 md로 되돌릴 수 있는 블록만 그 자리에서 고친다
   const [editable, setEditable] = useState(true)
+  const [tables, setTables] = useState<HTMLTableElement[]>([])
   const [raw, setRaw] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
-    if (ref.current) setEditable(canSerialize(ref.current))
+    if (ref.current) {
+      setEditable(canSerialize(ref.current))
+      setTables(Array.from(ref.current.querySelectorAll('table')))
+    }
   }, [item.shown])
   useEffect(() => {
     const el = area.current
@@ -393,31 +398,58 @@ function Block(props: {
     )
   }
   return (
-    <div
-      ref={(el) => {
-        ref.current = el
-        props.setRef(el)
-      }}
-      className={`md-block ${editable ? '' : 'raw-only'}`}
-      contentEditable={editable}
-      suppressContentEditableWarning
-      spellCheck={false}
-      data-placeholder="여기에 입력"
-      onInput={props.onInput}
-      onBlur={props.onSettle}
-      onKeyDown={props.onKey}
-      onPaste={(e) => {
-        // 서식 없는 글자로만 붙여 넣는다
-        e.preventDefault()
-        document.execCommand('insertText', false, e.clipboardData.getData('text/plain'))
-      }}
-      onClick={(e) => {
-        if (editable || (e.target as HTMLElement).closest('a, button, mark, input') || window.getSelection()?.toString()) return
-        setRaw(true)
-      }}
-    >
-      <FrozenContent source={item.shown} onWiki={props.onWiki} />
-    </div>
+    <>
+      <div
+        ref={(el) => {
+          ref.current = el
+          props.setRef(el)
+        }}
+        className={`md-block ${editable ? '' : 'raw-only'}`}
+        contentEditable={editable}
+        suppressContentEditableWarning
+        spellCheck={false}
+        data-placeholder="여기에 입력"
+        onInput={props.onInput}
+        onBlur={props.onSettle}
+        onKeyDown={props.onKey}
+        onPaste={(e) => {
+          // 서식 없는 글자로만 붙여 넣는다
+          e.preventDefault()
+          document.execCommand('insertText', false, e.clipboardData.getData('text/plain'))
+        }}
+        onClick={(e) => {
+          if (editable || (e.target as HTMLElement).closest('a, button, mark, input') || window.getSelection()?.toString()) return
+          setRaw(true)
+        }}
+      >
+        <FrozenContent source={item.shown} onWiki={props.onWiki} />
+      </div>
+      {editable && tables.map((table, index) => (
+        <button
+          key={index}
+          type="button"
+          className="small ghost"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const header = table.rows[0]
+            if (!header) return
+            const row = document.createElement('tr')
+            Array.from(header.cells).forEach((cell) => {
+              const added = document.createElement('td')
+              added.style.textAlign = cell.style.textAlign || cell.getAttribute('align') || ''
+              added.appendChild(document.createElement('br'))
+              row.appendChild(added)
+            })
+            const body = table.tBodies[0] ?? table.createTBody()
+            body.appendChild(row)
+            props.onInput()
+            placeCaret(row.cells[0], 'start')
+          }}
+        >
+          + 행 추가{tables.length > 1 ? ` (표 ${index + 1})` : ''}
+        </button>
+      ))}
+    </>
   )
 }
 
