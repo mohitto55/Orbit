@@ -39,7 +39,7 @@ describe('터미널 API', () => {
     const [fresh, shell] = await Promise.all([api.termCreate('codex', 120, 40), api.termCreate('shell')])
     const { spawn } = await import('node-pty')
     expect(spawn).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: ctx.projectDir, cols: 120, rows: 40 }))
-    expect(ptys[0].write).toHaveBeenCalledWith('custom-codex --profile work\r')
+    expect(ptys.find((pty) => pty.pid === fresh.pid)!.write).toHaveBeenCalledWith('custom-codex --profile work\r')
     expect(fresh.id).not.toBe(shell.id)
     const resumed = await api.termResume('codex:saved-session')
     expect(ptys[2].write).toHaveBeenCalledWith('wrapper resume saved-session --profile work\r')
