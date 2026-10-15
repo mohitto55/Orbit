@@ -3,7 +3,19 @@ import path from 'path'
 import { expect, it, vi } from 'vitest'
 import { findCodexSession } from '../src/core/terminalWorkspace'
 import { pendingSessionCount } from '../src/core/drift'
+import { sameProjectPath } from '../src/core/sessionMetadata'
 import { tempDir } from './helpers'
+
+it('심볼릭 링크나 macOS /var 별칭으로 연 프로젝트도 CLI의 실제 경로와 같은 프로젝트로 인식한다', async () => {
+  const root = await tempDir('terminal-path-')
+  const target = path.join(root, 'project')
+  const alias = path.join(root, 'alias')
+  await fs.mkdir(target)
+  await fs.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  expect(sameProjectPath(alias, target)).toBe(true)
+  expect(sameProjectPath(alias, await fs.realpath(target))).toBe(true)
+  expect(sameProjectPath(alias, path.join(root, 'other-project'))).toBe(false)
+})
 
 it('대화 본문 없이 탭 고유 메타데이터만으로 대화 ID를 찾고 다른 탭·프로젝트·하위 에이전트는 제외한다', async () => {
   const root = await tempDir('codex-metadata-')

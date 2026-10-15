@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs'
+import { promises as fs, realpathSync } from 'fs'
 import path from 'path'
 
 export interface CodexMetadata {
@@ -49,6 +49,10 @@ export async function readCodexMetadata(file: string): Promise<CodexMetadata | u
 }
 
 export const sameProjectPath = (a: string, b: string): boolean => {
-  const normalize = (dir: string) => process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir)
+  const normalize = (dir: string) => {
+    let resolved = path.resolve(dir)
+    try { resolved = realpathSync.native(resolved) } catch { /* 삭제된 경로는 저장된 절대 경로로 비교한다. */ }
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
   return normalize(a) === normalize(b)
 }
