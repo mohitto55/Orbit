@@ -39,7 +39,10 @@ export interface PageProps {
 
 export default function App() {
   const [project, setProject] = useState<Project | null>(null)
-  const [page, setPage] = useState<Page>('dashboard')
+  const [page, setPage] = useState<Page>(() => {
+    const saved = localStorage.getItem('orbit:last-page')
+    return NAV.find((item) => item.id === saved)?.id ?? 'dashboard'
+  })
   const [focus, setFocus] = useState<string | undefined>()
   const [refreshKey, setRefreshKey] = useState(0)
   const [badges, setBadges] = useState<DashboardData | null>(null)
@@ -75,6 +78,7 @@ export default function App() {
 
   const go = (p: Page, f?: string) => {
     setPage(p)
+    localStorage.setItem('orbit:last-page', p)
     setFocus(f)
   }
 

@@ -5,6 +5,7 @@ import type { Ctx, ProjectSettings } from './workspace'
 import { exists, listMd, readMd, writeMd, stamp, nowIso } from './md'
 import { addInbox } from './task'
 import { saveKnowledge } from './knowledge'
+import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
 
 export type Agent = 'claude' | 'codex'
 
@@ -246,6 +247,21 @@ export async function pendingSessions(ctx: Ctx, home = os.homedir()): Promise<Se
   const reviewed = new Set(checks.flatMap((c) => c.sessions))
   const sessions = [...(await listClaudeSessions(ctx.projectDir, home)), ...(await listCodexSessions(ctx.projectDir, home))]
   return sessions.filter((s) => !reviewed.has(s.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+/** 시작 화면의 배지는 본문을 가져오지 않고 파일명·session_meta만으로 센다. */
+export async function pendingSessionCount(ctx: Ctx, home = os.homedir()): Promise<number> {
+  const reviewed = new Set((await listChecks(ctx)).flatMap((check) => check.sessions))
+  let count = 0
+  const claudeDir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects', encodeClaudeProjectDir(ctx.projectDir))
+  if (await exists(claudeDir)) {
+    for (const name of await fs.readdir(claudeDir)) if (name.endsWith('.jsonl') && !reviewed.has(`claude:${path.basename(name, '.jsonl')}`)) count++
+  }
+  for await (const file of codexMetadataFiles(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'))) {
+    const meta = await readCodexMetadata(file)
+    if (meta && sameProjectPath(meta.cwd, ctx.projectDir) && !reviewed.has(`codex:${meta.id}`)) count++
+  }
+  return count
 }
 
 /** DR-F01: 주기가 지났고 새 세션이 있을 때만 검토가 필요하다. */

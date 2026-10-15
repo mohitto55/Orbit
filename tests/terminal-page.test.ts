@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-import { act, createElement } from 'react'
+import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Terminals from '../src/renderer/src/pages/Terminals'
-import type { TerminalInfo } from '../src/core/terminal'
+import type { TerminalSnapshot } from '../src/core/terminal'
 
 const writes = vi.hoisted(() => [] as string[])
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
@@ -13,19 +13,21 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 
-let root: Root | null
+let root: Root
 let host: HTMLDivElement
-let savedTitle: string
-let calls: { name: string; args: unknown[] }[]
+let calls: string[]
+let saved: TerminalSnapshot[]
+let active: string | null
 let listeners: Map<string, (data: unknown) => void>
-const info: TerminalInfo = { id: 'term-resumed', kind: 'codex', title: '이전 작업', pid: 1, sessionId: 'saved-id' }
+const first: TerminalSnapshot = { id: 'term-one', kind: 'codex', title: '결제 작업', pid: 1, sessionId: 'saved-id', output: '이전 출력', sequence: 1 }
+const second: TerminalSnapshot = { id: 'term-two', kind: 'shell', title: '확인용 셸', pid: 2, output: '셸 출력', sequence: 0 }
 
 async function mount() {
   root = createRoot(host)
-  await act(async () => root!.render(createElement(Terminals, { visible: true })))
+  await act(async () => root.render(createElement(StrictMode, null, createElement(Terminals, { visible: true }))))
 }
 async function click(label: string) {
-  const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
+  const button = [...host.querySelectorAll('button')].find((element) => element.textContent?.trim() === label || element.getAttribute('aria-label') === label)
   if (!button) throw new Error(`버튼 없음: ${label}`)
   await act(async () => button.click())
 }
@@ -34,57 +36,58 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   host = document.createElement('div'); document.body.appendChild(host)
-  root = null; savedTitle = '이전 작업'; calls = []; listeners = new Map(); writes.length = 0
+  saved = [{ ...first }, { ...second }]; active = first.id; calls = []; listeners = new Map(); writes.length = 0
   window.orbit = {
     async invoke(name: string, ...args: unknown[]) {
-      calls.push({ name, args })
-      if (name === 'termSessions') return { errors: [], sessions: [{ id: 'codex:saved-id', sessionId: 'saved-id', agent: 'codex', title: savedTitle, firstPrompt: '결제 정책', updatedAt: '2026-10-15T00:00:00Z' }] }
-      if (name === 'termResume') {
-        listeners.get('term-data')?.({ id: info.id, data: '초기 터미널 출력' })
-        return { ...info, title: savedTitle }
+      calls.push(name)
+      if (name === 'termState') {
+        const state = { tabs: structuredClone(saved), active }
+        listeners.get('term-data')?.({ id: first.id, data: '이전 출력', sequence: 1 })
+        listeners.get('term-data')?.({ id: first.id, data: '새 출력', sequence: 2 })
+        return state
       }
-      if (name === 'termRenameSession') { savedTitle = String(args[1]); return }
-      if (name === 'termKill' || name === 'termResize') return
+      if (name === 'termActivate') { active = String(args[0]); return }
+      if (name === 'termKill') { saved = saved.filter((tab) => tab.id !== args[0]); active = saved.at(-1)?.id ?? null; return }
+      if (name === 'termRename') { const tab = saved.find((tab) => tab.id === args[0])!; tab.title = String(args[1]); return { ...tab } }
+      if (name === 'termResize') return
       throw new Error(`지원하지 않는 API: ${name}`)
     },
     on(channel, cb) { listeners.set(channel, cb); return () => { listeners.delete(channel) } }
   }
 })
 afterEach(async () => {
-  await act(async () => root?.unmount())
+  await act(async () => root.unmount())
   host.remove(); vi.unstubAllGlobals()
 })
 
-describe('저장된 대화 화면', () => {
-  it('[TE-F01-AC3] 선택한 대화를 재개하고 실행 중인 대화를 다시 누르면 같은 탭으로 간다', async () => {
-    await mount()
-    await click('저장된 대화')
-    expect(host.textContent).toContain('이전 작업')
-    await click('재개')
-    expect(calls).toContainEqual({ name: 'termResume', args: ['codex:saved-id', 100, 30] })
-    expect(writes).toContain('초기 터미널 출력')
-    expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
-    await click('저장된 대화')
-    await click('재개')
-    expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
-    await click('×')
-    expect(host.querySelectorAll('.term-tab')).toHaveLength(0)
-  })
+it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원하고 겹치는 출력은 한 번만 그린다', async () => {
+  await mount()
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  expect(host.querySelector('.term-tab.on')!.textContent).toContain('결제 작업')
+  expect(host.textContent).not.toContain('저장된 대화')
+  expect(calls.every((name) => name === 'termState' || name === 'termResize')).toBe(true)
+  expect(writes.filter((text) => text === '이전 출력')).toHaveLength(1)
+  expect(writes.filter((text) => text === '새 출력')).toHaveLength(1)
+  await act(async () => host.querySelectorAll<HTMLElement>('.term-tab')[1].click())
+  expect(active).toBe(second.id)
+  await act(async () => root.unmount())
+  await mount()
+  expect(host.querySelector('.term-tab.on')!.textContent).toContain('확인용 셸')
+})
 
-  it('[TE-F01-AC4] 저장된 대화 이름을 변경하고 화면을 다시 열어도 변경한 이름을 표시한다', async () => {
-    await mount()
-    await click('저장된 대화')
-    await click('이름 변경')
-    const input = host.querySelector<HTMLInputElement>('#terminal-name')!
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '결제 정책 수정')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(calls).toContainEqual({ name: 'termRenameSession', args: ['codex:saved-id', '결제 정책 수정'] })
-    await act(async () => root!.unmount())
-    await mount()
-    await click('저장된 대화')
-    expect(host.querySelector('.terminal-history')!.textContent).toContain('결제 정책 수정')
+it('[TE-F01-AC4] 탭 이름 변경과 닫기를 저장하고 재마운트에도 반영한다', async () => {
+  await mount()
+  await click('결제 작업 이름 변경')
+  const input = host.querySelector<HTMLInputElement>('#terminal-name')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '서버 작업')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
   })
+  await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(saved[0].title).toBe('서버 작업')
+  await click('×')
+  await act(async () => root.unmount())
+  await mount()
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
+  expect(host.querySelector('.term-tab')!.textContent).toContain('확인용 셸')
 })

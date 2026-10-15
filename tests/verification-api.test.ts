@@ -60,7 +60,7 @@ describe('테스트 실행 상태와 저장', () => {
     expect(restored).toMatchObject({ running: false, log: run.output })
     expect(restored.run).toEqual(run)
     // 대시보드의 관련 없는 대화 기록 스캔은 실제 사용자 폴더를 읽지 않는다.
-    const sessions = vi.spyOn(drift, 'pendingSessions').mockResolvedValue([])
+    const sessions = vi.spyOn(drift, 'pendingSessionCount').mockResolvedValue(0)
     try {
       expect((await reopened.dashboard()).lastRun).toMatchObject({ at: run.at, passed: 2, total: 2 })
     } finally {

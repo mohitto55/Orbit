@@ -78,7 +78,7 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
         <input value={s.githubRepo ?? ''} onChange={(e) => set({ githubRepo: e.target.value })} />
       </div>
       <h3 className="settings-section">터미널</h3>
-      <p className="muted small">이 프로젝트에서 사용할 명령입니다. 비워 두면 기본 명령을 사용합니다. 재개 명령의 {'{sessionId}'}는 선택한 대화 ID로 바뀝니다.</p>
+      <p className="muted small">이 프로젝트에서 사용할 명령입니다. 비워 두면 기본 명령을 사용합니다. 재개 명령의 {'{sessionId}'}는 해당 탭의 세션 ID로 바뀝니다.</p>
       <div className="grid2">
         <div className="field">
           <label htmlFor="claude-command">Claude Code 실행 명령</label>

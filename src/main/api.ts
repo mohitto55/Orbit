@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { createHash } from 'crypto'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import * as ws from '../core/workspace'
 import * as dm from '../core/domain'
 import * as sp from '../core/spec'
@@ -18,8 +20,8 @@ import { checkAnchors } from '../core/codecheck'
 import { ensureModelSection } from '../core/model'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
-import { TerminalManager, type TerminalKind } from '../core/terminal'
-import { listTerminalSessions, renameTerminalSession } from '../core/terminalSessions'
+import type { TerminalKind } from '../core/terminal'
+import { TerminalWorkspace } from '../core/terminalWorkspace'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
@@ -34,20 +36,30 @@ export function createApi(deps: ApiDeps) {
   let testBusy = false
   let testRevision = 0
   let testSession: { projectDir: string; state: vr.TestRunState } | null = null
-  let terminals: TerminalManager | null = null
-  let loadingTerminals: Promise<TerminalManager> | null = null
+  let terminals: TerminalWorkspace | null = null
+  let loadingTerminals: Promise<TerminalWorkspace> | null = null
+  const lastProjectFile = path.join(path.dirname(deps.recentFile), 'last-project.json')
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
-  async function terms(): Promise<TerminalManager> {
+  async function terms(): Promise<TerminalWorkspace> {
+    const c = need()
+    if (loadingTerminals) return loadingTerminals
     if (terminals) return terminals
-    loadingTerminals ??= import('node-pty').then(({ spawn: spawnFn }) => {
-      terminals = new TerminalManager(spawnFn, {
-        onData: (id, data) => deps.send('term-data', { id, data }),
-        onExit: (id, code) => deps.send('term-exit', { id, code })
+    loadingTerminals ??= import('node-pty').then(async ({ spawn: spawnFn }) => {
+      const settings = await ws.readSettings(c)
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const key = createHash('sha256').update(path.resolve(c.projectDir)).digest('hex')
+      const workspace = new TerminalWorkspace(path.join(path.dirname(deps.recentFile), 'terminals', `${key}.json`), c, spawnFn, {
+        onData: (id, data, sequence) => deps.send('term-data', { id, data, sequence }),
+        onExit: (id, code) => deps.send('term-exit', { id, code }),
+        onError: (message) => deps.send('term-error', message)
       })
-      return terminals
+      terminals = workspace
+      try { await workspace.restore(settings) } catch (e) { workspace.suspend(false); throw e }
+      if (ctx !== c) { workspace.suspend(); throw new Error('프로젝트가 변경되었습니다') }
+      return workspace
     }).catch((e: unknown) => {
-      loadingTerminals = null
+      if (ctx === c) { loadingTerminals = null; terminals = null }
       throw new Error(`이 환경에서는 터미널을 열 수 없습니다: ${e instanceof Error ? e.message : String(e)}`)
     })
     return loadingTerminals
@@ -73,9 +85,14 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function opened(c: ws.Ctx) {
-    if (ctx?.projectDir !== c.projectDir) terminals?.killAll()
+    if (ctx?.projectDir !== c.projectDir) {
+      terminals?.suspend()
+      terminals = null
+      loadingTerminals = null
+    }
     ctx = c
     await remember(c.projectDir)
+    writeFileSync(lastProjectFile, JSON.stringify(c.projectDir))
     deps.onProjectOpened(c)
     return { ...c, settings: await ws.readSettings(c), isGit: await ws.isGitRepo(c.projectDir) }
   }
@@ -113,9 +130,19 @@ export function createApi(deps: ApiDeps) {
     async currentProject() {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
+    async restoreProject() {
+      if (ctx) return { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) }
+      const dir: unknown = existsSync(lastProjectFile) ? JSON.parse(await fs.readFile(lastProjectFile, 'utf8')) : (await readRecent())[0]
+      if (typeof dir !== 'string') return null
+      return opened(await ws.openProject(dir))
+    },
     closeProject() {
-      terminals?.killAll()
+      terminals?.suspend()
+      terminals = null
+      loadingTerminals = null
       ctx = null
+      mkdirSync(path.dirname(lastProjectFile), { recursive: true })
+      writeFileSync(lastProjectFile, 'null')
     },
     getSettings: () => ws.readSettings(need()),
     saveSettings: (s: ws.ProjectSettings) => ws.saveSettings(need(), s),
@@ -132,7 +159,7 @@ export function createApi(deps: ApiDeps) {
         dr.listRequests(c),
         vr.loadLastRun(c)
       ])
-      const sessions = await dr.pendingSessions(c).catch(() => [])
+      const sessionCount = await dr.pendingSessionCount(c).catch(() => 0)
       const specs = await sp.listSpecs(c)
       const stale = specs.filter((s) => sp.specStaleness(s, changes).length > 0).map((s) => s.id)
       return {
@@ -142,8 +169,8 @@ export function createApi(deps: ApiDeps) {
         dueTasks: tk.dueTasks(tasks, changes),
         openTasks: tasks.filter((t) => t.status === '대기' || t.status === '진행').length,
         staleSpecs: stale,
-        driftDue: dr.isDriftDue(checks, settings, sessions.length),
-        pendingSessions: sessions.length,
+        driftDue: dr.isDriftDue(checks, settings, sessionCount),
+        pendingSessions: sessionCount,
         pendingRequests: requests.filter((r) => r.status === 'pending').length,
         lastRun: run ? { at: run.at, passed: run.passed, failed: run.failed, total: run.total } : null
       }
@@ -384,33 +411,23 @@ export function createApi(deps: ApiDeps) {
       const settings = await ws.readSettings(c)
       const manager = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
-      return manager.create(kind, c.projectDir, cols, rows, settings)
+      return manager.create(kind, settings, cols, rows)
     },
-    termSessions: () => listTerminalSessions(need()),
-    async termResume(id: string, cols?: number, rows?: number) {
-      const c = need()
-      const { sessions } = await listTerminalSessions(c)
-      const session = sessions.find((s) => s.id === id)
-      if (!session) throw new Error('저장된 대화를 찾을 수 없습니다. 원본 대화가 삭제되었는지 확인해 주세요')
-      const manager = await terms()
-      const settings = await ws.readSettings(c)
-      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
-      const running = manager.list().find((t) => t.kind === session.agent && t.sessionId === session.sessionId)
-      return running ?? manager.create(session.agent, c.projectDir, cols, rows, settings, session.sessionId, session.title)
+    async termState() {
+      return (await terms()).state()
     },
-    async termRenameSession(id: string, title: string) {
-      await renameTerminalSession(need(), id, title)
-      for (const term of terminals?.list() ?? []) {
-        if (`${term.kind}:${term.sessionId}` === id) terminals!.rename(term.id, title)
-      }
+    async termActivate(id: string) {
+      ;(await terms()).activate(id)
     },
     async termRename(id: string, title: string) {
+      return (await terms()).rename(id, title)
+    },
+    async termRestart(id: string) {
       const c = need()
-      const manager = await terms()
-      const term = manager.list().find((t) => t.id === id)
-      if (!term) throw new Error('실행 중인 터미널을 찾을 수 없습니다')
-      if (term.sessionId) await renameTerminalSession(c, `${term.kind}:${term.sessionId}`, title)
-      return manager.rename(id, title)
+      const settings = await ws.readSettings(c)
+      const workspace = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      return workspace.restart(id, settings)
     },
     async termWrite(id: string, data: string) {
       ;(await terms()).write(id, data)
@@ -422,7 +439,7 @@ export function createApi(deps: ApiDeps) {
       ;(await terms()).kill(id)
     },
     killAllTerminals() {
-      terminals?.killAll()
+      terminals?.suspend()
     }
   }
 }

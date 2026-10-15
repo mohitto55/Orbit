@@ -11,11 +11,18 @@ export interface TerminalInfo {
   title: string
   pid: number
   sessionId?: string
+  exited?: number
+}
+
+export interface TerminalSnapshot extends TerminalInfo {
+  output: string
+  sequence: number
 }
 
 export interface TerminalEvents {
-  onData: (id: string, data: string) => void
+  onData: (id: string, data: string, sequence?: number) => void
   onExit: (id: string, code: number) => void
+  onError?: (message: string) => void
 }
 
 const TITLES: Record<TerminalKind, string> = { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }
@@ -57,7 +64,7 @@ export function defaultShell(platform = process.platform): { file: string; args:
 type Spawn = typeof import('node-pty').spawn
 
 export class TerminalManager {
-  private terms = new Map<string, { pty: IPty; info: TerminalInfo }>()
+  private terms = new Map<string, { pty: IPty; info: TerminalInfo; output: string; sequence: number }>()
 
   constructor(
     private spawn: Spawn,
@@ -65,16 +72,22 @@ export class TerminalManager {
   ) {}
 
   /** 셸을 열고, Claude Code·Codex면 그 셸 안에서 실행한다 (에이전트가 끝나도 셸은 남는다). */
-  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind]): TerminalInfo {
+  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind], options: { id?: string; env?: Record<string, string>; command?: string; output?: string } = {}): TerminalInfo {
     if (!Object.hasOwn(TITLES, kind)) throw new Error('지원하지 않는 터미널 종류입니다')
-    const start = terminalCommand(kind, settings, sessionId)
+    const start = options.command ?? terminalCommand(kind, settings, sessionId)
     const { file, args } = defaultShell()
-    const pty = this.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: cleanEnv(process.env) })
-    const id = `term-${randomUUID()}`
+    const id = options.id ?? `term-${randomUUID()}`
+    const pty = this.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: { ...cleanEnv(process.env), ...options.env } })
     const info: TerminalInfo = { id, kind, title, pid: pty.pid, ...(sessionId ? { sessionId } : {}) }
-    this.terms.set(id, { pty, info })
-    pty.onData((d) => this.events.onData(id, d))
+    const entry = { pty, info, output: options.output ?? '', sequence: 0 }
+    this.terms.set(id, entry)
+    pty.onData((d) => {
+      if (this.terms.get(id) !== entry) return
+      entry.output = (entry.output + d).slice(-200000)
+      this.events.onData(id, d, ++entry.sequence)
+    })
     pty.onExit(({ exitCode }) => {
+      if (this.terms.get(id) !== entry) return
       this.terms.delete(id)
       this.events.onExit(id, exitCode)
     })
@@ -103,6 +116,11 @@ export class TerminalManager {
 
   list(): TerminalInfo[] {
     return [...this.terms.values()].map((t) => t.info)
+  }
+
+  snapshot(id: string): TerminalSnapshot | undefined {
+    const t = this.terms.get(id)
+    return t ? { ...t.info, output: t.output, sequence: t.sequence } : undefined
   }
 
   rename(id: string, title: string): TerminalInfo {
