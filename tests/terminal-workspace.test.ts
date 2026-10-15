@@ -33,3 +33,20 @@ it('대화 본문 없이 탭 고유 메타데이터만으로 대화 ID를 찾고
   await fs.writeFile(newer, JSON.stringify({ type: 'session_meta', payload: { id: 'newer-id', cwd: root, originator: 'orbit-term-mine', timestamp: '2099-01-01T00:00:00Z', source: 'cli' } }) + '\n')
   expect(await findCodexSession(root, 'term-mine', root)).toBe('newer-id')
 })
+
+it('[TE-F01-AC8] CLI 제목의 세션 식별자로 다른 originator에서 재개한 세션을 찾고 애매한 ID는 연결하지 않는다', async () => {
+  const root = await tempDir('codex-title-')
+  const dir = path.join(root, 'sessions')
+  await fs.mkdir(dir)
+  const prefix = '01a13dee-fd61-7e42-8ce3-8082f'
+  const write = async (suffix: string, source: unknown = 'cli') => {
+    const id = prefix + suffix
+    await fs.writeFile(path.join(dir, `rollout-${id}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, originator: 'codex-tui', source } }) + '\n')
+    return id
+  }
+  const id = await write('1234567')
+  await write('7654321', { subagent: 'worker' })
+  expect(await findCodexSession(root, 'another-tab', root, Date.now() + 60000, prefix)).toBe(id)
+  await write('0000000')
+  expect(await findCodexSession(root, 'another-tab', root, 0, prefix)).toBeUndefined()
+})

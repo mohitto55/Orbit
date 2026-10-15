@@ -127,4 +127,11 @@ it('일반 셸의 Enter 조합은 셸이 처리한다', async () => {
     expect(handler(new KeyboardEvent('keydown', { key: 'Enter', ...modifiers }))).toBe(true)
   }
   expect(inputWrites).toEqual([])
+  await act(async () => listeners.get('term-info')?.({ ...second, kind: 'codex', sessionId: 'manual-session' }))
+  const newline = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, cancelable: true })
+  expect(handler(newline)).toBe(false)
+  expect(newline.defaultPrevented).toBe(true)
+  expect(inputWrites).toEqual([{ id: second.id, data: '\x1b\r' }])
+  await act(async () => listeners.get('term-info')?.(second))
+  expect(handler(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }))).toBe(true)
 })

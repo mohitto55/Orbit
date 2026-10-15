@@ -23,6 +23,7 @@ export interface TerminalEvents {
   onData: (id: string, data: string, sequence?: number) => void
   onExit: (id: string, code: number) => void
   onError?: (message: string) => void
+  onChange?: (info: TerminalInfo) => void
 }
 
 const TITLES: Record<TerminalKind, string> = { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }
@@ -72,10 +73,11 @@ export class TerminalManager {
   ) {}
 
   /** 셸을 열고, Claude Code·Codex면 그 셸 안에서 실행한다 (에이전트가 끝나도 셸은 남는다). */
-  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind], options: { id?: string; env?: Record<string, string>; command?: string; output?: string } = {}): TerminalInfo {
+  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind], options: { id?: string; env?: Record<string, string>; command?: string; output?: string; init?: string } = {}): TerminalInfo {
     if (!Object.hasOwn(TITLES, kind)) throw new Error('지원하지 않는 터미널 종류입니다')
     const start = options.command ?? terminalCommand(kind, settings, sessionId)
     const { file, args } = defaultShell()
+    if (options.init && process.platform === 'win32') args.push('-NoExit', '-Command', options.init)
     const id = options.id ?? `term-${randomUUID()}`
     const pty = this.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: { ...cleanEnv(process.env), ...options.env } })
     const info: TerminalInfo = { id, kind, title, pid: pty.pid, ...(sessionId ? { sessionId } : {}) }
@@ -91,6 +93,7 @@ export class TerminalManager {
       this.terms.delete(id)
       this.events.onExit(id, exitCode)
     })
+    if (options.init && process.platform !== 'win32') pty.write(`${options.init}\r`)
     if (start) pty.write(`${start}\r`)
     return info
   }

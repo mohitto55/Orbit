@@ -23,7 +23,7 @@ vi.mock('node-pty', () => ({ spawn: vi.fn((): IPty => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); ptys.length = 0 })
 
 describe('터미널 자동 복원', () => {
-  it('[TE-F01-AC3] 재시작하면 프로젝트와 탭·이름·활성 탭·각 대화 ID를 자동 복원한다 [TE-F01-AC4]', async () => {
+  it('[TE-F01-AC3] [TE-F01-AC4] [TE-F01-AC5] [TE-F01-AC6] [WS-F02-AC5] [WS-F02-AC6] 재시작 후 프로젝트를 선택하면 탭·이름·활성 탭·각 대화 ID를 복원한다', async () => {
     const home = await tempDir('terminal-home-')
     vi.spyOn(os, 'homedir').mockReturnValue(home)
     vi.stubEnv('CODEX_HOME', path.join(home, '.codex'))
@@ -35,8 +35,8 @@ describe('터미널 자동 복원', () => {
     await api.saveSettings({ ...await api.getSettings(), codexCommand: 'my-codex --profile work', codexResumeCommand: 'my-codex resume {sessionId} --profile work' })
     const [codex, claude, closed] = await Promise.all([api.termCreate('codex', 120, 40), api.termCreate('claude'), api.termCreate('shell')])
     const claudePty = ptys.find((pty) => pty.pid === claude.pid)!
-    expect(claudePty.write).toHaveBeenCalledWith(`claude --session-id ${claude.sessionId}\r`)
-    expect(ptys.find((pty) => pty.pid === codex.pid)!.write).toHaveBeenCalledWith('my-codex --profile work --no-daemon\r')
+    expect(claudePty.write).toHaveBeenCalledWith(expect.stringContaining(`claude --session-id ${claude.sessionId} --settings `))
+    expect(ptys.find((pty) => pty.pid === codex.pid)!.write).toHaveBeenCalledWith(expect.stringContaining('my-codex --profile work --no-daemon -c '))
     const { spawn } = await import('node-pty')
     expect(spawn).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: projectDir, cols: 120, rows: 40, env: expect.objectContaining({ CODEX_INTERNAL_ORIGINATOR_OVERRIDE: `orbit-${codex.id}` }) }))
     const codexRoot = path.join(home, '.codex', 'sessions')
@@ -54,19 +54,22 @@ describe('터미널 자동 복원', () => {
     api.killAllTerminals()
 
     const restarted = createApi(deps)
-    expect((await restarted.restoreProject())?.projectDir).toBe(projectDir)
+    expect(await restarted.currentProject()).toBeNull()
+    await expect(restarted.termState()).rejects.toThrow('프로젝트가 열려 있지 않습니다')
+    expect(ptys).toHaveLength(3)
+    await restarted.openProject(projectDir)
     const state = await restarted.termState()
     expect(state.active).toBe(codex.id)
     expect(state.tabs.map((tab) => tab.title).sort()).toEqual(['결제 작업', '기획 검토'].sort())
     const resumedCodex = state.tabs.find((tab) => tab.id === codex.id)!
     const resumedClaude = state.tabs.find((tab) => tab.id === claude.id)!
     expect(resumedCodex).toMatchObject({ sessionId: 'native-codex-id', output: '이전 터미널 화면' })
-    expect(ptys.find((pty) => pty.pid === resumedCodex.pid)!.write).toHaveBeenCalledWith('my-codex resume native-codex-id --profile work --no-daemon\r')
-    expect(ptys.find((pty) => pty.pid === resumedClaude.pid)!.write).toHaveBeenCalledWith(`claude --resume ${claude.sessionId}\r`)
+    expect(ptys.find((pty) => pty.pid === resumedCodex.pid)!.write).toHaveBeenCalledWith(expect.stringContaining('my-codex resume native-codex-id --profile work --no-daemon -c '))
+    expect(ptys.find((pty) => pty.pid === resumedClaude.pid)!.write).toHaveBeenCalledWith(expect.stringContaining(`claude --resume ${claude.sessionId} --settings `))
     expect((await restarted.termState()).tabs).toHaveLength(2)
     expect(ptys).toHaveLength(5)
     restarted.closeProject()
-    expect(await createApi(deps).restoreProject()).toBeNull()
+    expect(await createApi(deps).currentProject()).toBeNull()
     await restarted.createProject(await tempDir('other-project-'))
     expect((await restarted.termState()).tabs).toEqual([])
     restarted.killAllTerminals()
@@ -76,7 +79,8 @@ describe('터미널 자동 복원', () => {
     const root = await tempDir('terminal-corrupt-')
     const deps = { send: vi.fn(), pickFolder: async () => null, recentFile: path.join(root, 'recent.json'), onProjectOpened() {} }
     const api = createApi(deps)
-    await api.createProject(await tempDir('terminal-project-'))
+    const projectDir = await tempDir('terminal-project-')
+    await api.createProject(projectDir)
     await api.termCreate('shell')
     api.killAllTerminals()
     const files = await fs.readdir(path.join(root, 'terminals'))
@@ -84,7 +88,7 @@ describe('터미널 자동 복원', () => {
     const corrupted = '{"tabs": ['
     await fs.writeFile(file, corrupted)
     const restarted = createApi(deps)
-    await restarted.restoreProject()
+    await restarted.openProject(projectDir)
     await expect(restarted.termState()).rejects.toThrow('터미널')
     restarted.killAllTerminals()
     expect(await fs.readFile(file, 'utf8')).toBe(corrupted)

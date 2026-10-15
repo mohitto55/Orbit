@@ -160,7 +160,6 @@ async function smoke(dir: string, out?: string) {
 
 app.whenReady().then(async () => {
   await theme.load()
-  if (!process.env.ORBIT_SMOKE) await api.restoreProject().catch((e: unknown) => console.error('프로젝트 복원 실패', e))
   createWindow()
   if (process.env.ORBIT_SMOKE) {
     win!.webContents.once('did-finish-load', () => void smoke(process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))

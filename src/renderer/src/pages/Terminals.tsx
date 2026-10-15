@@ -24,7 +24,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [name, setName] = useState('')
   const area = useRef<HTMLDivElement>(null)
   const mounted = useRef(false)
-  const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number }>()).current
+  const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
   const pending = useRef(new Map<string, Output[]>()).current
 
   function write(event: Output) {
@@ -46,21 +46,20 @@ export default function Terminals({ visible }: { visible: boolean }) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host)
-    xterms.set(id, { term, fit, host, sequence: snapshot.sequence })
+    xterms.set(id, { term, fit, host, sequence: snapshot.sequence, kind })
     term.write(snapshot.output)
     for (const event of pending.get(id) ?? []) write(event)
     pending.delete(id)
     term.onData((data) => void api.termWrite(id, data).catch(errorToast))
     // LF는 Windows ConPTY에서 사라진다. 두 CLI 모두 인식하는 Alt+Enter를 보낸다.
-    const newline = kind === 'shell' ? null : '\x1b\r'
     const isMac = navigator.platform.startsWith('Mac')
     term.attachCustomKeyEventHandler((event) => {
       const pasteModifier = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
       if (pasteModifier && !event.altKey && (event.code === 'KeyV' || event.key.toLowerCase() === 'v')) return false
-      if (!newline || event.key !== 'Enter' || !(event.shiftKey || event.ctrlKey) || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229) return true
+      if (xterms.get(id)?.kind === 'shell' || event.key !== 'Enter' || !(event.shiftKey || event.ctrlKey) || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229) return true
       event.preventDefault()
       event.stopPropagation()
-      if (event.type === 'keydown') void api.termWrite(id, newline).catch(errorToast)
+      if (event.type === 'keydown') void api.termWrite(id, '\x1b\r').catch(errorToast)
       return false
     })
   }
@@ -71,6 +70,11 @@ export default function Terminals({ visible }: { visible: boolean }) {
     const exits = new Map<string, number>()
     const offData = on('term-data', write)
     const offError = on('term-error', (message: string) => errorToast(new Error(message)))
+    const offInfo = on('term-info', (info: TerminalInfo) => {
+      const x = xterms.get(info.id)
+      if (x) x.kind = info.kind
+      setTabs((all) => all.map((tab) => tab.id === info.id ? { ...tab, ...info } : tab))
+    })
     const offExit = on('term-exit', ({ id, code }: { id: string; code: number }) => {
       exits.set(id, code)
       setTabs((all) => all.map((tab) => tab.id === id ? { ...tab, exited: code } : tab))
@@ -88,7 +92,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     return () => {
       alive = false
       mounted.current = false
-      offData(); offExit(); offError()
+      offData(); offExit(); offError(); offInfo()
       query.removeEventListener('change', onTheme)
       for (const x of xterms.values()) { x.term.dispose(); x.host.remove() }
       xterms.clear(); pending.clear()

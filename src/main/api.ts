@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import * as ws from '../core/workspace'
 import * as dm from '../core/domain'
 import * as sp from '../core/spec'
@@ -38,7 +37,6 @@ export function createApi(deps: ApiDeps) {
   let testSession: { projectDir: string; state: vr.TestRunState } | null = null
   let terminals: TerminalWorkspace | null = null
   let loadingTerminals: Promise<TerminalWorkspace> | null = null
-  const lastProjectFile = path.join(path.dirname(deps.recentFile), 'last-project.json')
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
@@ -52,6 +50,7 @@ export function createApi(deps: ApiDeps) {
       const workspace = new TerminalWorkspace(path.join(path.dirname(deps.recentFile), 'terminals', `${key}.json`), c, spawnFn, {
         onData: (id, data, sequence) => deps.send('term-data', { id, data, sequence }),
         onExit: (id, code) => deps.send('term-exit', { id, code }),
+        onChange: (info) => deps.send('term-info', info),
         onError: (message) => deps.send('term-error', message)
       })
       terminals = workspace
@@ -92,7 +91,6 @@ export function createApi(deps: ApiDeps) {
     }
     ctx = c
     await remember(c.projectDir)
-    writeFileSync(lastProjectFile, JSON.stringify(c.projectDir))
     deps.onProjectOpened(c)
     return { ...c, settings: await ws.readSettings(c), isGit: await ws.isGitRepo(c.projectDir) }
   }
@@ -130,19 +128,11 @@ export function createApi(deps: ApiDeps) {
     async currentProject() {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
-    async restoreProject() {
-      if (ctx) return { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) }
-      const dir: unknown = existsSync(lastProjectFile) ? JSON.parse(await fs.readFile(lastProjectFile, 'utf8')) : (await readRecent())[0]
-      if (typeof dir !== 'string') return null
-      return opened(await ws.openProject(dir))
-    },
     closeProject() {
       terminals?.suspend()
       terminals = null
       loadingTerminals = null
       ctx = null
-      mkdirSync(path.dirname(lastProjectFile), { recursive: true })
-      writeFileSync(lastProjectFile, 'null')
     },
     getSettings: () => ws.readSettings(need()),
     saveSettings: (s: ws.ProjectSettings) => ws.saveSettings(need(), s),
