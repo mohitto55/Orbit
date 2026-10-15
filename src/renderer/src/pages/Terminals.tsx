@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api, on } from '../api'
 import { Empty, Modal, errorToast } from '../ui'
 import type { TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
+import type { TerminalGroup, TerminalLayout } from '../../../core/terminalWorkspace'
 
 interface Output { id: string; data: string; sequence: number }
+type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
+const TAB_DRAG_TYPE = 'application/x-orbit-terminal'
 
 function theme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -18,14 +21,46 @@ function theme() {
 export default function Terminals({ visible }: { visible: boolean }) {
   const [tabs, setTabs] = useState<TerminalInfo[]>([])
   const [active, setActive] = useState<string | null>(null)
+  const [groups, setGroups] = useState<TerminalGroup[]>([])
+  const [activeGroup, setActiveGroup] = useState('all')
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState(false)
-  const [editing, setEditing] = useState<string | null>(null)
+  const [editing, setEditing] = useState<Editing | null>(null)
+  const [updating, setUpdating] = useState(false)
   const [name, setName] = useState('')
   const area = useRef<HTMLDivElement>(null)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
   const pending = useRef(new Map<string, Output[]>()).current
+  const busy = loading || opening || updating
+  const shownTabs = tabs.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
+  const selectedGroup = groups.find((g) => g.id === activeGroup)
+  const activeTab = tabs.find((tab) => tab.id === active)
+
+  function applyLayout(layout: TerminalLayout) {
+    if (!mounted.current) return
+    setGroups(layout.groups)
+    setActiveGroup(layout.activeGroup)
+    setTabs((current) => layout.tabs.map((tab) => {
+      const previous = current.find((t) => t.id === tab.id)
+      return previous?.exited !== undefined && tab.exited === undefined ? { ...tab, exited: previous.exited } : tab
+    }))
+    setActive(layout.active)
+  }
+
+  async function changeLayout(action: () => Promise<TerminalLayout>) {
+    if (busy) return
+    setUpdating(true)
+    try { applyLayout(await action()) }
+    catch (e) { errorToast(e) }
+    finally { if (mounted.current) setUpdating(false) }
+  }
+
+  function dropTab(event: DragEvent<HTMLButtonElement>, groupId: string | null) {
+    event.preventDefault()
+    const id = event.dataTransfer.getData(TAB_DRAG_TYPE)
+    if (tabs.some((tab) => tab.id === id)) void changeLayout(() => api.termMoveToGroup(id, groupId))
+  }
 
   function write(event: Output) {
     const x = xterms.get(event.id)
@@ -85,6 +120,8 @@ export default function Terminals({ visible }: { visible: boolean }) {
       for (const tab of state.tabs) attach(tab)
       setTabs(state.tabs.map((tab) => exits.has(tab.id) ? { ...tab, exited: exits.get(tab.id) } : tab))
       setActive(state.active)
+      setGroups(state.groups)
+      setActiveGroup(state.activeGroup)
     }).catch(errorToast).finally(() => { if (alive) setLoading(false) })
     const query = window.matchMedia('(prefers-color-scheme: dark)')
     const onTheme = () => { for (const x of xterms.values()) x.term.options.theme = theme() }
@@ -110,8 +147,11 @@ export default function Terminals({ visible }: { visible: boolean }) {
 
   useEffect(() => {
     for (const [id, x] of xterms) x.host.style.display = id === active ? 'block' : 'none'
-    if (active && visible && !editing) requestAnimationFrame(() => { fitTab(active); xterms.get(active)?.term.focus() })
-  }, [active, visible, tabs.length, editing])
+    if (active && visible && !editing) {
+      const frame = requestAnimationFrame(() => { fitTab(active); xterms.get(active)?.term.focus() })
+      return () => cancelAnimationFrame(frame)
+    }
+  }, [active, visible, tabs.length, editing, activeGroup])
 
   useEffect(() => {
     if (!area.current) return
@@ -121,7 +161,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   }, [active, visible])
 
   async function open(kind: TerminalKind) {
-    if (opening || loading) return
+    if (busy) return
     setOpening(true)
     try {
       const snapshot = await api.termCreate(kind)
@@ -134,39 +174,47 @@ export default function Terminals({ visible }: { visible: boolean }) {
   }
 
   async function close(id: string) {
+    if (busy) return
+    setUpdating(true)
     try {
-      await api.termKill(id)
+      const layout = await api.termKill(id)
+      if (!mounted.current) return
       const x = xterms.get(id)
       x?.term.dispose(); x?.host.remove()
       xterms.delete(id); pending.delete(id)
-      setTabs((all) => {
-        const rest = all.filter((tab) => tab.id !== id)
-        if (active === id) setActive(rest.at(-1)?.id ?? null)
-        return rest
-      })
+      applyLayout(layout)
     } catch (e) { errorToast(e) }
+    finally { if (mounted.current) setUpdating(false) }
   }
 
   async function rename() {
-    if (!editing) return
+    if (!editing || busy) return
+    setUpdating(true)
     try {
-      const renamed = await api.termRename(editing, name)
-      setTabs((all) => all.map((tab) => tab.id === renamed.id ? renamed : tab))
-      setEditing(null)
+      if (editing.kind === 'tab') {
+        const renamed = await api.termRename(editing.id, name)
+        if (mounted.current) setTabs((all) => all.map((tab) => tab.id === renamed.id ? renamed : tab))
+      } else {
+        applyLayout(await (editing.kind === 'new-group' ? api.termCreateGroup(name) : api.termRenameGroup(editing.id, name)))
+      }
+      if (mounted.current) setEditing(null)
     } catch (e) { errorToast(e) }
+    finally { if (mounted.current) setUpdating(false) }
   }
 
   async function restart(id: string) {
+    if (busy) return
     setOpening(true)
     try {
       const snapshot = await api.termRestart(id)
+      if (!mounted.current) return
       const old = xterms.get(id)
       old?.term.dispose(); old?.host.remove(); xterms.delete(id)
       attach(snapshot)
       setTabs((all) => all.map((tab) => tab.id === id ? snapshot : tab))
       setActive(id)
     } catch (e) { errorToast(e) }
-    finally { setOpening(false) }
+    finally { if (mounted.current) setOpening(false) }
   }
 
   return (
@@ -174,31 +222,65 @@ export default function Terminals({ visible }: { visible: boolean }) {
       <div className="row between">
         <h2>터미널</h2>
         <div className="row">
-          <button className="primary" disabled={opening || loading} onClick={() => void open('claude')}>+ Claude Code</button>
-          <button className="primary" disabled={opening || loading} onClick={() => void open('codex')}>+ Codex</button>
-          <button disabled={opening || loading} onClick={() => void open('shell')}>+ 터미널</button>
+          <button className="primary" disabled={busy} onClick={() => void open('claude')}>+ Claude Code</button>
+          <button className="primary" disabled={busy} onClick={() => void open('codex')}>+ Codex</button>
+          <button disabled={busy} onClick={() => void open('shell')}>+ 터미널</button>
         </div>
       </div>
-      {tabs.length > 0 && (
-        <div className="term-tabs">
-          {tabs.map((tab) => (
-            <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}`} onClick={() => { setActive(tab.id); void api.termActivate(tab.id).catch(errorToast) }}>
-              <span className={`dot ${tab.kind}`} />{tab.title}
-              {tab.exited !== undefined && <button className="icon" disabled={opening} aria-label={`${tab.title} 다시 연결`} title="다시 연결" onClick={(event) => { event.stopPropagation(); void restart(tab.id) }}>↻</button>}
-              <button className="icon" aria-label={`${tab.title} 이름 변경`} title="이름 변경" onClick={(event) => { event.stopPropagation(); setEditing(tab.id); setName(tab.title) }}>✎</button>
-              <button className="icon" title="닫기 (프로세스 종료)" onClick={(event) => { event.stopPropagation(); void close(tab.id) }}>×</button>
+      <div className="term-group-bar" role="region" aria-label="터미널 그룹">
+        <div className="term-groups">
+          {[{ id: 'all', title: '전체' }, { id: 'ungrouped', title: '미분류' }, ...groups].map((group) => {
+            const count = tabs.filter((tab) => group.id === 'all' || (group.id === 'ungrouped' ? !tab.groupId : tab.groupId === group.id)).length
+            return <button key={group.id} className={`term-group ${activeGroup === group.id ? 'on' : ''}`} aria-pressed={activeGroup === group.id} aria-label={`${group.title} 그룹, 터미널 ${count}개`} disabled={busy}
+              onClick={() => void changeLayout(() => api.termSelectGroup(group.id))}
+              onDragOver={(event) => { if (!busy && group.id !== 'all' && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }}
+              onDrop={(event) => { if (group.id !== 'all') dropTab(event, group.id === 'ungrouped' ? null : group.id) }}
+              title={group.id === 'all' ? '모든 터미널 보기' : '이 그룹에 탭을 끌어 놓아 이동'}>
+              <span>{group.title}</span><span className="term-group-count">{count}</span>
+            </button>
+          })}
+          <button className="small ghost" disabled={busy} onClick={() => { setEditing({ kind: 'new-group' }); setName('') }}>+ 그룹</button>
+        </div>
+        {selectedGroup && <div className="term-group-actions">
+          <button className="small ghost" disabled={busy} onClick={() => { setEditing({ kind: 'group', id: selectedGroup.id }); setName(selectedGroup.title) }}>그룹 이름 변경</button>
+          <button className="small ghost" disabled={busy} title="터미널은 종료하지 않고 미분류로 옮깁니다" onClick={() => void changeLayout(() => api.termDeleteGroup(selectedGroup.id))}>그룹 해제</button>
+        </div>}
+      </div>
+      <div className="term-group-tools">
+        <span className="small muted">탭을 그룹 위로 끌어 옮길 수 있습니다.</span>
+        {activeTab && <label className="small">선택한 터미널의 그룹
+          <select aria-label="선택한 터미널의 그룹" value={activeTab.groupId ?? ''} disabled={busy} onChange={(event) => void changeLayout(() => api.termMoveToGroup(activeTab.id, event.target.value || null))}>
+            <option value="">미분류</option>
+            {groups.map((g) => <option key={g.id} value={g.id}>{g.title}</option>)}
+          </select>
+        </label>}
+      </div>
+      {shownTabs.length > 0 && (
+        <div className="term-tabs" role="tablist" aria-label="터미널 탭">
+          {shownTabs.map((tab) => (
+            <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}`} draggable={!busy}
+              onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id); event.dataTransfer.effectAllowed = 'move' }}>
+              <button className="term-tab-select" role="tab" aria-selected={active === tab.id} disabled={busy} onClick={() => void changeLayout(() => api.termActivate(tab.id))}>
+                <span className={`dot ${tab.kind}`} /><span>{tab.title}</span>
+                {activeGroup === 'all' && tab.groupId && <span className="term-tab-group">{groups.find((g) => g.id === tab.groupId)?.title}</span>}
+              </button>
+              {tab.exited !== undefined && <button className="icon" disabled={busy} aria-label={`${tab.title} 다시 연결`} title="다시 연결" onClick={() => void restart(tab.id)}>↻</button>}
+              <button className="icon" disabled={busy} aria-label={`${tab.title} 이름 변경`} title="이름 변경" onClick={() => { setEditing({ kind: 'tab', id: tab.id }); setName(tab.title) }}>✎</button>
+              <button className="icon" disabled={busy} aria-label={`${tab.title} 닫기`} title="닫기 (프로세스 종료)" onClick={() => void close(tab.id)}>×</button>
             </div>
           ))}
         </div>
       )}
       <div ref={area} className="term-area">
-        {loading ? <Empty>터미널 세션을 복원하는 중…</Empty> : tabs.length === 0 && <Empty>프로젝트 폴더에서 Claude Code·Codex·셸을 실행합니다. 앱을 다시 열면 열어 두었던 탭과 세션이 자동으로 복원됩니다.</Empty>}
+        {loading ? <Empty>터미널 세션을 복원하는 중…</Empty> : shownTabs.length === 0 && <Empty>{activeGroup === 'all'
+          ? '프로젝트 폴더에서 Claude Code·Codex·셸을 실행합니다. 앱을 다시 열면 그룹과 탭, 세션이 자동으로 복원됩니다.'
+          : '이 그룹에는 터미널이 없습니다. 위에서 새 터미널을 열거나, 전체 보기에서 기존 탭을 이 그룹으로 옮기세요.'}</Empty>}
       </div>
       {editing && (
-        <Modal title="세션 이름 변경" onClose={() => setEditing(null)}>
+        <Modal title={editing.kind === 'tab' ? '세션 이름 변경' : editing.kind === 'new-group' ? '터미널 그룹 만들기' : '그룹 이름 변경'} onClose={() => { if (!updating) setEditing(null) }}>
           <form onSubmit={(event) => { event.preventDefault(); void rename() }}>
-            <div className="field"><label htmlFor="terminal-name">이름</label><input id="terminal-name" autoFocus maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></div>
-            <div className="row end"><button type="button" onClick={() => setEditing(null)}>취소</button><button className="primary" disabled={!name.trim()} type="submit">저장</button></div>
+            <div className="field"><label htmlFor="terminal-name">이름</label><input id="terminal-name" autoFocus maxLength={100} disabled={updating} placeholder={editing.kind === 'tab' ? undefined : '예: 서버 작업, 클라이언트 작업'} value={name} onChange={(event) => setName(event.target.value)} /></div>
+            <div className="row end"><button type="button" disabled={updating} onClick={() => setEditing(null)}>취소</button><button className="primary" disabled={!name.trim() || busy} type="submit">저장</button></div>
           </form>
         </Modal>
       )}

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
-import { TerminalManager, terminalCommand, validateSessionId, type TerminalEvents, type TerminalKind, type TerminalSnapshot } from './terminal'
+import { TerminalManager, terminalCommand, validateSessionId, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
 import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, type CliLaunch } from './terminalIntegration'
@@ -20,13 +20,25 @@ interface SavedTab {
   exited?: number
   launch?: CliLaunch
   codexPrefix?: string
+  groupId?: string
 }
 
-export interface TerminalState {
-  tabs: TerminalSnapshot[]
+export interface TerminalGroup {
+  id: string
+  title: string
+}
+
+export interface TerminalLayout {
+  tabs: TerminalInfo[]
+  groups: TerminalGroup[]
   active: string | null
+  /** all: 전체, ungrouped: 미분류, 그 외에는 그룹 ID */
+  activeGroup: string
 }
 
+export interface TerminalState extends TerminalLayout {
+  tabs: TerminalSnapshot[]
+}
 /** CLI가 알려 준 ID와 일치하는 헤더만 찾는다. 구버전 저장 상태는 탭 고유 originator로 연결한다. */
 export async function findCodexSession(projectDir: string, tabId: string, root = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), since = 0, prefix?: string): Promise<string | undefined> {
   let latest: { id: string; created: number } | undefined
@@ -48,6 +60,8 @@ export async function findCodexSession(projectDir: string, tabId: string, root =
 export class TerminalWorkspace {
   private tabs = new Map<string, SavedTab>()
   private active: string | null = null
+  private groups: TerminalGroup[] = []
+  private activeGroup = 'all'
   private manager: TerminalManager
   private timer: NodeJS.Timeout | null = null
   private stopped = false
@@ -102,14 +116,21 @@ export class TerminalWorkspace {
   async restore(settings: ProjectSettings): Promise<void> {
     if (!existsSync(this.file)) return
     if (statSync(this.file).size > 32 * 1024 * 1024) throw new Error('터미널 저장 파일이 너무 큽니다')
-    const saved = JSON.parse(readFileSync(this.file, 'utf8')) as { tabs?: SavedTab[]; active?: string }
+    const saved = JSON.parse(readFileSync(this.file, 'utf8')) as { tabs?: SavedTab[]; active?: string; groups?: TerminalGroup[]; activeGroup?: string }
     if (!Array.isArray(saved.tabs)) throw new Error('터미널 저장 파일을 읽을 수 없습니다')
+    // 그룹이 없는 구버전 저장 파일은 모든 탭을 미분류로 복원한다.
+    if (saved.groups !== undefined) {
+      if (!Array.isArray(saved.groups) || saved.groups.some((g) => !g || !/^group-[a-f0-9-]{36}$/.test(g.id) || typeof g.title !== 'string' || !g.title.trim() || g.title.length > 100) || new Set(saved.groups.map((g) => g.id)).size !== saved.groups.length) throw new Error('터미널 그룹 저장 정보가 올바르지 않습니다')
+      this.groups = saved.groups.map((g) => ({ id: g.id, title: g.title.trim() }))
+    }
     for (const tab of saved.tabs) {
       if (!/^term-[a-f0-9-]{36}$/.test(tab.id) || !['shell', 'claude', 'codex'].includes(tab.kind) || typeof tab.title !== 'string') throw new Error('터미널 저장 정보가 올바르지 않습니다')
       if (tab.sessionId) validateSessionId(tab.sessionId)
-      this.tabs.set(tab.id, { ...tab, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
+      this.tabs.set(tab.id, { ...tab, groupId: this.groups.some((g) => g.id === tab.groupId) ? tab.groupId : undefined, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
     }
+    this.activeGroup = saved.activeGroup === 'ungrouped' || this.groups.some((g) => g.id === saved.activeGroup) ? saved.activeGroup! : 'all'
     this.active = this.tabs.has(saved.active ?? '') ? saved.active! : [...this.tabs.keys()].at(-1) ?? null
+    this.reconcileActive()
     for (const tab of this.tabs.values()) this.syncLaunch(tab)
     await this.bindCodex()
     for (const tab of this.tabs.values()) {
@@ -125,7 +146,7 @@ export class TerminalWorkspace {
 
   create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30): TerminalSnapshot {
     if (!['shell', 'claude', 'codex'].includes(kind)) throw new Error('지원하지 않는 터미널 종류입니다')
-    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(kind === 'claude' ? { sessionId: randomUUID() } : {}) }
+    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(kind === 'claude' ? { sessionId: randomUUID() } : {}), ...(this.groups.some((g) => g.id === this.activeGroup) ? { groupId: this.activeGroup } : {}) }
     this.tabs.set(tab.id, tab)
     try { this.launch(tab, settings, false) } catch (e) { this.tabs.delete(tab.id); throw e }
     this.active = tab.id
@@ -203,10 +224,79 @@ export class TerminalWorkspace {
 
   private snapshot(tab: SavedTab): TerminalSnapshot {
     const live = this.manager.snapshot(tab.id)
-    return { id: tab.id, kind: tab.kind, title: tab.title, pid: live?.pid ?? 0, sessionId: tab.sessionId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
+    return { id: tab.id, kind: tab.kind, title: tab.title, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
   }
 
-  state(): TerminalState { return { tabs: [...this.tabs.values()].map((tab) => this.snapshot(tab)), active: this.active } }
+  /** 그룹 전환에는 탭 정보만 보낸다. 터미널 출력은 다시 전송하거나 재생하지 않는다. */
+  layout(): TerminalLayout {
+    return {
+      tabs: [...this.tabs.values()].map((tab) => {
+        const { output, sequence, ...info } = this.snapshot(tab)
+        return info
+      }),
+      groups: this.groups.map((g) => ({ ...g })), active: this.active, activeGroup: this.activeGroup
+    }
+  }
+
+  state(): TerminalState { return { ...this.layout(), tabs: [...this.tabs.values()].map((tab) => this.snapshot(tab)) } }
+
+  private inActiveGroup(tab: SavedTab): boolean {
+    return this.activeGroup === 'all' || (this.activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === this.activeGroup)
+  }
+
+  private reconcileActive(): void {
+    const visible = [...this.tabs.values()].filter((tab) => this.inActiveGroup(tab))
+    if (!visible.some((tab) => tab.id === this.active)) this.active = visible.at(-1)?.id ?? null
+  }
+
+  selectGroup(id: string): TerminalLayout {
+    if (id !== 'all' && id !== 'ungrouped' && !this.groups.some((g) => g.id === id)) throw new Error('터미널 그룹을 찾을 수 없습니다')
+    this.activeGroup = id
+    this.reconcileActive()
+    this.save()
+    return this.layout()
+  }
+
+  private groupTitle(title: string, except?: string): string {
+    const trimmed = title.trim()
+    if (!trimmed || trimmed.length > 100) throw new Error('그룹 이름은 1~100자로 입력해 주세요')
+    if (['전체', '미분류'].includes(trimmed) || this.groups.some((g) => g.id !== except && g.title.toLocaleLowerCase() === trimmed.toLocaleLowerCase())) throw new Error('이미 사용 중인 그룹 이름입니다')
+    return trimmed
+  }
+
+  createGroup(title: string): TerminalLayout {
+    const group = { id: `group-${randomUUID()}`, title: this.groupTitle(title) }
+    this.groups.push(group)
+    return this.selectGroup(group.id)
+  }
+
+  renameGroup(id: string, title: string): TerminalLayout {
+    const group = this.groups.find((g) => g.id === id)
+    if (!group) throw new Error('터미널 그룹을 찾을 수 없습니다')
+    group.title = this.groupTitle(title, id)
+    this.save()
+    return this.layout()
+  }
+
+  deleteGroup(id: string): TerminalLayout {
+    if (!this.groups.some((g) => g.id === id)) throw new Error('터미널 그룹을 찾을 수 없습니다')
+    this.groups = this.groups.filter((g) => g.id !== id)
+    for (const tab of this.tabs.values()) if (tab.groupId === id) delete tab.groupId
+    if (this.activeGroup === id) this.activeGroup = 'ungrouped'
+    this.reconcileActive()
+    this.save()
+    return this.layout()
+  }
+
+  moveToGroup(id: string, groupId: string | null): TerminalLayout {
+    const tab = this.tabs.get(id)
+    if (!tab) throw new Error('터미널을 찾을 수 없습니다')
+    if (groupId !== null && !this.groups.some((g) => g.id === groupId)) throw new Error('터미널 그룹을 찾을 수 없습니다')
+    tab.groupId = groupId ?? undefined
+    this.reconcileActive()
+    this.save()
+    return this.layout()
+  }
 
   async restart(id: string, settings: ProjectSettings): Promise<TerminalSnapshot> {
     const tab = this.tabs.get(id)
@@ -215,8 +305,7 @@ export class TerminalWorkspace {
     this.manager.kill(id)
     delete tab.exited
     this.launch(tab, settings, true)
-    this.active = id
-    this.save()
+    this.activate(id)
     return this.snapshot(tab)
   }
 
@@ -227,7 +316,9 @@ export class TerminalWorkspace {
     if (tab && cols > 0 && rows > 0) { tab.cols = cols; tab.rows = rows }
   }
   activate(id: string): void {
-    if (!this.tabs.has(id)) return
+    const tab = this.tabs.get(id)
+    if (!tab) return
+    if (!this.inActiveGroup(tab)) this.activeGroup = tab.groupId ?? 'ungrouped'
     this.active = id
     this.save()
   }
@@ -243,7 +334,7 @@ export class TerminalWorkspace {
     this.tabs.delete(id)
     this.titleBuffers.delete(id)
     this.manager.kill(id)
-    if (this.active === id) this.active = [...this.tabs.keys()].at(-1) ?? null
+    this.reconcileActive()
     this.save()
   }
   suspend(persist = true): void {
@@ -261,7 +352,7 @@ export class TerminalWorkspace {
   private save(): void {
     mkdirSync(path.dirname(this.file), { recursive: true })
     const pending = `${this.file}.tmp`
-    writeFileSync(pending, JSON.stringify({ tabs: [...this.tabs.values()], active: this.active }))
+    writeFileSync(pending, JSON.stringify({ tabs: [...this.tabs.values()], groups: this.groups, active: this.active, activeGroup: this.activeGroup }))
     renameSync(pending, this.file)
   }
 }

@@ -407,8 +407,15 @@ export function createApi(deps: ApiDeps) {
       return (await terms()).state()
     },
     async termActivate(id: string) {
-      ;(await terms()).activate(id)
+      const workspace = await terms()
+      workspace.activate(id)
+      return workspace.layout()
     },
+    async termSelectGroup(id: string) { return (await terms()).selectGroup(id) },
+    async termCreateGroup(title: string) { return (await terms()).createGroup(title) },
+    async termRenameGroup(id: string, title: string) { return (await terms()).renameGroup(id, title) },
+    async termDeleteGroup(id: string) { return (await terms()).deleteGroup(id) },
+    async termMoveToGroup(id: string, groupId: string | null) { return (await terms()).moveToGroup(id, groupId) },
     async termRename(id: string, title: string) {
       return (await terms()).rename(id, title)
     },
@@ -426,7 +433,9 @@ export function createApi(deps: ApiDeps) {
       ;(await terms()).resize(id, cols, rows)
     },
     async termKill(id: string) {
-      ;(await terms()).kill(id)
+      const workspace = await terms()
+      workspace.kill(id)
+      return workspace.layout()
     },
     killAllTerminals() {
       terminals?.suspend()

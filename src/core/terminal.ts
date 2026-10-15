@@ -12,6 +12,7 @@ export interface TerminalInfo {
   pid: number
   sessionId?: string
   exited?: number
+  groupId?: string
 }
 
 export interface TerminalSnapshot extends TerminalInfo {

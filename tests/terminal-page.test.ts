@@ -4,12 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Terminals from '../src/renderer/src/pages/Terminals'
 import type { TerminalSnapshot } from '../src/core/terminal'
+import type { TerminalGroup } from '../src/core/terminalWorkspace'
 
 const writes = vi.hoisted(() => [] as string[])
 const keyHandlers = vi.hoisted(() => [] as ((event: KeyboardEvent) => boolean)[])
+const disposals = vi.hoisted(() => vi.fn())
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   cols = 100; rows = 30; options = {}
-  loadAddon() {} open() {} dispose() {} focus() {} onData() {}
+  loadAddon() {} open() {} dispose() { disposals() } focus() {} onData() {}
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { keyHandlers.push(handler) }
   write(data: string) { writes.push(data) }
 } }))
@@ -21,9 +23,17 @@ let calls: string[]
 let inputWrites: { id: string; data: string }[]
 let saved: TerminalSnapshot[]
 let active: string | null
+let groups: TerminalGroup[]
+let activeGroup: string
 let listeners: Map<string, (data: unknown) => void>
 const first: TerminalSnapshot = { id: 'term-one', kind: 'codex', title: '결제 작업', pid: 1, sessionId: 'saved-id', output: '이전 출력', sequence: 1 }
 const second: TerminalSnapshot = { id: 'term-two', kind: 'shell', title: '확인용 셸', pid: 2, output: '셸 출력', sequence: 0 }
+
+function layout() { return { tabs: structuredClone(saved), groups: structuredClone(groups), active, activeGroup } }
+function reconcile() {
+  const visible = saved.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
+  if (!visible.some((tab) => tab.id === active)) active = visible.at(-1)?.id ?? null
+}
 
 async function mount() {
   root = createRoot(host)
@@ -34,24 +44,46 @@ async function click(label: string) {
   if (!button) throw new Error(`버튼 없음: ${label}`)
   await act(async () => button.click())
 }
+async function saveName(value: string) {
+  const input = host.querySelector<HTMLInputElement>('#terminal-name')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+}
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   host = document.createElement('div'); document.body.appendChild(host)
   saved = [{ ...first }, { ...second }]; active = first.id; calls = []; inputWrites = []; listeners = new Map(); writes.length = 0; keyHandlers.length = 0
+  groups = []; activeGroup = 'all'; disposals.mockClear()
   window.orbit = {
     async invoke(name: string, ...args: unknown[]) {
       calls.push(name)
       if (name === 'termState') {
-        const state = { tabs: structuredClone(saved), active }
+        const state = layout()
         listeners.get('term-data')?.({ id: first.id, data: '이전 출력', sequence: 1 })
         listeners.get('term-data')?.({ id: first.id, data: '새 출력', sequence: 2 })
         return state
       }
-      if (name === 'termActivate') { active = String(args[0]); return }
-      if (name === 'termKill') { saved = saved.filter((tab) => tab.id !== args[0]); active = saved.at(-1)?.id ?? null; return }
+      if (name === 'termActivate') { active = String(args[0]); return layout() }
+      if (name === 'termKill') { saved = saved.filter((tab) => tab.id !== args[0]); reconcile(); return layout() }
       if (name === 'termRename') { const tab = saved.find((tab) => tab.id === args[0])!; tab.title = String(args[1]); return { ...tab } }
+      if (name === 'termSelectGroup') { activeGroup = String(args[0]); reconcile(); return layout() }
+      if (name === 'termCreateGroup') { const group = { id: `group-${groups.length + 1}`, title: String(args[0]) }; groups.push(group); activeGroup = group.id; reconcile(); return layout() }
+      if (name === 'termRenameGroup') { groups.find((g) => g.id === args[0])!.title = String(args[1]); return layout() }
+      if (name === 'termMoveToGroup') { saved.find((tab) => tab.id === args[0])!.groupId = args[1] === null ? undefined : String(args[1]); reconcile(); return layout() }
+      if (name === 'termDeleteGroup') {
+        groups = groups.filter((g) => g.id !== args[0]); saved.forEach((tab) => { if (tab.groupId === args[0]) delete tab.groupId })
+        if (activeGroup === args[0]) activeGroup = 'ungrouped'
+        reconcile(); return layout()
+      }
+      if (name === 'termCreate') {
+        const tab: TerminalSnapshot = { ...second, id: 'term-new', groupId: groups.some((g) => g.id === activeGroup) ? activeGroup : undefined }
+        saved.push(tab); active = tab.id; return { ...tab }
+      }
       if (name === 'termResize') return
       if (name === 'termWrite') { inputWrites.push({ id: String(args[0]), data: String(args[1]) }); return }
       throw new Error(`지원하지 않는 API: ${name}`)
@@ -72,7 +104,7 @@ it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원
   expect(calls.every((name) => name === 'termState' || name === 'termResize')).toBe(true)
   expect(writes.filter((text) => text === '이전 출력')).toHaveLength(1)
   expect(writes.filter((text) => text === '새 출력')).toHaveLength(1)
-  await act(async () => host.querySelectorAll<HTMLElement>('.term-tab')[1].click())
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.term-tab-select')[1].click())
   expect(active).toBe(second.id)
   await act(async () => root.unmount())
   await mount()
@@ -82,18 +114,87 @@ it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원
 it('[TE-F01-AC4] 탭 이름 변경과 닫기를 저장하고 재마운트에도 반영한다', async () => {
   await mount()
   await click('결제 작업 이름 변경')
-  const input = host.querySelector<HTMLInputElement>('#terminal-name')!
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '서버 작업')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await saveName('서버 작업')
   expect(saved[0].title).toBe('서버 작업')
   await click('×')
   await act(async () => root.unmount())
   await mount()
   expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
   expect(host.querySelector('.term-tab')!.textContent).toContain('확인용 셸')
+})
+
+it('[TE-F02-AC1] [TE-F02-AC2] [TE-F02-AC5] 그룹 생성·선택 이동·이름 변경·해제 중에도 모든 터미널과 숨긴 출력을 유지한다', async () => {
+  await mount()
+  await click('+ 그룹')
+  await saveName('서버 작업')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(0)
+  expect(host.textContent).toContain('이 그룹에는 터미널이 없습니다')
+  await click('전체 그룹, 터미널 2개')
+  await click('결제 작업')
+  await act(async () => {
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="선택한 터미널의 그룹"]')!
+    select.value = groups[0].id
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(host.querySelector('.term-tab-group')!.textContent).toBe('서버 작업')
+  await click('서버 작업 그룹, 터미널 1개')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
+  expect(host.querySelector('.term-tab.on')!.textContent).toContain('결제 작업')
+  await act(async () => listeners.get('term-data')?.({ id: second.id, data: '숨긴 셸의 새 출력', sequence: 1 }))
+  expect(writes).toContain('숨긴 셸의 새 출력')
+  await click('그룹 이름 변경')
+  await saveName('백엔드')
+  expect(host.querySelector('.term-group.on')!.textContent).toContain('백엔드')
+  expect(saved[0].title).toBe(first.title)
+  await click('그룹 해제')
+  expect(host.querySelector('.term-group.on')!.textContent).toContain('미분류')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  expect(host.querySelectorAll('.term-host')).toHaveLength(2)
+  expect(keyHandlers).toHaveLength(2)
+  expect(disposals).not.toHaveBeenCalled()
+  expect(calls).not.toContain('termKill')
+  expect(calls).not.toContain('termRestart')
+  expect(calls).not.toContain('termCreate')
+  expect(writes.filter((text) => text === '이전 출력')).toHaveLength(1)
+})
+
+it('[TE-F02-AC2] [TE-F02-AC3] [TE-F02-AC4] 선택한 그룹에서 새 탭을 열고 드래그로 옮기며 다시 마운트해도 그룹을 복원한다', async () => {
+  groups = [{ id: 'group-server', title: '서버' }, { id: 'group-client', title: '클라이언트' }]
+  saved[0].groupId = groups[0].id; saved[1].groupId = groups[1].id; activeGroup = groups[0].id
+  await mount()
+  expect(host.querySelector('.term-group.on')!.textContent).toContain('서버')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
+  await click('+ 터미널')
+  expect(saved.find((tab) => tab.id === 'term-new')!.groupId).toBe(groups[0].id)
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  const transfer = new DataTransfer()
+  // happy-dom의 DragEvent 생성자는 dataTransfer 초기값을 반영하지 않는다.
+  const dragEvent = (type: string) => {
+    const event = new DragEvent(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: transfer })
+    return event
+  }
+  await act(async () => {
+    host.querySelector('.term-tab')!.dispatchEvent(dragEvent('dragstart'))
+    const target = host.querySelector('[aria-label="클라이언트 그룹, 터미널 1개"]')!
+    const over = dragEvent('dragover')
+    target.dispatchEvent(over)
+    expect(over.defaultPrevented).toBe(true)
+    target.dispatchEvent(dragEvent('drop'))
+  })
+  expect(saved[0].groupId).toBe(groups[1].id)
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
+  await click('클라이언트 그룹, 터미널 2개')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  expect(host.querySelectorAll('.term-host')).toHaveLength(3)
+  expect(disposals).not.toHaveBeenCalled()
+  expect(keyHandlers).toHaveLength(3)
+  await act(async () => root.unmount())
+  await mount()
+  expect(host.querySelector('.term-group.on')!.textContent).toContain('클라이언트')
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  expect(host.querySelector('.term-tab.on')!.textContent).toContain('확인용 셸')
+  expect(calls).not.toContain('termKill')
 })
 
 it.each(['codex', 'claude'] as const)('%s에서 Ctrl/Shift+Enter는 한 번만 줄바꿈하고 일반 Enter·붙여넣기·한글 조합은 가로채지 않는다', async (kind) => {
