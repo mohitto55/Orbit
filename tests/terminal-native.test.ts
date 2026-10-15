@@ -6,7 +6,7 @@ import { TerminalWorkspace } from '../src/core/terminalWorkspace'
 import { tempDir } from './helpers'
 
 // 설치된 Codex의 실제 TUI 연결 확인. 모델 요청은 닫힌 로컬 포트로만 보낸다.
-it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('실제 Codex를 종료한 뒤 같은 세션 ID와 탭으로 자동 재접속한다', async () => {
+it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('실제 Codex에서 두 줄 입력을 보존하고 종료한 뒤 같은 세션과 탭으로 자동 재접속한다', async () => {
   const root = await tempDir('orbit-native-')
   const cwd = await fs.realpath(process.cwd())
   const codexHome = path.join(root, 'codex')
@@ -33,7 +33,18 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('실제 Codex를 종료한 뒤 같은
     await vi.waitFor(() => expect(output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).toContain('orbit-probe'), { timeout: 20000 })
     workspace.write(tab.id, 'OrbitNativeRestoreProbe')
     await new Promise((resolve) => setTimeout(resolve, 1000))
+    // 화면의 Ctrl/Shift+Enter와 같은 신호. LF는 Windows에서 줄바꿈이 소실된다.
+    workspace.write(tab.id, '\x1b\r')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    workspace.write(tab.id, 'OrbitSecondLine')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const historyFile = path.join(codexHome, 'history.jsonl')
+    expect(await fs.readFile(historyFile, 'utf8').catch(() => '')).toBe('')
     workspace.write(tab.id, '\r')
+    await vi.waitFor(async () => {
+      const history = (await fs.readFile(historyFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { text: string })
+      expect(history.map((entry) => entry.text)).toEqual(['OrbitNativeRestoreProbe\nOrbitSecondLine'])
+    }, { timeout: 15000 })
     await vi.waitFor(() => expect(workspace.state().tabs[0].sessionId).toBeTruthy(), { timeout: 15000 })
     const sessionId = workspace.state().tabs[0].sessionId
     workspace.rename(tab.id, 'Native restore')

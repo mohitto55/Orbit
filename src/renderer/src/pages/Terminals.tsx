@@ -51,12 +51,15 @@ export default function Terminals({ visible }: { visible: boolean }) {
     for (const event of pending.get(id) ?? []) write(event)
     pending.delete(id)
     term.onData((data) => void api.termWrite(id, data).catch(errorToast))
-    const newline = kind === 'claude' ? '\x1b\r' : kind === 'codex' ? '\n' : null
+    // LF는 Windows ConPTY에서 사라진다. 두 CLI 모두 인식하는 Alt+Enter를 보낸다.
+    const newline = kind === 'shell' ? null : '\x1b\r'
     const isMac = navigator.platform.startsWith('Mac')
     term.attachCustomKeyEventHandler((event) => {
       const pasteModifier = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
       if (pasteModifier && !event.altKey && (event.code === 'KeyV' || event.key.toLowerCase() === 'v')) return false
-      if (!newline || event.key !== 'Enter' || !(event.shiftKey || event.ctrlKey) || event.altKey || event.metaKey) return true
+      if (!newline || event.key !== 'Enter' || !(event.shiftKey || event.ctrlKey) || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229) return true
+      event.preventDefault()
+      event.stopPropagation()
       if (event.type === 'keydown') void api.termWrite(id, newline).catch(errorToast)
       return false
     })
