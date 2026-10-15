@@ -31,6 +31,10 @@ export interface ProjectSettings {
   githubRepo?: string
   testCommand?: string
   junitPath?: string
+  claudeCommand?: string
+  codexCommand?: string
+  claudeResumeCommand?: string
+  codexResumeCommand?: string
 }
 
 const DEFAULTS: Omit<ProjectSettings, 'name'> = {
@@ -96,6 +100,9 @@ export async function readSettings(ctx: Ctx): Promise<ProjectSettings> {
 }
 
 export async function saveSettings(ctx: Ctx, settings: ProjectSettings): Promise<void> {
+  for (const command of [settings.claudeResumeCommand, settings.codexResumeCommand]) {
+    if (command?.trim() && !command.includes('{sessionId}')) throw new Error('대화 재개 명령에는 {sessionId}가 필요합니다')
+  }
   const file = path.join(ctx.dataRoot, 'project.md')
   const content = (await exists(file)) ? (await readMd(file)).content : `# ${settings.name}\n`
   await writeMd(file, settings, content)

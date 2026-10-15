@@ -77,6 +77,26 @@ export default function Settings({ onSaved }: PageProps & { onSaved: () => void 
         <label>GitHub 저장소 (owner/repo)</label>
         <input value={s.githubRepo ?? ''} onChange={(e) => set({ githubRepo: e.target.value })} />
       </div>
+      <h3 className="settings-section">터미널</h3>
+      <p className="muted small">이 프로젝트에서 사용할 명령입니다. 비워 두면 기본 명령을 사용합니다. 재개 명령의 {'{sessionId}'}는 선택한 대화 ID로 바뀝니다.</p>
+      <div className="grid2">
+        <div className="field">
+          <label htmlFor="claude-command">Claude Code 실행 명령</label>
+          <input id="claude-command" className="mono" value={s.claudeCommand ?? ''} onChange={(e) => set({ claudeCommand: e.target.value })} placeholder="claude" />
+        </div>
+        <div className="field">
+          <label htmlFor="codex-command">Codex 실행 명령</label>
+          <input id="codex-command" className="mono" value={s.codexCommand ?? ''} onChange={(e) => set({ codexCommand: e.target.value })} placeholder="codex" />
+        </div>
+        <div className="field">
+          <label htmlFor="claude-resume-command">Claude Code 대화 재개 명령</label>
+          <input id="claude-resume-command" className="mono" value={s.claudeResumeCommand ?? ''} onChange={(e) => set({ claudeResumeCommand: e.target.value })} placeholder={`${s.claudeCommand?.trim() || 'claude'} --resume {sessionId}`} />
+        </div>
+        <div className="field">
+          <label htmlFor="codex-resume-command">Codex 대화 재개 명령</label>
+          <input id="codex-resume-command" className="mono" value={s.codexResumeCommand ?? ''} onChange={(e) => set({ codexResumeCommand: e.target.value })} placeholder={`${s.codexCommand?.trim() || 'codex'} resume {sessionId}`} />
+        </div>
+      </div>
       <div className="row end">
         <button
           className="primary"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node-pty'
-import { TerminalManager, cleanEnv } from '../src/core/terminal'
+import { TerminalManager, cleanEnv, terminalCommand } from '../src/core/terminal'
 import { tempDir } from './helpers'
 
 function setup() {
@@ -22,6 +22,16 @@ const waitFor = async (cond: () => boolean, ms = 15000) => {
 }
 
 describe('연동 · 터미널', () => {
+  it('[TE-F01-AC2] 새 실행·재개에 사용자 명령과 정확한 대화 ID를 사용한다 [TE-F01-AC3]', () => {
+    expect(terminalCommand('shell')).toBeNull()
+    expect(terminalCommand('claude')).toBe('claude')
+    expect(terminalCommand('codex', { codexCommand: 'codex --profile work' })).toBe('codex --profile work')
+    expect(terminalCommand('codex', { codexCommand: 'codex --profile work' }, 'saved-id')).toBe('codex --profile work resume saved-id')
+    expect(terminalCommand('claude', { claudeCommand: 'claude --model sonnet' }, 'saved-id')).toBe('claude --model sonnet --resume saved-id')
+    expect(terminalCommand('codex', { codexResumeCommand: 'wrapper resume {sessionId} --flag' }, 'saved-id')).toBe('wrapper resume saved-id --flag')
+    expect(() => terminalCommand('codex', {}, 'id; echo bad')).toThrow('ID')
+    expect(() => terminalCommand('claude', { claudeResumeCommand: 'claude --continue' }, 'saved-id')).toThrow('{sessionId}')
+  })
   it('[IN-F09-AC1] 프로젝트 폴더에서 셸을 열고 입력을 실행한다', async () => {
     const { mgr, out } = setup()
     const cwd = await tempDir('term-')

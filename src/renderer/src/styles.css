@@ -430,6 +430,8 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 .dot.claude { background: #d97757; }
 .dot.codex { background: #10a37f; }
 .dot.shell { background: var(--muted); }
+.terminal-history td:first-child { max-width: 420px; overflow-wrap: anywhere; }
+.terminal-history td:last-child { min-width: 160px; }
 
 /* 보기 모양 그대로 고치기: 블록마다 고칠 수 있는 영역 */
 .md-editor-label { margin-bottom: 6px; }

@@ -19,6 +19,7 @@ import { ensureModelSection } from '../core/model'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import { TerminalManager, type TerminalKind } from '../core/terminal'
+import { listTerminalSessions, renameTerminalSession } from '../core/terminalSessions'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
@@ -34,21 +35,22 @@ export function createApi(deps: ApiDeps) {
   let testRevision = 0
   let testSession: { projectDir: string; state: vr.TestRunState } | null = null
   let terminals: TerminalManager | null = null
+  let loadingTerminals: Promise<TerminalManager> | null = null
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalManager> {
     if (terminals) return terminals
-    let spawnFn
-    try {
-      spawnFn = (await import('node-pty')).spawn
-    } catch (e) {
+    loadingTerminals ??= import('node-pty').then(({ spawn: spawnFn }) => {
+      terminals = new TerminalManager(spawnFn, {
+        onData: (id, data) => deps.send('term-data', { id, data }),
+        onExit: (id, code) => deps.send('term-exit', { id, code })
+      })
+      return terminals
+    }).catch((e: unknown) => {
+      loadingTerminals = null
       throw new Error(`이 환경에서는 터미널을 열 수 없습니다: ${e instanceof Error ? e.message : String(e)}`)
-    }
-    terminals = new TerminalManager(spawnFn, {
-      onData: (id, data) => deps.send('term-data', { id, data }),
-      onExit: (id, code) => deps.send('term-exit', { id, code })
     })
-    return terminals
+    return loadingTerminals
   }
 
   const need = (): ws.Ctx => {
@@ -71,6 +73,7 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function opened(c: ws.Ctx) {
+    if (ctx?.projectDir !== c.projectDir) terminals?.killAll()
     ctx = c
     await remember(c.projectDir)
     deps.onProjectOpened(c)
@@ -377,7 +380,37 @@ export function createApi(deps: ApiDeps) {
 
     // 연동: 내장 터미널 (IN-F09)
     async termCreate(kind: TerminalKind, cols?: number, rows?: number) {
-      return (await terms()).create(kind, need().projectDir, cols, rows)
+      const c = need()
+      const settings = await ws.readSettings(c)
+      const manager = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      return manager.create(kind, c.projectDir, cols, rows, settings)
+    },
+    termSessions: () => listTerminalSessions(need()),
+    async termResume(id: string, cols?: number, rows?: number) {
+      const c = need()
+      const { sessions } = await listTerminalSessions(c)
+      const session = sessions.find((s) => s.id === id)
+      if (!session) throw new Error('저장된 대화를 찾을 수 없습니다. 원본 대화가 삭제되었는지 확인해 주세요')
+      const manager = await terms()
+      const settings = await ws.readSettings(c)
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const running = manager.list().find((t) => t.kind === session.agent && t.sessionId === session.sessionId)
+      return running ?? manager.create(session.agent, c.projectDir, cols, rows, settings, session.sessionId, session.title)
+    },
+    async termRenameSession(id: string, title: string) {
+      await renameTerminalSession(need(), id, title)
+      for (const term of terminals?.list() ?? []) {
+        if (`${term.kind}:${term.sessionId}` === id) terminals!.rename(term.id, title)
+      }
+    },
+    async termRename(id: string, title: string) {
+      const c = need()
+      const manager = await terms()
+      const term = manager.list().find((t) => t.id === id)
+      if (!term) throw new Error('실행 중인 터미널을 찾을 수 없습니다')
+      if (term.sessionId) await renameTerminalSession(c, `${term.kind}:${term.sessionId}`, title)
+      return manager.rename(id, title)
     },
     async termWrite(id: string, data: string) {
       ;(await terms()).write(id, data)
