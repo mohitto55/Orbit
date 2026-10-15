@@ -123,7 +123,7 @@ export default function App() {
         <div className="side-foot">
           <UpdateButton />
           <button className="ghost" onClick={() => setCapture(true)} title="Ctrl+Shift+Space">
-            + 빠른 기록
+            + 할 일 추가
           </button>
           <button
             className="ghost"
@@ -171,7 +171,7 @@ function QuickCapture({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     }
   }
   return (
-    <Modal title="빠른 기록" onClose={onClose}>
+    <Modal title="할 일 추가" onClose={onClose}>
       <input
         autoFocus
         value={text}

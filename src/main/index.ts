@@ -166,7 +166,7 @@ app.whenReady().then(async () => {
     win!.webContents.once('did-finish-load', () => void smoke(process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))
     return
   }
-  // TK-F01: 어디서나 빠른 기록
+  // TK-F01: 어디서나 할 일 추가
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!win) return
     if (win.isMinimized()) win.restore()

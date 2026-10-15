@@ -85,7 +85,7 @@ docs/
 | DR | [도메인 점검](domains/drift/domain.md) | 도메인 | Core | AI가 지난 점검 이후 작업과 도메인을 비교해 제안, 사람이 판단 (바깥 → 도메인) | P3 | `drift` |
 | TK | [할 일](domains/task/domain.md) | - | Core | Inbox, Task, 시기, 리마인드 | P2 | `task` |
 | KN | [지식](domains/knowledge/domain.md) | - | Supporting | 결정, 프로젝트 용어, 컨벤션, 교훈 | - | `knowledge` |
-| PL | [앱 기반](domains/platform/domain.md) | - | Supporting | 화면 이동, 알림, 빠른 기록 단축키, 자동 업데이트 | - | `platform` |
+| PL | [앱 기반](domains/platform/domain.md) | - | Supporting | 화면 이동, 알림, 할 일 추가 단축키, 자동 업데이트 | - | `platform` |
 | WS | [프로젝트](domains/workspace/domain.md) | 앱 기반 | Supporting | 저장소, 데이터 폴더, 설정, 외부 변경 감지 | - | `workspace` |
 | KG | [관계도](domains/knowledge-graph/domain.md) | 앱 기반 | Supporting | 문서 노드와 링크 | P1 (보조) | `knowledge-graph` |
 | IN | [연동](domains/integration/domain.md) | 앱 기반 | Generic | GitHub, 세션 기록, 테스트 실행기, 내장 터미널 | - | `integration` |

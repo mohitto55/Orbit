@@ -25,21 +25,21 @@ describe('Spec', () => {
 
   it('[SP-F02-AC2] 기능 ID는 도메인코드-F번호로 자동 부여된다', async () => {
     const { ctx, spec } = await setup()
-    await addFeature(ctx, spec.id, { name: '빠른 기록' })
+    await addFeature(ctx, spec.id, { name: '할 일 추가' })
     const s = await addFeature(ctx, spec.id, { name: '분류' })
     expect(s.features.map((f) => f.id)).toEqual(['TA-F01', 'TA-F02'])
   })
 
   it('[SP-F02-AC3] 수용 기준이 없으면 활성으로 바꿀 수 없다', async () => {
     const { ctx, spec } = await setup()
-    const s = await addFeature(ctx, spec.id, { name: '빠른 기록' })
+    const s = await addFeature(ctx, spec.id, { name: '할 일 추가' })
     const f = { ...s.features[0], status: '활성' as const }
     await expect(saveFeatures(ctx, spec.id, [f])).rejects.toThrow(/수용 기준/)
   })
 
   it('[SP-F03-AC1] AC는 기능ID-AC번호로 자동 부여된다', async () => {
     const { ctx, spec } = await setup()
-    const s = await addFeature(ctx, spec.id, { name: '빠른 기록' })
+    const s = await addFeature(ctx, spec.id, { name: '할 일 추가' })
     const f: Feature = { ...s.features[0], acs: [{ id: '', num: 0, text: '저장된다' }, { id: '', num: 0, text: '3초 안' }] }
     const { spec: out } = await saveFeatures(ctx, spec.id, [f])
     expect(out.features[0].acs.map((a) => a.id)).toEqual(['TA-F01-AC1', 'TA-F01-AC2'])

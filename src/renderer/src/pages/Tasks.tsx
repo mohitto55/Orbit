@@ -111,7 +111,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
     <div className="page">
       <h2>할 일</h2>
       <div className="row">
-        <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder="빠른 기록: 한 줄 쓰고 Enter (Ctrl+Shift+Space로 어디서나)" onKeyDown={(e) => e.key === 'Enter' && add()} />
+        <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder="할 일 추가: 한 줄 쓰고 Enter (Ctrl+Shift+Space로 어디서나)" onKeyDown={(e) => e.key === 'Enter' && add()} />
         <button onClick={add}>Inbox에 추가</button>
         <button className="primary" onClick={() => setCreating({ title: text })}>
           Task 추가
