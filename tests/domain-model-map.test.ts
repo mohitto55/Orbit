@@ -204,4 +204,20 @@ describe('도메인 지도', () => {
     expect(scope.edges.some((e) => e.label === '외부참조')).toBe(false)
     expect(scope.nodes.some((n) => n.domainId === shop.id)).toBe(false)
   })
+
+  it('객체가 있는 도메인도 명시한 도메인 관계를 유지하고 객체 관계와 섞지 않는다', async () => {
+    const { ctx, chat, room, item } = await mapSetup()
+    const domains = await listDomains(ctx)
+    const source = domains.find((d) => d.id === room.id)!
+    source.links = [{ type: '의존', to: item.id }]
+    const target = domains.find((d) => d.id === item.id)!
+    target.content += '\n## 역할\n\n[[채팅방]]에서 사용한다.\n'
+    const scope = buildDomainScopeFrom(domains, chat.id)
+    expect(scope.edges.filter((e) => e.kind === 'relation')).toHaveLength(2)
+    expect(scope.edges).toEqual(expect.arrayContaining([
+      { source: room.id, target: item.id, label: '의존', kind: 'relation' },
+      { source: item.id, target: room.id, label: '언급', kind: 'relation' }
+    ]))
+    expect(scope.edges).toContainEqual({ source: `concept:${room.id}/트리거`, target: `concept:${item.id}/지급 의도`, label: '요청', kind: 'concept' })
+  })
 })

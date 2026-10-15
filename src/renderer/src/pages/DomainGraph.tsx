@@ -3,6 +3,7 @@ import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import type { DomainScope } from '../types'
 import { useDark } from '../ui'
 import { useWheelZoom } from '../cyZoom'
+import { relationKind } from '../domainGraphView'
 
 const POS_KEY = (root: string) => `orbit.domainGraph.v3.${root}`
 
@@ -157,20 +158,26 @@ function packLayout(scope: DomainScope, aspect = 1.4): Positions {
 
 /**
  * 도메인 하나의 그래프 (그림 3.3처럼): 하위 도메인은 회색 상자, 그 안에 개념(객체)이 흰 네모로,
- * 개념끼리는 상자 안팎으로 선. 관계 이름은 고른 노드의 선에만 보인다.
+ * 개념끼리는 상자 안팎으로 선. 소유·참조의 의미는 선 모양으로 구분한다.
  */
-export default function DomainGraph({ scope, selected, highlight = [], onSelect, onOpen, relayout }: { scope: DomainScope; selected: string | null; highlight?: string[]; onSelect: (id: string | null) => void; onOpen: (id: string) => void; relayout: number }) {
+export default function DomainGraph({ scope, visibleScope = scope, showLabels = true, selected, highlight = [], onSelect, onOpen, relayout }: { scope: DomainScope; visibleScope?: DomainScope; showLabels?: boolean; selected: string | null; highlight?: string[]; onSelect: (id: string | null) => void; onOpen: (id: string) => void; relayout: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const cy = useRef<Core | null>(null)
   const dark = useDark()
   const handlers = useRef({ onSelect, onOpen })
   handlers.current = { onSelect, onOpen }
   const signature = useMemo(() => JSON.stringify(scope), [scope])
+  const visibility = useMemo(() => {
+    const edges = new Set(visibleScope.edges)
+    return JSON.stringify([...visibleScope.nodes.map((n) => n.id), ...scope.edges.flatMap((e, i) => edges.has(e) ? [`s${i}`] : [])])
+  }, [scope, visibleScope])
+  const layoutVersion = useRef(relayout)
 
   useEffect(() => {
     if (!ref.current) return
     cy.current?.destroy()
-    if (relayout) {
+    if (relayout !== layoutVersion.current) {
+      layoutVersion.current = relayout
       try {
         localStorage.removeItem(POS_KEY(scope.rootId))
       } catch {
@@ -199,7 +206,7 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
           },
           position: saved[n.id]
         })),
-        ...scope.edges.map((e, i) => ({ data: { id: `s${i}`, source: e.source, target: e.target, label: e.label, kind: e.kind } }))
+        ...scope.edges.map((e, i) => ({ data: { id: `s${i}`, source: e.source, target: e.target, label: e.label || '관련', relation: relationKind(e) } }))
       ],
       style: [
         {
@@ -256,9 +263,10 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
           selector: 'edge',
           style: {
             width: 1.3,
-            'curve-style': 'straight',
+            'curve-style': 'bezier',
             'line-color': dark ? '#8b93a1' : '#6b7280',
-            'target-arrow-shape': 'none',
+            'target-arrow-shape': 'triangle',
+            'target-arrow-color': dark ? '#8b93a1' : '#6b7280',
             label: 'data(label)',
             'text-opacity': 0,
             'font-size': 11,
@@ -271,11 +279,14 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
             'transition-duration': 200
           }
         },
-        { selector: 'edge[kind = "concept"]', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'target-arrow-color': dark ? '#8b93a1' : '#6b7280' } },
-        { selector: 'edge[kind = "relation"]', style: { width: 1.6 } },
+        { selector: 'edge[relation = "ownership"]', style: { width: 2, 'line-color': dark ? '#3fbfae' : '#0b7a70', 'source-arrow-shape': 'diamond', 'source-arrow-color': dark ? '#3fbfae' : '#0b7a70', 'target-arrow-shape': 'none' } },
+        { selector: 'edge[relation = "reference"]', style: { width: 1.8, 'line-style': 'dashed', 'line-color': dark ? '#7aa5ea' : '#3a6fc4', 'target-arrow-color': dark ? '#7aa5ea' : '#3a6fc4' } },
+        { selector: 'edge[relation = "domain"]', style: { 'line-style': 'dotted', width: 1.8 } },
+        { selector: '.filtered', style: { display: 'none' } },
+        { selector: 'edge.labeled', style: { 'text-opacity': 1 } },
         { selector: '.faded', style: { opacity: 0.18 } },
         { selector: 'node.hl', style: { 'border-width': 2.5, 'border-color': dark ? '#3fbfae' : '#0b7a70' } },
-        { selector: 'edge.near', style: { 'line-color': dark ? '#3fbfae' : '#0b7a70', 'target-arrow-color': dark ? '#3fbfae' : '#0b7a70', width: 2.2, 'text-opacity': 1 } }
+        { selector: 'edge.near', style: { width: 2.8, 'text-opacity': 1 } }
       ]
     })
     instance.on('tap', 'node', (e) => handlers.current.onSelect((e.target as NodeSingular).id()))
@@ -293,31 +304,57 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
     const fit = () => {
       if (cy.current !== instance) return
       instance.resize()
-      instance.fit(undefined, 50)
+      const visible = instance.elements().not('.filtered')
+      if (visible.empty()) return
+      instance.fit(visible, 50)
       if (instance.zoom() > 1.4) {
         instance.zoom(1.4)
-        instance.center()
+        instance.center(visible)
       }
     }
-    requestAnimationFrame(fit)
+    const frame = requestAnimationFrame(fit)
     // 옆 패널 내용이 늦게 차면서 폭이 바뀌는 경우까지 한 번 더
-    setTimeout(() => !touched && fit(), 400)
+    const timer = setTimeout(() => !touched && fit(), 400)
     // 패널 크기가 바뀌면(처음 자리 잡을 때 포함) 다시 맞춘다. 사람이 줌·이동한 뒤에는 건드리지 않는다
     let touched = false
     instance.on('scrollzoom pinchzoom', () => (touched = true))
     instance.on('dragpan', () => (touched = true))
-    ref.current.addEventListener('wheel', () => (touched = true), { passive: true })
+    const container = ref.current
+    const onWheel = () => { touched = true }
+    container.addEventListener('wheel', onWheel, { passive: true })
     const ro = new ResizeObserver(() => {
       if (!touched) fit()
       else instance.resize()
     })
     ro.observe(ref.current)
-    instance.one('destroy', () => ro.disconnect())
+    return () => {
+      cancelAnimationFrame(frame)
+      clearTimeout(timer)
+      container.removeEventListener('wheel', onWheel)
+      ro.disconnect()
+      instance.destroy()
+      if (cy.current === instance) cy.current = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, dark, relayout])
 
-  useEffect(() => () => cy.current?.destroy(), [])
   useWheelZoom(ref, cy)
+
+  // 필터는 표시만 바꾼다. 숨긴 객체의 좌표도 유지하고 함께 저장한다.
+  useEffect(() => {
+    const c = cy.current
+    if (!c) return
+    const ids = new Set<string>(JSON.parse(visibility))
+    c.batch(() => c.elements().forEach((e) => { e.toggleClass('filtered', !ids.has(e.id())) }))
+    const visible = c.elements().not('.filtered')
+    if (visible.empty()) return
+    c.fit(visible, 50)
+    if (c.zoom() > 1.4) { c.zoom(1.4); c.center(visible) }
+  }, [visibility, signature, dark, relayout])
+
+  useEffect(() => {
+    cy.current?.edges().toggleClass('labeled', showLabels)
+  }, [showLabels, signature, dark, relayout])
 
   /* 선택: 그 노드와 이어진 것만 밝게 */
   useEffect(() => {
@@ -327,21 +364,24 @@ export default function DomainGraph({ scope, selected, highlight = [], onSelect,
       c.elements().removeClass('faded near hl').unselect()
       // 기능이 쓰는 규칙이 있는 하위 도메인 강조 (그 상자와 안의 개념만 밝게)
       if (highlight.length) {
-        const boxes = c.nodes().filter((n) => highlight.includes(n.id()))
-        const keep = boxes.union(boxes.descendants())
+        const boxes = c.nodes().not('.filtered').filter((n) => highlight.includes(n.id()))
+        if (boxes.empty()) return
+        const keep = boxes.union(boxes.descendants().not('.filtered'))
         boxes.addClass('hl')
         c.elements().not(keep.union(keep.edgesWith(keep))).addClass('faded')
         return
       }
       if (!selected) return
       const n = c.getElementById(selected)
-      if (n.empty()) return
+      if (n.empty() || n.hasClass('filtered')) return
       n.select()
-      const keep = n.closedNeighborhood().union(n.descendants()).union(n.descendants().connectedEdges()).union(n.descendants().connectedEdges().connectedNodes())
+      const children = n.descendants().not('.filtered')
+      const edges = n.connectedEdges().union(children.connectedEdges()).not('.filtered')
+      const keep = n.union(children).union(edges).union(edges.connectedNodes())
       c.elements().not(keep.union(keep.nodes().ancestors())).addClass('faded')
-      n.connectedEdges().union(n.descendants().connectedEdges()).addClass('near')
+      edges.addClass('near')
     })
-  }, [selected, signature, highlight.join(',')])
+  }, [selected, signature, visibility, dark, relayout, highlight.join(',')])
 
   return <div ref={ref} className="graph domain-map" />
 }

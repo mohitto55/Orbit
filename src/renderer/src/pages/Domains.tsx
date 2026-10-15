@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import type { PageProps } from '../App'
-import type { Domain, SubdomainType } from '../types'
+import type { Domain, DomainScope, SubdomainType } from '../types'
 import { Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import SpecTable from './SpecTable'
 import { MdEditor } from '../Markdown'
@@ -11,6 +11,7 @@ import DomainGraph from './DomainGraph'
 import SpecSummary from './FeatureRollup'
 import { MdContent } from '../Markdown'
 import type { DomainMap as MapData } from '../types'
+import { DEFAULT_GRAPH_FILTERS, RELATION_LABELS, filterDomainScope, relationKind, type DomainGraphFilters, type RelationKind } from '../domainGraphView'
 
 type Tab = 'role' | 'features' | 'model' | 'spec' | 'design' | 'history'
 
@@ -46,6 +47,13 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
   const [specs] = useLoad(() => api.listSpecs(), [refreshKey])
   const [statuses] = useLoad(() => api.allAcStatuses(), [refreshKey])
   const [systemDesign, setSystemDesign] = useState(false)
+  const [graphFilters, setGraphFilters] = useState<DomainGraphFilters>(DEFAULT_GRAPH_FILTERS)
+  const [showRelationLabels, setShowRelationLabels] = useState(true)
+  const visibleScope = useMemo(() => scope ? filterDomainScope(scope, graphFilters) : null, [scope, graphFilters])
+
+  useEffect(() => {
+    if (mapSel && visibleScope && !visibleScope.nodes.some((n) => n.id === mapSel)) setMapSel(null)
+  }, [mapSel, visibleScope])
 
   // 다른 화면(관계도·유스케이스)에서 다른 도메인으로 옮겨 올 때
   useEffect(() => {
@@ -95,7 +103,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
       .sort((x, y) => (x.order ?? 99) - (y.order ?? 99) || x.title.localeCompare(y.title, 'ko'))
     const under = (id: string) => domains.filter((d) => domainLabel(domains, d.id).startsWith(domainLabel(domains, id) + ' › '))
     const root = domains.find((d) => d.id === rootId)
-    const pickedNode = scope?.nodes.find((n) => n.id === mapSel)
+    const pickedNode = visibleScope?.nodes.find((n) => n.id === mapSel)
     const changed = () => {
       reload()
       reloadMap()
@@ -122,7 +130,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             const feats = map?.nodes.filter((n) => n.id === r.id || subs.some((x) => x.id === n.id)).reduce((a, n) => a + n.features, 0) ?? 0
             const concepts = [r, ...subs].reduce((a, x) => a + x.model.length, 0)
             return (
-              <button key={r.id} className={`tree-item root-card ${rootId === r.id ? 'on' : ''}`} onClick={() => { setRootId(r.id); setMapSel(null); setHl({ feature: null, domains: [] }) }}>
+              <button key={r.id} className={`tree-item root-card ${rootId === r.id ? 'on' : ''}`} onClick={() => { setRootId(r.id); setMapSel(null); setGraphFilters(DEFAULT_GRAPH_FILTERS); setHl({ feature: null, domains: [] }) }}>
                 <span className="row between">
                   <b>
                     <span className={`dot ${r.subdomainType.toLowerCase()}`} /> {r.title}
@@ -136,7 +144,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             )
           })}
         </div>
-        {root && scope ? (
+        {root && scope?.rootId === root.id && visibleScope ? (
           <div className="pane-main map-main">
             <div className="row between">
               <div>
@@ -146,16 +154,61 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
                 </h2>
               </div>
               <div className="row">
-                <span className="muted small">회색 상자: 하위 도메인 · 흰 네모: 개념(객체) · 선: 개념 관계 (누르면 관계 이름) · 끌어서 옮길 수 있음</span>
                 <button className="small ghost" title="노드 위치를 처음부터 다시 배치합니다" onClick={() => setRelayout((n) => n + 1)}>
                   다시 배치
                 </button>
               </div>
             </div>
+            <div className="domain-graph-filters" role="region" aria-label="도메인 그래프 필터">
+              <label className="graph-search">
+                <span>객체·도메인 검색</span>
+                <input type="search" placeholder="이름으로 찾기" value={graphFilters.query} onChange={(e) => setGraphFilters({ ...graphFilters, query: e.target.value })} />
+              </label>
+              <label>
+                <span>관계 종류</span>
+                <select value={graphFilters.relation} onChange={(e) => setGraphFilters({ ...graphFilters, relation: e.target.value as DomainGraphFilters['relation'] })}>
+                  <option value="all">전체 관계 ({scope.edges.length})</option>
+                  {(Object.keys(RELATION_LABELS) as RelationKind[]).map((kind) => (
+                    <option key={kind} value={kind}>{RELATION_LABELS[kind]} ({scope.edges.filter((e) => relationKind(e) === kind).length})</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>도메인</span>
+                <select value={graphFilters.domainId} onChange={(e) => setGraphFilters({ ...graphFilters, domainId: e.target.value })}>
+                  <option value="">전체 도메인</option>
+                  {scope.nodes.filter((n) => n.kind !== 'concept').map((n) => <option key={n.id} value={n.id}>{domainLabel(domains, n.domainId)}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>연결 범위</span>
+                <select value={graphFilters.boundary} onChange={(e) => setGraphFilters({ ...graphFilters, boundary: e.target.value as DomainGraphFilters['boundary'] })}>
+                  <option value="all">전체 연결</option>
+                  <option value="internal">같은 도메인 안</option>
+                  <option value="cross">다른 도메인과 연결</option>
+                </select>
+              </label>
+              <label className="graph-label-toggle">
+                <input type="checkbox" checked={showRelationLabels} onChange={(e) => setShowRelationLabels(e.target.checked)} /> 관계 이름
+              </label>
+              <button className="small ghost" disabled={visibleScope === scope} onClick={() => setGraphFilters(DEFAULT_GRAPH_FILTERS)}>필터 초기화</button>
+            </div>
+            <div className="domain-graph-legend small">
+              {(Object.keys(RELATION_LABELS) as RelationKind[]).map((kind) => (
+                <span key={kind}><RelationMark kind={kind} />{RELATION_LABELS[kind]}</span>
+              ))}
+              <span className="muted">◆ 소유하는 쪽 · → 참조·관계 대상</span>
+            </div>
+            <div className="row between small muted">
+              <span>상자: 소속 도메인 · 네모: 객체. 검색·도메인 필터는 연결된 대상도 함께 표시합니다.</span>
+              <span role="status">객체 {visibleScope.nodes.filter((n) => n.kind === 'concept').length}/{scope.nodes.filter((n) => n.kind === 'concept').length} · 관계 {visibleScope.edges.length}/{scope.edges.length}</span>
+            </div>
             <div className="map-body">
               <div className="graph-wrap">
                 <DomainGraph
                   scope={scope}
+                  visibleScope={visibleScope}
+                  showLabels={showRelationLabels}
                   selected={mapSel}
                   highlight={hl.domains}
                   onSelect={(id) => {
@@ -168,9 +221,10 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
                   }}
                   relayout={relayout}
                 />
+                {visibleScope.nodes.length === 0 && <div className="domain-graph-empty"><Empty>조건에 맞는 객체나 관계가 없습니다.<button className="small" onClick={() => setGraphFilters(DEFAULT_GRAPH_FILTERS)}>필터 초기화</button></Empty></div>}
               </div>
               {pickedNode?.kind === 'concept' ? (
-                <ConceptSide domains={domains} domainId={pickedNode.domainId} name={pickedNode.label} onOpen={() => openDoc(pickedNode.domainId, 'model')} onSelect={setMapSel} />
+                <ConceptSide domains={domains} scope={visibleScope} nodeId={pickedNode.id} domainId={pickedNode.domainId} name={pickedNode.label} onOpen={() => openDoc(pickedNode.domainId, 'model')} onSelect={setMapSel} />
               ) : (
                 <MapSide
                   id={pickedNode ? pickedNode.domainId : root.id}
@@ -480,7 +534,7 @@ export function History({ target }: { target: string }) {
   )
 }
 
-const VIA_LABEL: Record<string, string> = { link: '직접', concept: '모델', mention: '언급' }
+const VIA_LABEL: Record<string, string> = { link: '문서 관계', concept: '모델 관계', mention: '본문 언급' }
 
 /** 지도 옆 패널: 고른 도메인의 역할, 관계, 하위까지 모은 기능 */
 function MapSide(props: {
@@ -506,11 +560,9 @@ function MapSide(props: {
     return (
       <aside className="map-side">
         <h3>도메인 지도</h3>
-        <p className="muted small">상위 도메인은 상자, 하위 도메인은 그 안에 묶여 보입니다. 선은 같은 상자 안의 하위 도메인 사이 관계입니다.</p>
+        <p className="muted small">상자는 소속 도메인, 네모는 객체입니다. 소유와 참조는 선 모양으로 구분합니다.</p>
         <ul className="small map-legend">
-          <li><span className="lg solid" /> 직접 적은 관계</li>
-          <li><span className="lg dashed" /> 모델 표의 개념 관계에서 온 것</li>
-          <li><span className="lg dotted" /> 문서 본문의 [[도메인]] 언급</li>
+          {(Object.keys(RELATION_LABELS) as RelationKind[]).map((kind) => <li key={kind}><RelationMark kind={kind} /> {RELATION_LABELS[kind]}</li>)}
         </ul>
         <p className="muted small">누르면 관계와 기능을, 두 번 누르면 문서를 엽니다. 노드를 끌어 옮긴 위치는 기억합니다.</p>
         <h4>최상위 도메인</h4>
@@ -586,7 +638,7 @@ function MapSide(props: {
       {/* 관계선은 같은 상위 안의 하위 도메인끼리만 있으므로 하위 도메인에서만 보인다 */}
       {d.parent && (
         <>
-      <h4>관계</h4>
+      <h4>전체 도메인 관계</h4>
       {out.length + inc.length === 0 && <div className="muted small">{d.parent ? '같은 상위 안의 다른 하위 도메인과 이어진 선이 없습니다' : '최상위 도메인끼리는 선을 긋지 않습니다'}</div>}
       <ul className="small map-rels">
         {out.map((e) => (
@@ -645,8 +697,15 @@ function MapSide(props: {
   )
 }
 
+function RelationMark({ kind }: { kind: RelationKind }) {
+  return <svg className={`relation-mark ${kind}`} width="36" height="12" viewBox="0 0 36 12" aria-hidden="true">
+    <path className="relation-line" d={kind === 'ownership' ? 'M 10 6 H 34' : 'M 1 6 H 32'} />
+    {kind === 'ownership' ? <path d="M 1 6 L 6 2 L 11 6 L 6 10 Z" fill="currentColor" /> : <path d="M 27 2 L 33 6 L 27 10" fill="none" stroke="currentColor" strokeWidth="1.5" />}
+  </svg>
+}
+
 /** 그래프에서 개념을 골랐을 때: 상태·행위, 불변식, 관계, 코드 */
-function ConceptSide({ domains, domainId, name, onOpen, onSelect }: { domains: Domain[]; domainId: string; name: string; onOpen: () => void; onSelect: (id: string | null) => void }) {
+function ConceptSide({ domains, scope, nodeId, domainId, name, onOpen, onSelect }: { domains: Domain[]; scope: DomainScope; nodeId: string; domainId: string; name: string; onOpen: () => void; onSelect: (id: string | null) => void }) {
   const d = domains.find((x) => x.id === domainId)
   const c = d?.model.find((m) => m.name === name)
   if (!d || !c) return <aside className="map-side" />
@@ -665,18 +724,30 @@ function ConceptSide({ domains, domainId, name, onOpen, onSelect }: { domains: D
       </h3>
       {row('상태·행위', c.behavior)}
       {row('불변식', c.invariants)}
-      {c.relations.length > 0 && (
-        <div className="concept-row">
-          <span className="muted small">관계</span>
-          <div className="chips">
-            {c.relations.map((r, i) => (
-              <span key={i} className="chip small">
-                {r.type} → {r.to}
-              </span>
-            ))}
-          </div>
+      <h4>현재 보이는 관계</h4>
+      {(['outgoing', 'incoming'] as const).map((direction) => {
+        const edges = scope.edges.filter((e) => direction === 'outgoing' ? e.source === nodeId : e.target === nodeId)
+        if (!edges.length) return null
+        return <div className="concept-connections" key={direction}>
+          <span className="small muted">{direction === 'outgoing' ? '이 객체에서 나가는 관계' : '이 객체로 들어오는 관계'}</span>
+          {edges.map((edge, i) => {
+            const target = scope.nodes.find((n) => n.id === (direction === 'outgoing' ? edge.target : edge.source))!
+            const kind = relationKind(edge)
+            return <button key={i} className="concept-connection" onClick={() => onSelect(target.id)}>
+              <span className="small"><RelationMark kind={kind} />{RELATION_LABELS[kind]} · {edge.label}</span>
+              <span>{direction === 'incoming' ? '← ' : '→ '}{target.label}</span>
+              <span className="small muted">{domainLabel(domains, target.domainId)}{target.domainId !== domainId ? ' · 다른 도메인' : ' · 같은 도메인'}</span>
+            </button>
+          })}
         </div>
-      )}
+      })}
+      {!scope.edges.some((e) => e.source === nodeId || e.target === nodeId) && <div className="small muted">현재 필터에 표시된 관계가 없습니다.</div>}
+      {c.relations.length > 0 && <details className="map-role small">
+        <summary>모델에 적힌 전체 관계 ({c.relations.length})</summary>
+        <div className="chips">
+          {c.relations.map((r, i) => <span key={i} className="chip small">{r.type} → {r.to}</span>)}
+        </div>
+      </details>}
       {c.code.length > 0 && (
         <div className="concept-row">
           <span className="muted small">코드</span>

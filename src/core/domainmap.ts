@@ -154,12 +154,12 @@ export function buildDomainScopeFrom(domains: Domain[], rootId: string, featureC
       nodes.push({ id: conceptId(d.id, c.name), label: c.name, kind: 'concept', parent: d.id, domainId: d.id, conceptKind: c.kind, code: c.code })
     }
   }
-  // 개념이 있는 상자끼리는 개념 관계로 선을 만들고, 개념이 없는 상자는 도메인 문서에 적은 관계로 선을 만든다
-  const hasConcepts = (id: string) => (domains.find((d) => d.id === id)?.model.length ?? 0) > 0
+  // 문서에 명시한 도메인 관계는 객체가 있어도 남긴다. 개념 관계를 요약한 도메인 선은 중복해서 그리지 않는다.
   const domainEdges: ScopeEdge[] = []
   for (const e of buildDomainMapFrom(domains).edges) {
-    if (hasConcepts(e.source) && hasConcepts(e.target)) continue
-    if (nodes.some((n) => n.id === e.source) && nodes.some((n) => n.id === e.target)) domainEdges.push({ source: e.source, target: e.target, label: e.types.join(', '), kind: 'relation' })
+    if (!e.via.includes('link') && !e.via.includes('mention')) continue
+    const types = domains.find((d) => d.id === e.source)!.links.filter((l) => l.to === e.target).map((l) => l.type)
+    if (nodes.some((n) => n.id === e.source) && nodes.some((n) => n.id === e.target)) domainEdges.push({ source: e.source, target: e.target, label: [...new Set(types)].join(', ') || '언급', kind: 'relation' })
   }
   const concepts = inScope.flatMap((d) => d.model.map((c) => ({ ...c, domainId: d.id, domainTitle: d.title })))
   const all = domains.flatMap((d) => d.model.map((c) => ({ ...c, domainId: d.id, domainTitle: d.title })))
