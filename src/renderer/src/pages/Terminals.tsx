@@ -6,6 +6,7 @@ import { api, on } from '../api'
 import { Empty, Modal, errorToast } from '../ui'
 import type { TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
 import type { TerminalGroup, TerminalLayout } from '../../../core/terminalWorkspace'
+import PipelineEditor from './Pipelines'
 
 interface Output { id: string; data: string; sequence: number }
 type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
@@ -28,6 +29,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [editing, setEditing] = useState<Editing | null>(null)
   const [updating, setUpdating] = useState(false)
   const [name, setName] = useState('')
+  const [view, setView] = useState<'terms' | 'graph'>('terms')
   const area = useRef<HTMLDivElement>(null)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
@@ -115,6 +117,12 @@ export default function Terminals({ visible }: { visible: boolean }) {
       setTabs((all) => all.map((tab) => tab.id === id ? { ...tab, exited: code } : tab))
       xterms.get(id)?.term.write(`\r\n\x1b[90m[프로세스 종료: ${code}]\x1b[0m\r\n`)
     })
+    // IN-F11: 작업 그래프가 연 터미널도 탭으로 붙인다
+    const offCreated = on('term-created', (snapshot: TerminalSnapshot) => {
+      attach(snapshot)
+      setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, snapshot])
+      setActive((a) => a ?? snapshot.id)
+    })
     void api.termState().then((state) => {
       if (!alive) return
       for (const tab of state.tabs) attach(tab)
@@ -129,7 +137,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     return () => {
       alive = false
       mounted.current = false
-      offData(); offExit(); offError(); offInfo()
+      offData(); offExit(); offError(); offInfo(); offCreated()
       query.removeEventListener('change', onTheme)
       for (const x of xterms.values()) { x.term.dispose(); x.host.remove() }
       xterms.clear(); pending.clear()
@@ -147,11 +155,11 @@ export default function Terminals({ visible }: { visible: boolean }) {
 
   useEffect(() => {
     for (const [id, x] of xterms) x.host.style.display = id === active ? 'block' : 'none'
-    if (active && visible && !editing) {
+    if (active && visible && !editing && view === 'terms') {
       const frame = requestAnimationFrame(() => { fitTab(active); xterms.get(active)?.term.focus() })
       return () => cancelAnimationFrame(frame)
     }
-  }, [active, visible, tabs.length, editing, activeGroup])
+  }, [active, visible, tabs.length, editing, activeGroup, view])
 
   useEffect(() => {
     if (!area.current) return
@@ -162,6 +170,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
 
   async function open(kind: TerminalKind) {
     if (busy) return
+    setView('terms')
     setOpening(true)
     try {
       const snapshot = await api.termCreate(kind)
@@ -220,13 +229,21 @@ export default function Terminals({ visible }: { visible: boolean }) {
   return (
     <div className="page terminals" style={{ display: visible ? 'flex' : 'none' }}>
       <div className="row between">
-        <h2>터미널</h2>
+        <div className="row">
+          <h2>터미널</h2>
+          <div className="seg small">
+            <button className={view === 'terms' ? 'on' : ''} onClick={() => setView('terms')}>터미널</button>
+            <button className={view === 'graph' ? 'on' : ''} onClick={() => setView('graph')}>작업 그래프</button>
+          </div>
+        </div>
         <div className="row">
           <button className="primary" disabled={busy} onClick={() => void open('claude')}>+ Claude Code</button>
           <button className="primary" disabled={busy} onClick={() => void open('codex')}>+ Codex</button>
           <button disabled={busy} onClick={() => void open('shell')}>+ 터미널</button>
         </div>
       </div>
+      {view === 'graph' && <PipelineEditor tabs={tabs} onShowTerminal={(id) => { setView('terms'); void changeLayout(() => api.termActivate(id)) }} />}
+      {view === 'terms' && <>
       <div className="term-group-bar" role="region" aria-label="터미널 그룹">
         <div className="term-groups">
           {[{ id: 'all', title: '전체' }, { id: 'ungrouped', title: '미분류' }, ...groups].map((group) => {
@@ -271,9 +288,11 @@ export default function Terminals({ visible }: { visible: boolean }) {
           ))}
         </div>
       )}
-      <div ref={area} className="term-area">
+      </>}
+      {/* 그래프를 보는 동안에도 터미널은 살아 있어야 하므로 지우지 않고 숨긴다 */}
+      <div ref={area} className="term-area" style={{ display: view === 'terms' ? undefined : 'none' }}>
         {loading ? <Empty>터미널 세션을 복원하는 중…</Empty> : shownTabs.length === 0 && <Empty>{activeGroup === 'all'
-          ? '프로젝트 폴더에서 Claude Code·Codex·셸을 실행합니다. 앱을 다시 열면 그룹과 탭, 세션이 자동으로 복원됩니다.'
+          ? '프로젝트 폴더에서 Claude Code·Codex·셸을 실행합니다. 앱을 다시 열면 그룹과 탭, 세션이 자동으로 복원됩니다. 여러 작업을 이어서 자동으로 돌리려면 위의 "작업 그래프"를 쓰세요.'
           : '이 그룹에는 터미널이 없습니다. 위에서 새 터미널을 열거나, 전체 보기에서 기존 탭을 이 그룹으로 옮기세요.'}</Empty>}
       </div>
       {editing && (

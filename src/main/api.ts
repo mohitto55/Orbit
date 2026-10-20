@@ -21,6 +21,9 @@ import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import type { TerminalKind } from '../core/terminal'
 import { TerminalWorkspace } from '../core/terminalWorkspace'
+import * as pl from '../core/pipelineStore'
+import * as sk from '../core/skills'
+import { PipelineRunner, expandPipeline, pipelineProblems, type PipeEdge, type PipeNode } from '../core/pipeline'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
@@ -49,9 +52,14 @@ export function createApi(deps: ApiDeps) {
       const key = createHash('sha256').update(path.resolve(c.projectDir)).digest('hex')
       const workspace = new TerminalWorkspace(path.join(path.dirname(deps.recentFile), 'terminals', `${key}.json`), c, spawnFn, {
         onData: (id, data, sequence) => deps.send('term-data', { id, data, sequence }),
-        onExit: (id, code) => deps.send('term-exit', { id, code }),
+        onExit: (id, code) => {
+          pipes.terminalExit(id)
+          deps.send('term-exit', { id, code })
+        },
         onChange: (info) => deps.send('term-info', info),
-        onError: (message) => deps.send('term-error', message)
+        onError: (message) => deps.send('term-error', message),
+        onAgentDone: (id) => pipes.agentDone(id),
+        onCommandDone: (id, code, output) => pipes.commandDone(id, code, output)
       })
       terminals = workspace
       try { await workspace.restore(settings) } catch (e) { workspace.suspend(false); throw e }
@@ -62,6 +70,36 @@ export function createApi(deps: ApiDeps) {
       throw new Error(`이 환경에서는 터미널을 열 수 없습니다: ${e instanceof Error ? e.message : String(e)}`)
     })
     return loadingTerminals
+  }
+
+  /** IN-F11: 터미널 작업 그래프를 실행한다. 노드가 끝나면 이어진 다음 노드를 연다. */
+  const pipes = new PipelineRunner({
+    createTerminal: async (kind, label, session) => {
+      const c = need()
+      const settings = await ws.readSettings(c)
+      const workspace = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const title = `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`.slice(0, 100)
+      const info = workspace.create(kind, settings, undefined, undefined, { title, resume: session })
+      deps.send('term-created', info)
+      return info
+    },
+    hasTerminal: (id) => !!terminals?.has(id),
+    whenReady: async (id) => (await terms()).whenReady(id),
+    submit: (id, text) => terminals?.submit(id, text),
+    runCommand: (id, command) => terminals?.runCommand(id, command),
+    completeTasks: async (ids) => {
+      for (const id of ids) await tk.updateTask(need(), id, { status: '완료' })
+    },
+    emit: (state) => deps.send('pipeline-state', state)
+  })
+
+  /** 프로젝트를 바꾸거나 닫으면 터미널이 모두 꺼지므로 돌던 작업 그래프도 멈춘다. */
+  function stopTerminals() {
+    for (const r of pipes.list()) pipes.stop(r.runId)
+    terminals?.suspend()
+    terminals = null
+    loadingTerminals = null
   }
 
   const need = (): ws.Ctx => {
@@ -84,11 +122,7 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function opened(c: ws.Ctx) {
-    if (ctx?.projectDir !== c.projectDir) {
-      terminals?.suspend()
-      terminals = null
-      loadingTerminals = null
-    }
+    if (ctx?.projectDir !== c.projectDir) stopTerminals()
     ctx = c
     await remember(c.projectDir)
     deps.onProjectOpened(c)
@@ -129,9 +163,7 @@ export function createApi(deps: ApiDeps) {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
     closeProject() {
-      terminals?.suspend()
-      terminals = null
-      loadingTerminals = null
+      stopTerminals()
       ctx = null
     },
     getSettings: () => ws.readSettings(need()),
@@ -437,6 +469,39 @@ export function createApi(deps: ApiDeps) {
       workspace.kill(id)
       return workspace.layout()
     },
+
+    // 연동: 터미널 작업 그래프 (IN-F11)
+    listPipelines: () => pl.listPipelines(need()),
+    savePipeline: (input: { id?: string; title: string; template?: boolean; nodes: PipeNode[]; edges: PipeEdge[] }) => pl.savePipeline(need(), input),
+    deletePipeline: (id: string) => pl.deletePipeline(need(), id),
+    /** DM-F02-AC4: 이 프로젝트에서 로컬에 저장된 Claude Code·Codex 세션 (최근 것부터). id는 --resume에 넘기는 세션 id */
+    async agentSessions(kind: 'claude' | 'codex') {
+      const dir = need().projectDir
+      const list = kind === 'claude' ? await dr.listClaudeSessions(dir) : await dr.listCodexSessions(dir)
+      return list
+        .map((s) => ({ id: s.id.slice(kind.length + 1), updatedAt: s.updatedAt, firstPrompt: s.firstPrompt, messages: s.messages }))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async runPipeline(id: string) {
+      const library = await pl.listPipelines(need())
+      const p = library.find((x) => x.id === id)
+      if (!p) throw new Error(`작업 그래프를 찾을 수 없습니다: ${id}`)
+      // 템플릿·할 일·스킬은 실행하는 순간의 내용을 쓴다
+      const skills = (await sk.listSkills(need().projectDir)).map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body }))
+      const env = { library, tasks: await tk.listTasks(need()), skills, specs: await sp.listSpecs(need()) }
+      const problems = pipelineProblems(p, env, { requireStart: !p.template })
+      if (problems.length) throw new Error(problems.join('\n'))
+      await terms()
+      return pipes.start({ ...p, ...expandPipeline(p, env) })
+    },
+    stopPipeline: (runId: string) => pipes.stop(runId),
+    /** 스킬 노드에서 고를 Claude Code 스킬 (프로젝트·내 홈) */
+    async listSkills() {
+      return (await sk.listSkills(need().projectDir)).map((s) => ({ ...s, id: sk.skillId(s) }))
+    },
+    pipelineRuns: () => pipes.list(),
+    /** 응답 끝 신호를 놓쳤을 때 사람이 직접 "이 노드는 끝났다"고 넘긴다 */
+    markNodeDone: (runId: string, nodeId: string) => pipes.markDone(runId, nodeId),
     killAllTerminals() {
       terminals?.suspend()
     }

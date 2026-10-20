@@ -19,3 +19,28 @@ export type { Concept, ConceptRelation } from '../../core/model'
 export type { AnchorHit } from '../../core/codecheck'
 export const CONCEPT_KINDS = ['Entity', 'Value Object', 'Aggregate', 'Event', 'Policy', 'Domain Service'] as const
 export type { DomainMap, MapNode, MapEdge, EdgeVia, DomainScope, ScopeNode, ScopeEdge } from '../../core/domainmap'
+export type { NodeKind, PipeNode, PipeEdge, Pipeline, RunState, NodeRun } from '../../core/pipeline'
+export type { InnerValue } from '../../core/pipeline'
+export {
+  KIND_NAME,
+  SHAPE_NAME,
+  TEMPLATE_INPUT,
+  TEMPLATE_SEP,
+  dataItems,
+  dataShape,
+  dataValue,
+  edgeProblem,
+  fillOutputs,
+  hasDataOut,
+  hasInput,
+  isDataEdge,
+  innerValues,
+  isData,
+  liveNodes,
+  newNodeId,
+  nodeInput,
+  nodeName,
+  pipelineProblems,
+  specTarget,
+  uniqueName
+} from '../../core/pipeline'

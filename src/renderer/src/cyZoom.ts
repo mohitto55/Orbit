@@ -12,6 +12,8 @@ export function useWheelZoom(ref: RefObject<HTMLDivElement>, cy: RefObject<Core 
     const onWheel = (e: WheelEvent) => {
       const c = cy.current
       if (!c || !ref.current || e.deltaY === 0) return
+      // 그래프 위에 띄운 노드 추가 메뉴·정보 패널 등에서 굴린 휠은 그 UI를 스크롤하게 둔다
+      if (!ref.current.contains(e.target as Node)) return
       e.preventDefault()
       e.stopPropagation()
       const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1)

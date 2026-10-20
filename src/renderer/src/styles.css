@@ -697,8 +697,49 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .rollup-caret { color: var(--muted); font-size: 11px; }
 .rollup-item.on { background: var(--accent-soft); padding-bottom: 8px; }
 .rollup-detail { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 0 12px; }
-.rollup-purpose { margin: 0 0 4px; color: var(--text-2); }
+.rollup-purpose { margin: 0 0 4px; color: var(--text-2); white-space: pre-wrap; }
 .rollup-sec { font-weight: 650; color: var(--muted); margin-top: 6px; }
-.rollup-ac { display: grid; grid-template-columns: 34px 1fr auto; gap: 6px; align-items: baseline; }
+.rollup-ac { display: grid; grid-template-columns: 34px 1fr auto; gap: 6px; align-items: baseline; white-space: pre-wrap; }
 .rollup-rule { padding-left: 4px; }
 .rollup-meta { margin-top: 6px; }
+
+/* 터미널 작업 그래프 (IN-F11) */
+.pipe-layout { flex: 1; display: grid; grid-template-columns: 190px 1fr; gap: 14px; min-height: 0; }
+.pipe-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.pipe-list .tree-item { cursor: pointer; }
+.pipe-list > button { margin-bottom: 6px; }
+.pipe-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
+.pipe-title { font-size: 15px; font-weight: 600; min-width: 220px; flex: 1; max-width: 420px; }
+.pipe-body { flex: 1; display: grid; grid-template-columns: 1fr 340px; gap: 12px; min-height: 460px; }
+.pipe-canvas { min-height: 460px; }
+.pipe-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; overflow-y: auto; }
+.pipe-panel h4 { margin: 0 0 8px; }
+.pipe-panel p { margin: 0 0 8px; }
+.pipe-panel textarea { min-height: 140px; }
+@media (max-width: 1100px) { .pipe-body { grid-template-columns: 1fr; } }
+.pipe-list-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; color: var(--muted); margin: 10px 4px 2px; }
+.pipe-list-head:first-child { margin-top: 0; }
+.pipe-list-head button { padding: 0 8px; font-size: 15px; line-height: 1.4; }
+.pipe-palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pipe-palette button, .pipe-palette select { padding: 3px 10px; font-size: 12.5px; }
+.pipe-palette .dot { margin-right: 2px; }
+.pipe-node-name { font-size: 14px; font-weight: 600; width: 100%; margin: 0 0 2px; }
+.pipe-inner { display: flex; flex-direction: column; align-items: stretch; gap: 2px; max-height: 220px; overflow: auto; }
+.pipe-inner button { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipe-preview { margin: 8px 0; }
+.pipe-preview pre { white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow: auto; background: var(--sunken); border-radius: 6px; padding: 8px; margin: 4px 0 0; }
+.pipe-runs { margin: 6px 0 10px; }
+.pipe-canvas { position: relative; }
+.pipe-menu { position: absolute; z-index: 5; width: 260px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-float); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.pipe-menu input { width: 100%; }
+.pipe-menu-list { max-height: 260px; overflow-y: auto; }
+.pipe-menu-group { font-size: 11px; font-weight: 600; color: var(--muted); margin: 6px 4px 2px; }
+.pipe-menu-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.pipe-menu-item.on { background: var(--line-soft); }
+.pipe-menu-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.pipe-problems { margin: 0; padding: 8px 12px; }
+.pipe-problems li { cursor: pointer; }
+.pipe-problems li:hover { text-decoration: underline; }
+.pipe-list-items { display: flex; flex-direction: column; gap: 4px; margin: 0 0 6px; }
+.pipe-list-items textarea { flex: 1; min-height: 0 !important; resize: vertical; }
+ol.pipe-list-items { padding-left: 20px; display: block; }

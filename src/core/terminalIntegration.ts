@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { TerminalKind } from './terminal'
@@ -157,24 +157,53 @@ function claude
 end
 `
 
+const slash = (p: string) => p.replace(/\\/g, '/')
+const signalFile = (dir: string, signal: AgentSignal) => path.join(dir, `agent.${signal}`)
+
+/** IN-F10: 응답 끝(done)·입력 준비(ready) 신호. 훅이 신호 파일에 한 줄을 붙인다. */
+export type AgentSignal = 'done' | 'ready'
+
+/** 신호 파일이 있으면 지우고 true를 돌려준다. */
+export function takeAgentSignal(dir: string, signal: AgentSignal): boolean {
+  const file = signalFile(dir, signal)
+  try {
+    if (!existsSync(file) || statSync(file).size === 0) return false
+    rmSync(file, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 앱이 만든 셸에만 적용한다. 사용자의 CLI 전역 설정·셸 프로필은 수정하지 않는다. */
-export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string): { init: string; env: Record<string, string>; claudeSettings: string } {
+export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string, platform = process.platform): { init: string; env: Record<string, string>; claudeSettings: string; codexNotify: string } {
   mkdirSync(dir, { recursive: true })
   const helper = path.join(dir, 'bridge.cjs')
   const state = path.join(dir, 'state.json')
   const settings = path.join(dir, 'claude-settings.json')
-  const init = path.join(dir, process.platform === 'win32' ? 'init.ps1' : 'init.sh')
+  const init = path.join(dir, platform === 'win32' ? 'init.ps1' : 'init.sh')
   const generation = randomUUID()
   writeFileSync(helper, bridge)
-  writeFileSync(init, process.platform === 'win32' ? powershellInit : path.basename(process.env.SHELL ?? '') === 'fish' ? fishInit : posixInit)
+  writeFileSync(init, platform === 'win32' ? powershellInit : path.basename(process.env.SHELL ?? '') === 'fish' ? fishInit : posixInit)
   writeFileSync(state, JSON.stringify({ generation, runId: generation, kind, cwd, args: [], running: kind !== 'shell' }))
-  const hook = process.platform === 'win32'
+  const hook = platform === 'win32'
     ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`, 'utf16le').toString('base64')}`
     : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`
-  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] } }))
+  // 지난 실행에서 남은 신호는 지운다
+  for (const s of ['done', 'ready'] as const) rmSync(signalFile(dir, s), { force: true })
+  // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
+  const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
+  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }, echo('ready')] }], Stop: [{ hooks: [echo('done')] }] } }))
+  // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
+  const win = platform === 'win32'
+  const notify = path.join(dir, `notify.${win ? 'cmd' : 'sh'}`)
+  writeFileSync(notify, win ? `@echo done>>"${slash(signalFile(dir, 'done'))}"\r\n` : `#!/bin/sh\necho done >> ${shellQuote(slash(signalFile(dir, 'done')), platform)}\n`)
+  if (!win) chmodSync(notify, 0o755)
   return {
     init: `. ${shellQuote(init)}`,
     claudeSettings: settings,
+    // TOML 리터럴 문자열('...') 안에는 작은따옴표를 쓸 수 없다
+    codexNotify: `notify=['${slash(notify).replace(/'/g, '')}']`,
     env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings }
   }
 }

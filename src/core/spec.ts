@@ -66,6 +66,8 @@ export function parseAcs(featureId: string, text: string): AC[] {
   for (const part of text.split(/<br\s*\/?>/i)) {
     const m = part.trim().match(/^AC(\d+)\s*:\s*(.*)$/)
     if (m) out.push({ id: `${featureId}-AC${m[1]}`, num: Number(m[1]), text: m[2].trim() })
+    // AC로 시작하지 않는 줄은 앞 AC의 다음 줄이다
+    else if (out.length) out[out.length - 1].text += '\n' + part.trim()
   }
   return out
 }
@@ -97,7 +99,7 @@ export function parseSpecTable(content: string): { features: Feature[]; start: n
     features.push({
       id,
       name: c[col('기능')] ?? '',
-      purpose: c[col('목적')] ?? '',
+      purpose: (c[col('목적')] ?? '').replace(/<br\s*\/?>/gi, '\n'),
       acs: parseAcs(id, c[col('수용 기준')] ?? ''),
       status: ((c[col('상태')] ?? '초안') as FeatureStatus) || '초안'
     })

@@ -5,7 +5,7 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, type CliLaunch } from './terminalIntegration'
+import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignal, type CliLaunch } from './terminalIntegration'
 import type { Ctx, ProjectSettings } from './workspace'
 
 interface SavedTab {
@@ -103,11 +103,19 @@ export class TerminalWorkspace {
         if (tab) tab.exited = code
         this.save()
         events.onExit(id, code)
-      }
+      },
+      onCommandDone: events.onCommandDone
     })
     this.monitor = setInterval(() => {
       try { for (const tab of this.tabs.values()) this.syncLaunch(tab) }
       catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
+      // IN-F10: 훅이 남긴 응답 끝·준비 신호
+      for (const tab of this.tabs.values()) {
+        if (tab.exited !== undefined) continue
+        const dir = this.integrationDir(tab.id)
+        if (takeAgentSignal(dir, 'ready')) this.manager.markReady(tab.id)
+        if (takeAgentSignal(dir, 'done')) this.events.onAgentDone?.(tab.id)
+      }
       void this.bindCodex().catch((e: unknown) => this.events.onError?.(`세션 ID 연결 실패: ${String(e)}`))
     }, 500)
     this.monitor.unref()
@@ -144,11 +152,14 @@ export class TerminalWorkspace {
     this.save()
   }
 
-  create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30): TerminalSnapshot {
+  /** resume을 주면 로컬에 저장된 그 대화를 이어서 연다 (작업 그래프의 "세션 불러오기"). */
+  create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30, options: { title?: string; resume?: string } = {}): TerminalSnapshot {
     if (!['shell', 'claude', 'codex'].includes(kind)) throw new Error('지원하지 않는 터미널 종류입니다')
-    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(kind === 'claude' ? { sessionId: randomUUID() } : {}), ...(this.groups.some((g) => g.id === this.activeGroup) ? { groupId: this.activeGroup } : {}) }
+    if (options.resume) validateSessionId(options.resume)
+    const resume = kind === 'shell' ? undefined : options.resume
+    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: options.title ?? { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(resume ? { sessionId: resume } : kind === 'claude' ? { sessionId: randomUUID() } : {}), ...(this.groups.some((g) => g.id === this.activeGroup) ? { groupId: this.activeGroup } : {}) }
     this.tabs.set(tab.id, tab)
-    try { this.launch(tab, settings, false) } catch (e) { this.tabs.delete(tab.id); throw e }
+    try { this.launch(tab, settings, !!resume) } catch (e) { this.tabs.delete(tab.id); throw e }
     this.active = tab.id
     this.save()
     return this.snapshot(tab)
@@ -168,14 +179,14 @@ export class TerminalWorkspace {
     if (command && tab.launch) command += resumeOptions(tab.launch.args, command).map((arg) => ` ${shellQuote(arg)}`).join('')
     // 공유 데몬의 환경·저장 위치가 다른 탭에 섞이지 않도록 각 TUI를 독립 실행한다.
     if (tab.kind === 'codex' && command && !/(^|\s)--no-daemon(?:\s|$)/.test(command)) command += ' --no-daemon'
-    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id']")}`
+    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id']")} -c ${shellQuote(integration.codexNotify)}`
     if (tab.kind === 'claude' && command) command += ` --settings ${shellQuote(integration.claudeSettings)}`
     // 새 셸의 준비 상태가 기존 launch 인자를 지우지 않도록 시작 이벤트 전에는 비교만 한다.
     const previousLaunch = tab.launch
     tab.launch = readCliLaunch(this.integrationDir(tab.id))
     if (tab.launch && previousLaunch) tab.launch = { ...tab.launch, args: previousLaunch.args, home: previousLaunch.home }
     this.manager.create(tab.kind, cwd, tab.cols, tab.rows, settings, tab.sessionId, tab.title, {
-      id: tab.id, command: command ?? undefined, output: tab.output, init: integration.init,
+      id: tab.id, command: command ?? undefined, output: tab.output, init: integration.init, signals: tab.kind === 'claude' && !!command,
       env: { ...integration.env, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: `orbit-${tab.id}`, ...(tab.launch?.home ? { [tab.kind === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: tab.launch.home } : {}) }
     })
   }
@@ -310,6 +321,11 @@ export class TerminalWorkspace {
   }
 
   write(id: string, data: string): void { this.manager.write(id, data) }
+  /** IN-F11: 작업 그래프가 터미널에 프롬프트·명령을 보낸다 */
+  has(id: string): boolean { return this.manager.has(id) }
+  whenReady(id: string): Promise<void> { return this.manager.whenReady(id) }
+  submit(id: string, text: string): void { this.manager.submit(id, text) }
+  runCommand(id: string, command: string): void { this.manager.runCommand(id, command) }
   resize(id: string, cols: number, rows: number): void {
     this.manager.resize(id, cols, rows)
     const tab = this.tabs.get(id)

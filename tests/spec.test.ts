@@ -107,4 +107,12 @@ describe('Spec', () => {
     const parsed = parseSpecTable(renderSpecTable(features).join('\n')).features
     expect(parsed).toEqual(features)
   })
+
+  it('[SP-F02-AC1] 목적·수용 기준의 여러 줄도 다시 읽으면 그대로다', () => {
+    const features: Feature[] = [
+      { id: 'X-F01', name: 'a', purpose: 'p1\np2', status: '초안', acs: [{ id: 'X-F01-AC1', num: 1, text: 't1\nt1-2' }, { id: 'X-F01-AC2', num: 2, text: 't2' }] }
+    ]
+    const parsed = parseSpecTable(renderSpecTable(features).join('\n')).features
+    expect(parsed).toEqual(features)
+  })
 })
