@@ -23,6 +23,88 @@ vi.mock('node-pty', () => ({ spawn: vi.fn((): IPty => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); ptys.length = 0 })
 
 describe('터미널 자동 복원', () => {
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC4] %s 세션 불러오기 목록에 첫 메시지와 구분되는 실제 name을 제공한다', async (kind) => {
+    const home = await tempDir('agent-session-list-')
+    vi.spyOn(os, 'homedir').mockReturnValue(home)
+    vi.stubEnv('CODEX_HOME', path.join(home, '.codex'))
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude'))
+    const api = createApi({ send: vi.fn(), pickFolder: async () => null, recentFile: path.join(home, 'orbit', 'recent.json'), onProjectOpened() {} })
+    const projectDir = await tempDir('agent-session-project-')
+    await api.createProject(projectDir)
+    const dir = kind === 'claude' ? path.join(home, '.claude', 'projects', encodeClaudeProjectDir(projectDir)) : path.join(home, '.codex', 'sessions')
+    await fs.mkdir(dir, { recursive: true })
+    for (const id of ['named', 'unnamed']) {
+      const lines = kind === 'claude' ? [
+        { type: 'user', sessionId: id, cwd: projectDir, message: { content: '첫 메시지 내용' } },
+        ...(id === 'named' ? [{ type: 'custom-title', sessionId: id, customTitle: '실제 세션 이름' }] : [])
+      ] : [
+        { type: 'session_meta', payload: { id, cwd: projectDir } },
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '첫 메시지 내용' }] } }
+      ]
+      await fs.writeFile(path.join(dir, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join('\n'))
+    }
+    if (kind === 'codex') await fs.writeFile(path.join(home, '.codex', 'session_index.jsonl'), JSON.stringify({ id: 'named', thread_name: '실제 세션 이름' }))
+    const sessions = await api.agentSessions(kind)
+    expect(sessions.find((s) => s.id === 'named')).toMatchObject({ name: '실제 세션 이름', firstPrompt: '첫 메시지 내용' })
+    expect(sessions.find((s) => s.id === 'unnamed')).toMatchObject({ name: undefined, firstPrompt: '첫 메시지 내용' })
+  })
+
+  it('[TE-F01-AC10] 복원한 탭과 CLI에서 선택한 세션은 해당 세션의 실제 이름으로 표시한다', async () => {
+    const home = await tempDir('terminal-session-names-')
+    vi.stubEnv('CODEX_HOME', path.join(home, 'codex'))
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, 'claude'))
+    const deps = { send: vi.fn(), pickFolder: async () => null, recentFile: path.join(home, 'orbit', 'recent.json'), onProjectOpened() {} }
+    const api = createApi(deps)
+    const projectDir = await tempDir('terminal-named-project-')
+    await api.createProject(projectDir)
+    const codex = await api.termCreate('codex')
+    const claude = await api.termCreate('claude')
+    const codexDir = path.join(home, 'codex', 'sessions')
+    const claudeDir = path.join(home, 'claude', 'projects', encodeClaudeProjectDir(projectDir))
+    await fs.mkdir(codexDir, { recursive: true })
+    await fs.mkdir(claudeDir, { recursive: true })
+    const codexId = '11111111-2222-3333-4444-555555555555'
+    const nextId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const meta = (id: string, originator: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: projectDir, originator, source: 'cli' } }) + '\n'
+    await fs.writeFile(path.join(codexDir, `rollout-${codexId}.jsonl`), meta(codexId, `orbit-${codex.id}`))
+    await fs.writeFile(path.join(codexDir, `rollout-${nextId}.jsonl`), meta(nextId, 'codex-tui'))
+    const index = [
+      { id: codexId, thread_name: '결제 세션의 실제 name' },
+      { id: nextId, thread_name: '다른 세션의 실제 name' }
+    ].map((row) => JSON.stringify(row)).join('\n')
+    await fs.writeFile(path.join(home, 'codex', 'session_index.jsonl'), index)
+    const transcript = JSON.stringify({ type: 'custom-title', sessionId: claude.sessionId, customTitle: '클로드 세션 이름' }) + '\n'
+    await fs.writeFile(path.join(claudeDir, `${claude.sessionId}.jsonl`), transcript)
+    await api.termRename(codex.id, '예전 탭 이름')
+    api.killAllTerminals()
+
+    const restarted = createApi(deps)
+    await restarted.openProject(projectDir)
+    try {
+      const state = await restarted.termState()
+      expect(state.tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: codexId, title: '결제 세션의 실제 name' })
+      expect(state.tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: claude.sessionId, title: '클로드 세션 이름' })
+      const resumed = state.tabs.find((tab) => tab.id === codex.id)!
+      ptys.find((pty) => pty.pid === resumed.pid)!.emit(`\x1b]0;${nextId}\x07`)
+      await vi.waitFor(async () => {
+        expect((await restarted.termState()).tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: nextId, title: '다른 세션의 실제 name' })
+      }, { timeout: 3000 })
+      expect(deps.send).toHaveBeenCalledWith('term-info', expect.objectContaining({ id: codex.id, title: '다른 세션의 실제 name' }))
+      const savedFiles = await fs.readdir(path.join(home, 'orbit', 'terminals'))
+      const savedFile = path.join(home, 'orbit', 'terminals', savedFiles.find((file) => file.endsWith('.json'))!)
+      const launchFile = path.join(`${savedFile}.sessions`, claude.id, 'state.json')
+      const launch = JSON.parse(await fs.readFile(launchFile, 'utf8')) as Record<string, unknown>
+      await fs.writeFile(path.join(claudeDir, `${nextId}.jsonl`), JSON.stringify({ type: 'ai-title', sessionId: nextId, aiTitle: '다른 클로드 세션 이름' }))
+      await fs.writeFile(launchFile, JSON.stringify({ ...launch, sessionId: nextId }))
+      ptys.find((pty) => pty.pid === state.tabs.find((tab) => tab.id === claude.id)!.pid)!.emit('\x1b]0;Claude\x07')
+      await vi.waitFor(async () => {
+        expect((await restarted.termState()).tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: nextId, title: '다른 클로드 세션 이름' })
+      })
+      expect(await fs.readFile(path.join(home, 'codex', 'session_index.jsonl'), 'utf8')).toBe(index)
+      expect(await fs.readFile(path.join(claudeDir, `${claude.sessionId}.jsonl`), 'utf8')).toBe(transcript)
+    } finally { restarted.killAllTerminals() }
+  })
+
   it('[TE-F01-AC3] [TE-F01-AC4] [TE-F01-AC5] [TE-F01-AC6] [WS-F02-AC5] [WS-F02-AC6] 재시작 후 프로젝트를 선택하면 탭·이름·활성 탭·각 대화 ID를 복원한다', async () => {
     const home = await tempDir('terminal-home-')
     vi.spyOn(os, 'homedir').mockReturnValue(home)

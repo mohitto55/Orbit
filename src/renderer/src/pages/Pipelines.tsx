@@ -863,7 +863,7 @@ function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'c
   }
   useEffect(load, [kind])
   const when = (iso: string) => new Date(iso).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const label = (s: AgentSession) => `${when(s.updatedAt)} · ${s.firstPrompt.split('\n')[0].slice(0, 60) || '(첫 메시지 없음)'} (${s.messages})`
+  const label = (s: AgentSession) => `${s.name || s.firstPrompt.split('\n')[0].slice(0, 60) || '(이름 없는 세션)'} · ${when(s.updatedAt)} (${s.messages})`
   const missing = !!value && !!list && !list.some((s) => s.id === value)
   return (
     <div className="field">

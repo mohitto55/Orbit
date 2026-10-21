@@ -6,6 +6,7 @@ import { TerminalManager, terminalCommand, validateSessionId, type TerminalEvent
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
 import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignal, type CliLaunch } from './terminalIntegration'
+import { readSessionTitle } from './sessionTitles'
 import type { Ctx, ProjectSettings } from './workspace'
 
 interface SavedTab {
@@ -141,6 +142,7 @@ export class TerminalWorkspace {
     this.reconcileActive()
     for (const tab of this.tabs.values()) this.syncLaunch(tab)
     await this.bindCodex()
+    await Promise.all([...this.tabs.values()].map((tab) => this.loadSessionTitle(tab)))
     for (const tab of this.tabs.values()) {
       if (this.stopped) return
       if (tab.exited !== undefined) continue
@@ -162,6 +164,7 @@ export class TerminalWorkspace {
     try { this.launch(tab, settings, !!resume) } catch (e) { this.tabs.delete(tab.id); throw e }
     this.active = tab.id
     this.save()
+    if (resume) void this.loadSessionTitle(tab)
     return this.snapshot(tab)
   }
 
@@ -197,6 +200,7 @@ export class TerminalWorkspace {
     if (tab.exited !== undefined) return
     const launch = readCliLaunch(this.integrationDir(tab.id))
     if (!launch || JSON.stringify(tab.launch) === JSON.stringify(launch)) return
+    const previousSessionId = tab.sessionId
     if (launch.running && launch.runId !== tab.launch?.runId) {
       delete tab.sessionId
       delete tab.codexPrefix
@@ -213,6 +217,7 @@ export class TerminalWorkspace {
     tab.launch = launch
     this.save()
     this.events.onChange?.(this.snapshot(tab))
+    if (tab.sessionId && tab.sessionId !== previousSessionId) void this.loadSessionTitle(tab)
   }
 
   private async bindCodex(): Promise<void> {
@@ -228,6 +233,7 @@ export class TerminalWorkspace {
         const id = await findCodexSession(tab.launch?.cwd ?? this.ctx.projectDir, tab.id, tab.launch?.home, tab.createdAt, prefix)
         if (id && id !== tab.sessionId && prefix === tab.codexPrefix && !this.stopped && this.tabs.has(tab.id)) {
           tab.sessionId = id; this.save(); this.events.onChange?.(this.snapshot(tab))
+          await this.loadSessionTitle(tab)
         }
       }
     } finally { this.binding = false }
@@ -236,6 +242,18 @@ export class TerminalWorkspace {
   private snapshot(tab: SavedTab): TerminalSnapshot {
     const live = this.manager.snapshot(tab.id)
     return { id: tab.id, kind: tab.kind, title: tab.title, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
+  }
+
+  private async loadSessionTitle(tab: SavedTab): Promise<void> {
+    const { kind, sessionId, title: previousTitle } = tab
+    if (kind === 'shell' || !sessionId) return
+    try {
+      const title = await readSessionTitle(kind, sessionId, tab.launch?.cwd ?? this.ctx.projectDir, tab.launch?.home)
+      if (!title || title === tab.title || this.stopped || this.tabs.get(tab.id) !== tab || tab.kind !== kind || tab.sessionId !== sessionId || tab.title !== previousTitle) return
+      tab.title = title
+      this.save()
+      this.events.onChange?.(this.snapshot(tab))
+    } catch (e) { this.events.onError?.(`세션 이름을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`) }
   }
 
   /** 그룹 전환에는 탭 정보만 보낸다. 터미널 출력은 다시 전송하거나 재생하지 않는다. */
@@ -313,6 +331,7 @@ export class TerminalWorkspace {
     const tab = this.tabs.get(id)
     if (!tab) throw new Error('터미널을 찾을 수 없습니다')
     await this.bindCodex()
+    await this.loadSessionTitle(tab)
     this.manager.kill(id)
     delete tab.exited
     this.launch(tab, settings, true)

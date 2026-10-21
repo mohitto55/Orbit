@@ -21,6 +21,7 @@ import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import type { TerminalKind } from '../core/terminal'
 import { TerminalWorkspace } from '../core/terminalWorkspace'
+import { readSessionTitle } from '../core/sessionTitles'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
 import { PipelineRunner, expandPipeline, pipelineProblems, type PipeEdge, type PipeNode } from '../core/pipeline'
@@ -478,9 +479,11 @@ export function createApi(deps: ApiDeps) {
     async agentSessions(kind: 'claude' | 'codex') {
       const dir = need().projectDir
       const list = kind === 'claude' ? await dr.listClaudeSessions(dir) : await dr.listCodexSessions(dir)
-      return list
-        .map((s) => ({ id: s.id.slice(kind.length + 1), updatedAt: s.updatedAt, firstPrompt: s.firstPrompt, messages: s.messages }))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      const sessions = await Promise.all(list.map(async (s) => {
+        const id = s.id.slice(kind.length + 1)
+        return { id, name: await readSessionTitle(kind, id, dir), updatedAt: s.updatedAt, firstPrompt: s.firstPrompt, messages: s.messages }
+      }))
+      return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
     async runPipeline(id: string) {
       const library = await pl.listPipelines(need())
