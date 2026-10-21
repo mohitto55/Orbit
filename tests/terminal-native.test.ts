@@ -6,7 +6,11 @@ import { TerminalWorkspace } from '../src/core/terminalWorkspace'
 import { PipelineRunner } from '../src/core/pipeline'
 import { tempDir } from './helpers'
 
-it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[DM-F02-AC4] 실제 Codex에 작업 그래프 프롬프트를 자동 전송하고 화면 갱신 중에도 기존 탭에 바로 입력한다', async () => {
+it.skipIf(!process.env.ORBIT_NATIVE_SMOKE).each([
+  { size: '짧은', prompt: 'OrbitAutomaticInputProbe\n두 번째 줄' },
+  { size: '1만6천 한글', prompt: 'OrbitAutomaticInputProbe\n' + '긴 프롬프트의 입력 완료와 자동 전송을 확인합니다. 한글과 여러 줄을 그대로 보존해야 합니다.\n'.repeat(300) },
+  { size: '10만6천 한글', prompt: 'OrbitAutomaticInputProbe\n' + '긴 프롬프트의 입력 완료와 자동 전송을 확인합니다. 한글과 여러 줄을 그대로 보존해야 합니다.\n'.repeat(2000) }
+])('[DM-F02-AC4] 실제 Codex에 $size 작업 그래프 프롬프트를 자동 전송하고 화면 갱신 중에도 기존 탭에 바로 입력한다', async ({ prompt }) => {
   const root = await tempDir('orbit-codex-submit-')
   const cwd = await fs.realpath(process.cwd())
   const codexHome = path.join(root, 'codex')
@@ -31,12 +35,14 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[DM-F02-AC4] 실제 Codex에 작업 
   try {
     const tab = workspace.create('codex', settings)
     await workspace.whenReady(tab.id)
+    await vi.waitFor(() => expect(output).toContain('orbit-probe'), { timeout: 15000 })
     timings.ready = Date.now() - started
-    workspace.submit(tab.id, 'OrbitAutomaticInputProbe\n두 번째 줄')
+    workspace.submit(tab.id, prompt)
     await vi.waitFor(async () => {
       const history = (await fs.readFile(path.join(codexHome, 'history.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { text: string })
-      expect(history.map((entry) => entry.text)).toEqual(['OrbitAutomaticInputProbe\n두 번째 줄'])
-    }, { timeout: 6000 })
+      expect(history).toHaveLength(1)
+      expect(history[0].text === prompt.trim()).toBe(true)
+    }, { timeout: 60000 })
     timings.submitted = Date.now() - started
     await vi.waitFor(() => expect(workspace.state().tabs[0].sessionId).toBeTruthy(), { timeout: 15000 })
     const session = workspace.state().tabs[0].sessionId!
@@ -74,7 +80,7 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[DM-F02-AC4] 실제 Codex에 작업 
     workspace.suspend()
     vi.unstubAllEnvs()
   }
-}, 45000)
+}, 90000)
 
 // 설치된 Codex의 실제 TUI 연결 확인. 모델 요청은 닫힌 로컬 포트로만 보낸다.
 it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[TE-F01-AC3] [TE-F01-AC8] [TE-F01-AC9] 실제 Codex의 줄바꿈과 일반 터미널에서 재개한 기존 세션을 앱 재시작 후 복원한다', async () => {

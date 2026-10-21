@@ -171,12 +171,16 @@ export class TerminalManager {
   }
 
   /** 에이전트 입력창에 글을 붙여 넣고 보낸다. 여러 줄이 한 번에 들어가도록 bracketed paste로 감싼다. */
-  submit(id: string, text: string): void {
+  submit(id: string, text: string, kind?: TerminalKind): void {
     const t = this.terms.get(id)
     if (!t) throw new Error(`터미널을 찾을 수 없습니다: ${id}`)
     t.pty.write(`\x1b[200~${text.replace(/\r?\n/g, '\r')}\x1b[201~`)
-    // 붙여 넣기를 다 받은 뒤에 Enter를 보내야 줄바꿈이 아니라 전송으로 받아들인다
-    setTimeout(() => this.terms.get(id)?.pty.write('\r'), 400)
+    // Windows Codex는 긴 paste를 개별 키로 받아 마지막 Enter도 줄바꿈으로 삼는다.
+    // Ctrl+E는 내용을 바꾸지 않고 paste 버퍼를 확정하고, 뒤의 Enter를 전송으로 구분한다.
+    const submit = (kind ?? t.info.kind) === 'codex' ? '\x05\r' : '\r'
+    setTimeout(() => {
+      if (this.terms.get(id) === t) t.pty.write(submit)
+    }, 400)
   }
 
   /** 셸 명령을 실행하고, 끝나면 onCommandDone(종료 코드)으로 알린다. 여러 줄이면 한 줄로 잇는다. */

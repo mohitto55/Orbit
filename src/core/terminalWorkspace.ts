@@ -361,7 +361,7 @@ export class TerminalWorkspace {
   /** IN-F11: 작업 그래프가 터미널에 프롬프트·명령을 보낸다 */
   has(id: string): boolean { return this.manager.has(id) }
   whenReady(id: string): Promise<void> { return this.manager.whenReady(id) }
-  submit(id: string, text: string): void { this.manager.submit(id, text) }
+  submit(id: string, text: string): void { this.manager.submit(id, text, this.tabs.get(id)?.kind) }
   runCommand(id: string, command: string): void { this.manager.runCommand(id, command) }
   resize(id: string, cols: number, rows: number): void {
     this.manager.resize(id, cols, rows)

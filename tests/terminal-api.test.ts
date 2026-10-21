@@ -85,6 +85,7 @@ describe('작업 그래프 세션 재사용', () => {
         await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === run.runId)?.nodes.work).toMatchObject({ status: 'running', termId: target.id }))
         expect(ptys).toHaveLength(2)
         expect(targetPty.write).toHaveBeenCalledWith('\x1b[200~기존 대화에 보내는 작업\x1b[201~')
+        await vi.waitFor(() => expect(targetPty.write).toHaveBeenLastCalledWith(kind === 'codex' ? '\x05\r' : '\r'))
         expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
         expect(api.markNodeDone(run.runId, 'work')?.status).toBe('done')
       }
