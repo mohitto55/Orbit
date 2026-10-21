@@ -46,10 +46,10 @@ export interface PipeNode {
   text: string
   /** 리스트 노드: 적어 둔 항목 (입력이 들어오면 대신 들어온 데이터를 항목으로 쓴다) */
   items?: string[]
-  /** new: 새 터미널 탭에서, continue: 앞 노드(같은 종류)의 터미널에서 이어서 (대화 맥락 유지) */
+  /** new: 지정한 세션 또는 새 탭에서, continue: 앞 노드(같은 종류)의 터미널에서 이어서 (대화 맥락 유지) */
   terminal: 'new' | 'continue'
   /**
-   * Claude Code·Codex 노드: 새 터미널을 열 때 이어서 쓸, 로컬에 저장된 세션 id (세션 불러오기).
+   * Claude Code·Codex 노드: 이어서 쓸 로컬 세션 id. 이미 열린 탭이 있으면 그대로 쓴다 (세션 불러오기).
    * 비우면 새 세션으로 연다. "이어서"(continue) 노드는 앞 노드의 터미널을 쓰므로 쓰지 않는다.
    */
   session?: string
@@ -532,7 +532,7 @@ export interface RunState {
 }
 
 export interface RunnerDeps {
-  /** 새 터미널을 연다 (화면에도 탭으로 붙인다). session을 주면 로컬에 저장된 그 세션을 이어서 연다 */
+  /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
   createTerminal: (kind: TerminalKind, label: string, session?: string) => Promise<TerminalInfo>
   hasTerminal: (termId: string) => boolean
   whenReady: (termId: string) => Promise<void>
@@ -643,6 +643,7 @@ export class PipelineRunner {
         await this.deps.whenReady(termId)
       }
       if (run.status !== 'running') return
+      if (this.owner.has(termId)) throw new Error('이 세션의 터미널에서 다른 작업 노드가 실행 중입니다. 해당 작업이 끝난 뒤 다시 실행하세요')
       st.termId = termId
       st.status = 'running'
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
@@ -652,6 +653,7 @@ export class PipelineRunner {
       if (node.kind === 'shell') this.deps.runCommand(termId, text)
       else this.deps.submit(termId, text)
     } catch (e) {
+      if (st.termId && this.owner.get(st.termId)?.runId === run.runId && this.owner.get(st.termId)?.nodeId === node.id) this.owner.delete(st.termId)
       st.status = 'failed'
       st.message = e instanceof Error ? e.message : String(e)
       this.tick(run)

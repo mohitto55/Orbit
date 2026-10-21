@@ -66,7 +66,7 @@ export class TerminalWorkspace {
   private manager: TerminalManager
   private timer: NodeJS.Timeout | null = null
   private stopped = false
-  private binding = false
+  private binding: Promise<void> | null = null
   private nextBind = 0
   private monitor: NodeJS.Timeout
   private titleBuffers = new Map<string, string>()
@@ -154,7 +154,22 @@ export class TerminalWorkspace {
     this.save()
   }
 
-  /** resume을 주면 로컬에 저장된 그 대화를 이어서 연다 (작업 그래프의 "세션 불러오기"). */
+  /** 작업 그래프에서 지정한 세션이 이미 실행 중이면 그 탭을 그대로 쓴다. */
+  async open(kind: TerminalKind, settings: ProjectSettings, options: { title?: string; resume?: string } = {}): Promise<TerminalSnapshot> {
+    if (options.resume && kind !== 'shell') {
+      validateSessionId(options.resume)
+      for (const tab of this.tabs.values()) this.syncLaunch(tab)
+      if (kind === 'codex') await this.bindCodex(true)
+    }
+    if (this.stopped) throw new Error('터미널 작업 공간이 닫혔습니다')
+    // 조회와 생성 사이에 기다리지 않아 동시에 같은 세션을 열어도 탭은 하나만 생긴다.
+    const existing = options.resume && kind !== 'shell'
+      ? [...this.tabs.values()].find((tab) => tab.kind === kind && tab.sessionId === options.resume && (!tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix)) && this.manager.has(tab.id))
+      : undefined
+    return existing ? this.snapshot(existing) : this.create(kind, settings, undefined, undefined, options)
+  }
+
+  /** 새 탭을 연다. resume을 주면 로컬에 저장된 그 대화를 이어서 연다. */
   create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30, options: { title?: string; resume?: string } = {}): TerminalSnapshot {
     if (!['shell', 'claude', 'codex'].includes(kind)) throw new Error('지원하지 않는 터미널 종류입니다')
     if (options.resume) validateSessionId(options.resume)
@@ -220,13 +235,13 @@ export class TerminalWorkspace {
     if (tab.sessionId && tab.sessionId !== previousSessionId) void this.loadSessionTitle(tab)
   }
 
-  private async bindCodex(): Promise<void> {
-    if (this.binding || this.stopped || Date.now() < this.nextBind) return
+  private bindCodex(force = false): Promise<void> {
+    if (this.binding) return this.binding.then(() => force ? this.bindCodex(true) : undefined)
+    if (this.stopped || (!force && Date.now() < this.nextBind)) return Promise.resolve()
     const codexTabs = [...this.tabs.values()].filter((tab) => tab.kind === 'codex' && tab.exited === undefined)
-    if (!codexTabs.length) return
-    this.binding = true
+    if (!codexTabs.length) return Promise.resolve()
     this.nextBind = Date.now() + 5000
-    try {
+    this.binding = (async () => {
       for (const tab of codexTabs) {
         const prefix = tab.codexPrefix
         if (tab.sessionId && (!prefix || tab.sessionId.startsWith(prefix))) continue
@@ -236,7 +251,8 @@ export class TerminalWorkspace {
           await this.loadSessionTitle(tab)
         }
       }
-    } finally { this.binding = false }
+    })().finally(() => { this.binding = null })
+    return this.binding
   }
 
   private snapshot(tab: SavedTab): TerminalSnapshot {

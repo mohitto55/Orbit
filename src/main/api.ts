@@ -81,7 +81,7 @@ export function createApi(deps: ApiDeps) {
       const workspace = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       const title = `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`.slice(0, 100)
-      const info = workspace.create(kind, settings, undefined, undefined, { title, resume: session })
+      const info = await workspace.open(kind, settings, { title, resume: session })
       deps.send('term-created', info)
       return info
     },

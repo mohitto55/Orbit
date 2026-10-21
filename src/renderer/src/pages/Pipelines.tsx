@@ -851,7 +851,7 @@ function NameField({ name, kind, disabled, onRename }: { name: string; kind: str
 
 type AgentSession = Awaited<ReturnType<typeof api.agentSessions>>[number]
 
-/** DM-F02-AC4: 세션 불러오기. 로컬에 저장된 이 프로젝트의 세션을 골라 새 터미널에서 그대로 이어 쓴다 */
+/** DM-F02-AC4: 세션 불러오기. 로컬 세션의 열린 터미널을 재사용하고, 없으면 새 탭에서 이어 쓴다 */
 function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'codex'; value?: string; disabled: boolean; onChange: (session?: string) => void }) {
   const [list, setList] = useState<AgentSession[] | null>(null)
   const load = () => {
@@ -883,7 +883,7 @@ function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'c
         </button>
       </div>
       <div className="small muted">
-        {!list ? '세션을 읽는 중…' : value ? '실행하면 이 세션을 이어서 열고 프롬프트를 보냅니다' : `이 프로젝트에 저장된 ${KIND_LABEL[kind]} 세션 ${list.length}개`}
+        {!list ? '세션을 읽는 중…' : value ? '이미 열린 세션은 기존 탭을 사용하고, 없으면 새 탭에서 이어서 실행합니다' : `이 프로젝트에 저장된 ${KIND_LABEL[kind]} 세션 ${list.length}개`}
       </div>
     </div>
   )
@@ -1002,7 +1002,7 @@ function NodePanel({
             <div className="field">
               <label>터미널</label>
               <select value={node.terminal} disabled={locked} onChange={(e) => onPatch({ terminal: e.target.value as PipeNode['terminal'] })}>
-                <option value="new">새 탭에서</option>
+                <option value="new">{node.session ? '선택한 세션에서' : '새 탭에서'}</option>
                 <option value="continue">앞 노드 터미널에서 이어서</option>
               </select>
             </div>

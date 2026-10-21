@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IPty } from 'node-pty'
 import { createApi } from '../src/main/api'
 import { encodeClaudeProjectDir } from '../src/core/drift'
+import { TerminalWorkspace } from '../src/core/terminalWorkspace'
 import { tempDir } from './helpers'
 
 const ptys = vi.hoisted(() => [] as (IPty & { emit: (data: string) => void })[])
@@ -21,6 +22,107 @@ vi.mock('node-pty', () => ({ spawn: vi.fn((): IPty => {
 }) }))
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); ptys.length = 0 })
+
+describe('작업 그래프 세션 재사용', () => {
+  async function setup() {
+    const home = await tempDir('pipeline-terminal-home-')
+    vi.spyOn(os, 'homedir').mockReturnValue(home)
+    vi.stubEnv('CODEX_HOME', path.join(home, '.codex'))
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude'))
+    // 실제 TUI의 입력 준비는 터미널 테스트에서 검증한다.
+    vi.spyOn(TerminalWorkspace.prototype, 'whenReady').mockResolvedValue()
+    const deps = { send: vi.fn(), pickFolder: async () => null, recentFile: path.join(home, 'orbit', 'recent.json'), onProjectOpened() {} }
+    const api = createApi(deps)
+    const projectDir = await tempDir('pipeline-terminal-project-')
+    await api.createProject(projectDir)
+    return { api, home, projectDir }
+  }
+
+  function saveGraph(api: ReturnType<typeof createApi>, kind: 'claude' | 'codex', session: string) {
+    return api.savePipeline({
+      title: '기존 대화 이어서 작업',
+      nodes: [
+        { id: 'start', kind: 'start', text: '', terminal: 'new' },
+        { id: 'work', kind, session, text: '기존 대화에 보내는 작업', terminal: 'new' }
+      ],
+      edges: [{ from: 'start', to: 'work' }]
+    })
+  }
+
+  it.each([
+    { kind: 'claude', source: '전용 탭' }, { kind: 'codex', source: '전용 탭' },
+    { kind: 'claude', source: '일반 셸' }, { kind: 'codex', source: '일반 셸' }
+  ] as const)('[DM-F02-AC4] $kind $source 세션은 이미 열린 정확한 탭을 재사용하고 반복 실행에도 새 탭을 만들지 않는다', async ({ kind, source }) => {
+    const { api, home, projectDir } = await setup()
+    try {
+      const target = await api.termCreate(source === '일반 셸' ? 'shell' : kind)
+      const other = await api.termCreate(kind)
+      const session = target.sessionId ?? '11111111-2222-3333-4444-555555555555'
+      if (source === '일반 셸') {
+        const dir = path.join(home, 'orbit', 'terminals')
+        const files = await fs.readdir(dir)
+        const launchFile = path.join(dir, `${files.find((file) => file.endsWith('.json'))!}.sessions`, target.id, 'state.json')
+        const launch = JSON.parse(await fs.readFile(launchFile, 'utf8')) as Record<string, unknown>
+        await fs.writeFile(launchFile, JSON.stringify({ ...launch, kind, cwd: projectDir, args: [], running: true, runId: 'manual-run', sessionId: kind === 'claude' ? session : undefined }))
+      }
+      if (kind === 'codex') {
+        // 주기적 ID 연결 전에 실행해도 실제 세션을 찾아야 한다.
+        const dir = path.join(home, '.codex', 'sessions')
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, `rollout-${session}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { id: session, cwd: projectDir, originator: `orbit-${target.id}`, source: 'cli' } }))
+      }
+      await api.termRename(target.id, '기존 작업 이름')
+      const group = (await api.termCreateGroup('기존 그룹')).groups[0]
+      await api.termMoveToGroup(target.id, group.id)
+      await api.termSelectGroup('ungrouped')
+      await api.termActivate(other.id)
+      const targetPty = ptys.find((pty) => pty.pid === target.pid)!
+      const otherPty = ptys.find((pty) => pty.pid === other.pid)!
+      targetPty.emit('기존 출력')
+      const graph = await saveGraph(api, kind, session)
+      for (let i = 0; i < 2; i++) {
+        const run = await api.runPipeline(graph.id)
+        await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === run.runId)?.nodes.work).toMatchObject({ status: 'running', termId: target.id }))
+        expect(ptys).toHaveLength(2)
+        expect(targetPty.write).toHaveBeenCalledWith('\x1b[200~기존 대화에 보내는 작업\x1b[201~')
+        expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
+        expect(api.markNodeDone(run.runId, 'work')?.status).toBe('done')
+      }
+      const state = await api.termState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.tabs.find((tab) => tab.id === target.id)).toMatchObject({ pid: target.pid, title: '기존 작업 이름', output: '기존 출력', groupId: group.id, sessionId: session })
+      expect(state).toMatchObject({ active: other.id, activeGroup: 'ungrouped' })
+      expect(targetPty.kill).not.toHaveBeenCalled()
+    } finally { api.killAllTerminals() }
+  })
+
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC4] %s 세션을 동시에 불러와도 탭은 하나만 열고 실행 중인 작업을 덮어쓰지 않는다', async (kind) => {
+    const { api, home, projectDir } = await setup()
+    try {
+      const session = '11111111-2222-3333-4444-555555555555'
+      if (kind === 'claude') {
+        const dir = path.join(home, '.claude', 'projects', encodeClaudeProjectDir(projectDir))
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, `${session}.jsonl`), '')
+      }
+      const first = await saveGraph(api, kind, session)
+      const second = await saveGraph(api, kind, session)
+      await Promise.all([api.runPipeline(first.id), api.runPipeline(second.id)])
+      await vi.waitFor(() => expect(api.pipelineRuns().map((r) => r.nodes.work.status).sort()).toEqual(['failed', 'running']))
+      expect(ptys).toHaveLength(1)
+      const state = await api.termState()
+      expect(state.tabs).toHaveLength(1)
+      expect(state.tabs[0].sessionId).toBe(session)
+      expect(ptys[0].write).toHaveBeenCalledWith(expect.stringContaining(kind === 'claude' ? `claude --resume ${session}` : `codex resume ${session}`))
+      expect(vi.mocked(ptys[0].write).mock.calls.filter(([input]) => input.includes('기존 대화에 보내는 작업'))).toHaveLength(1)
+      const running = api.pipelineRuns().find((r) => r.status === 'running')!
+      const failed = api.pipelineRuns().find((r) => r.status === 'failed')!
+      expect(failed.nodes.work.message).toContain('다른 작업 노드가 실행 중')
+      expect(api.markNodeDone(running.runId, 'work')?.status).toBe('done')
+      expect(api.pipelineRuns().find((r) => r.runId === failed.runId)?.status).toBe('failed')
+    } finally { api.killAllTerminals() }
+  })
+})
 
 describe('터미널 자동 복원', () => {
   it.each(['claude', 'codex'] as const)('[DM-F02-AC4] %s 세션 불러오기 목록에 첫 메시지와 구분되는 실제 name을 제공한다', async (kind) => {

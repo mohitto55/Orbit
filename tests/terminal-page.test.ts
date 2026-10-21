@@ -123,6 +123,17 @@ it('[TE-F01-AC4] 탭 이름 변경과 닫기를 저장하고 재마운트에도 
   expect(host.querySelector('.term-tab')!.textContent).toContain('확인용 셸')
 })
 
+it('[DM-F02-AC4] 작업 그래프가 기존 터미널을 재사용하면 탭과 출력을 중복해서 만들지 않는다', async () => {
+  await mount()
+  const outputBefore = [...writes]
+  const hostsBefore = host.querySelectorAll('.term-host').length
+  await act(async () => listeners.get('term-created')?.({ ...first, output: '기존 출력 전체' }))
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
+  expect(host.querySelectorAll('.term-host')).toHaveLength(hostsBefore)
+  expect(writes).toEqual(outputBefore)
+  expect(host.querySelector('.term-tab.on')!.textContent).toContain('결제 작업')
+})
+
 it('[TE-F02-AC1] [TE-F02-AC2] [TE-F02-AC5] 그룹 생성·선택 이동·이름 변경·해제 중에도 모든 터미널과 숨긴 출력을 유지한다', async () => {
   await mount()
   await click('+ 그룹')
