@@ -251,7 +251,7 @@ export class TerminalManager {
   rename(id: string, title: string): TerminalInfo {
     const t = this.terms.get(id)
     if (!t) throw new Error('실행 중인 터미널을 찾을 수 없습니다')
-    if (!title.trim() || title.trim().length > 100) throw new Error('세션 이름은 1~100자로 입력해 주세요')
+    if (!title.trim() || title.trim().length > 100) throw new Error('터미널 이름은 1~100자로 입력해 주세요')
     t.info = { ...t.info, title: title.trim() }
     return t.info
   }

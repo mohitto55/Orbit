@@ -43,7 +43,7 @@ describe('작업 그래프 세션 재사용', () => {
       title: '기존 대화 이어서 작업',
       nodes: [
         { id: 'start', kind: 'start', text: '', terminal: 'new' },
-        { id: 'work', kind, session, text: '기존 대화에 보내는 작업', terminal: 'new' }
+        { id: 'work', kind, name: '결제 검토', session, text: '기존 대화에 보내는 작업', terminal: 'new' }
       ],
       edges: [{ from: 'start', to: 'work' }]
     })
@@ -105,7 +105,11 @@ describe('작업 그래프 세션 재사용', () => {
       if (kind === 'claude') {
         const dir = path.join(home, '.claude', 'projects', encodeClaudeProjectDir(projectDir))
         await fs.mkdir(dir, { recursive: true })
-        await fs.writeFile(path.join(dir, `${session}.jsonl`), '')
+        await fs.writeFile(path.join(dir, `${session}.jsonl`), JSON.stringify({ type: 'ai-title', sessionId: session, aiTitle: 'AI가 정한 세션 이름' }))
+      } else {
+        const dir = path.join(home, '.codex')
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, 'session_index.jsonl'), JSON.stringify({ id: session, thread_name: 'AI가 정한 세션 이름' }))
       }
       const first = await saveGraph(api, kind, session)
       const second = await saveGraph(api, kind, session)
@@ -116,6 +120,7 @@ describe('작업 그래프 세션 재사용', () => {
       const state = await api.termState()
       expect(state.tabs).toHaveLength(1)
       expect(state.tabs[0].sessionId).toBe(session)
+      expect(state.tabs[0].title).toBe(`${kind === 'claude' ? 'Claude Code' : 'Codex'} · 결제 검토`)
       expect(ptys[0].write).toHaveBeenCalledWith(expect.stringContaining(kind === 'claude' ? `claude --resume ${session}` : `codex resume ${session}`))
       expect(vi.mocked(ptys[0].write).mock.calls.filter(([input]) => input.includes('기존 대화에 보내는 작업'))).toHaveLength(1)
       const running = api.pipelineRuns().find((r) => r.status === 'running')!
@@ -154,7 +159,7 @@ describe('터미널 자동 복원', () => {
     expect(sessions.find((s) => s.id === 'unnamed')).toMatchObject({ name: undefined, firstPrompt: '첫 메시지 내용' })
   })
 
-  it('[TE-F01-AC10] 복원한 탭과 CLI에서 선택한 세션은 해당 세션의 실제 이름으로 표시한다', async () => {
+  it('[TE-F01-AC4] [TE-F01-AC10] 복원·세션 전환·AI 이름 변경·재연결에도 저장한 터미널 이름을 유지한다', async () => {
     const home = await tempDir('terminal-session-names-')
     vi.stubEnv('CODEX_HOME', path.join(home, 'codex'))
     vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, 'claude'))
@@ -180,21 +185,22 @@ describe('터미널 자동 복원', () => {
     await fs.writeFile(path.join(home, 'codex', 'session_index.jsonl'), index)
     const transcript = JSON.stringify({ type: 'custom-title', sessionId: claude.sessionId, customTitle: '클로드 세션 이름' }) + '\n'
     await fs.writeFile(path.join(claudeDir, `${claude.sessionId}.jsonl`), transcript)
-    await api.termRename(codex.id, '예전 탭 이름')
+    await api.termRename(codex.id, '결제 작업')
+    await api.termRename(claude.id, '기획 검토')
     api.killAllTerminals()
 
     const restarted = createApi(deps)
     await restarted.openProject(projectDir)
     try {
       const state = await restarted.termState()
-      expect(state.tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: codexId, title: '결제 세션의 실제 name' })
-      expect(state.tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: claude.sessionId, title: '클로드 세션 이름' })
+      expect(state.tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: codexId, title: '결제 작업' })
+      expect(state.tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: claude.sessionId, title: '기획 검토' })
       const resumed = state.tabs.find((tab) => tab.id === codex.id)!
       ptys.find((pty) => pty.pid === resumed.pid)!.emit(`\x1b]0;${nextId}\x07`)
       await vi.waitFor(async () => {
-        expect((await restarted.termState()).tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: nextId, title: '다른 세션의 실제 name' })
+        expect((await restarted.termState()).tabs.find((tab) => tab.id === codex.id)).toMatchObject({ sessionId: nextId, title: '결제 작업' })
       }, { timeout: 3000 })
-      expect(deps.send).toHaveBeenCalledWith('term-info', expect.objectContaining({ id: codex.id, title: '다른 세션의 실제 name' }))
+      expect(deps.send).toHaveBeenCalledWith('term-info', expect.objectContaining({ id: codex.id, title: '결제 작업' }))
       const savedFiles = await fs.readdir(path.join(home, 'orbit', 'terminals'))
       const savedFile = path.join(home, 'orbit', 'terminals', savedFiles.find((file) => file.endsWith('.json'))!)
       const launchFile = path.join(`${savedFile}.sessions`, claude.id, 'state.json')
@@ -203,10 +209,20 @@ describe('터미널 자동 복원', () => {
       await fs.writeFile(launchFile, JSON.stringify({ ...launch, sessionId: nextId }))
       ptys.find((pty) => pty.pid === state.tabs.find((tab) => tab.id === claude.id)!.pid)!.emit('\x1b]0;Claude\x07')
       await vi.waitFor(async () => {
-        expect((await restarted.termState()).tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: nextId, title: '다른 클로드 세션 이름' })
+        expect((await restarted.termState()).tabs.find((tab) => tab.id === claude.id)).toMatchObject({ sessionId: nextId, title: '기획 검토' })
       })
-      expect(await fs.readFile(path.join(home, 'codex', 'session_index.jsonl'), 'utf8')).toBe(index)
+      const updatedIndex = index + '\n' + JSON.stringify({ id: nextId, thread_name: 'AI가 바꾼 코덱스 세션 이름' }) + '\n'
+      const updatedTranscript = JSON.stringify({ type: 'ai-title', sessionId: nextId, aiTitle: 'AI가 바꾼 클로드 세션 이름' }) + '\n'
+      await fs.writeFile(path.join(home, 'codex', 'session_index.jsonl'), updatedIndex)
+      await fs.writeFile(path.join(claudeDir, `${nextId}.jsonl`), updatedTranscript)
+      expect(await restarted.termRestart(codex.id)).toMatchObject({ sessionId: nextId, title: '결제 작업' })
+      expect(await restarted.termRestart(claude.id)).toMatchObject({ sessionId: nextId, title: '기획 검토' })
+      const saved = JSON.parse(await fs.readFile(savedFile, 'utf8')) as { tabs: { id: string; title: string }[] }
+      expect(saved.tabs.find((tab) => tab.id === codex.id)?.title).toBe('결제 작업')
+      expect(saved.tabs.find((tab) => tab.id === claude.id)?.title).toBe('기획 검토')
+      expect(await fs.readFile(path.join(home, 'codex', 'session_index.jsonl'), 'utf8')).toBe(updatedIndex)
       expect(await fs.readFile(path.join(claudeDir, `${claude.sessionId}.jsonl`), 'utf8')).toBe(transcript)
+      expect(await fs.readFile(path.join(claudeDir, `${nextId}.jsonl`), 'utf8')).toBe(updatedTranscript)
     } finally { restarted.killAllTerminals() }
   })
 

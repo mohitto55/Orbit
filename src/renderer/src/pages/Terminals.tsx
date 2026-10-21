@@ -296,7 +296,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
           : '이 그룹에는 터미널이 없습니다. 위에서 새 터미널을 열거나, 전체 보기에서 기존 탭을 이 그룹으로 옮기세요.'}</Empty>}
       </div>
       {editing && (
-        <Modal title={editing.kind === 'tab' ? '세션 이름 변경' : editing.kind === 'new-group' ? '터미널 그룹 만들기' : '그룹 이름 변경'} onClose={() => { if (!updating) setEditing(null) }}>
+        <Modal title={editing.kind === 'tab' ? '터미널 이름 변경' : editing.kind === 'new-group' ? '터미널 그룹 만들기' : '그룹 이름 변경'} onClose={() => { if (!updating) setEditing(null) }}>
           <form onSubmit={(event) => { event.preventDefault(); void rename() }}>
             <div className="field"><label htmlFor="terminal-name">이름</label><input id="terminal-name" autoFocus maxLength={100} disabled={updating} placeholder={editing.kind === 'tab' ? undefined : '예: 서버 작업, 클라이언트 작업'} value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="row end"><button type="button" disabled={updating} onClick={() => setEditing(null)}>취소</button><button className="primary" disabled={!name.trim() || busy} type="submit">저장</button></div>

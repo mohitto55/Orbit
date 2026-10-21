@@ -7,7 +7,7 @@ import { tempDir } from './helpers'
 
 afterEach(() => vi.unstubAllEnvs())
 
-it('[TE-F01-AC10] Codex의 같은 세션에 저장된 최신 name을 읽고 원본을 변경하지 않는다', async () => {
+it('[DM-F02-AC4] Codex의 같은 세션에 저장된 최신 name을 읽고 원본을 변경하지 않는다', async () => {
   const home = await tempDir('codex-names-')
   const file = path.join(home, 'session_index.jsonl')
   const raw = [
@@ -26,7 +26,7 @@ it('[TE-F01-AC10] Codex의 같은 세션에 저장된 최신 name을 읽고 원�
   expect(await readSessionTitle('codex', 'mine', home)).toBe('최종 세션 이름')
 })
 
-it('[TE-F01-AC10] Claude의 사용자 제목을 자동 제목보다 우선하며 큰 대화도 앞뒤 메타데이터만 읽는다', async () => {
+it('[DM-F02-AC4] Claude의 사용자 제목을 자동 제목보다 우선하며 큰 대화도 앞뒤 메타데이터만 읽는다', async () => {
   const home = await tempDir('claude-names-')
   const dir = path.join(home, 'projects', encodeClaudeProjectDir(home))
   await fs.mkdir(dir, { recursive: true })
@@ -45,7 +45,7 @@ it('[TE-F01-AC10] Claude의 사용자 제목을 자동 제목보다 우선하며
   expect(await readSessionTitle('claude', 'mine', home, home)).toBe('새 이름')
 })
 
-it('[TE-F01-AC10] Claude의 자동 제목·구버전 색인을 읽고 이름 없는 세션과 손상된 색인은 건너뛴다', async () => {
+it('[DM-F02-AC4] Claude의 자동 제목·구버전 색인을 읽고 이름 없는 세션과 손상된 색인은 건너뛴다', async () => {
   const home = await tempDir('claude-name-fallback-')
   const dir = path.join(home, 'projects', encodeClaudeProjectDir(home))
   await fs.mkdir(dir, { recursive: true })
