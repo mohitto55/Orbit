@@ -2,7 +2,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import type { Ctx } from './workspace'
 import { listMd, readMd, writeMd, nowIso, stamp } from './md'
-import { NODE_KINDS, withNames, type NodeKind, type PipeEdge, type PipeNode, type Pipeline } from './pipeline'
+import { NODE_KINDS, withFunctionBoundary, withNames, type NodeKind, type PipeEdge, type PipeNode, type Pipeline, type FunctionParam } from './pipeline'
 
 /** 연동: 작업 그래프를 데이터 폴더의 pipelines/<id>.md 로 저장한다. */
 
@@ -21,6 +21,9 @@ function readNodes(v: unknown): PipeNode[] {
       kind: (NODE_KINDS as readonly string[]).includes(n.kind) ? (n.kind as NodeKind) : 'shell',
       text: String(n.text ?? ''),
       ...(Array.isArray(n.items) ? { items: n.items.map((x: unknown) => String(x ?? '')) } : {}),
+      ...(Number.isInteger(n.index) && n.index >= 0 ? { index: n.index } : {}),
+      ...(Array.isArray(n.params) ? { params: n.params.filter((p: Partial<FunctionParam> | null) => p && typeof p.id === 'string' && typeof p.name === 'string').map((p: FunctionParam) => ({ id: p.id, name: p.name, type: p.type === 'list' ? 'list' : 'single' })) } : {}),
+      ...(n.values && typeof n.values === 'object' && !Array.isArray(n.values) ? { values: Object.fromEntries(Object.entries(n.values).filter(([, value]) => typeof value === 'string')) } : {}),
       terminal: n.terminal === 'continue' ? 'continue' : 'new',
       ...(typeof n.session === 'string' && n.session && (n.kind === 'claude' || n.kind === 'codex') ? { session: n.session } : {}),
       ...(typeof n.ref === 'string' && n.ref ? { ref: n.ref } : {}),
@@ -36,8 +39,8 @@ function readEdges(v: unknown, ids: Set<string>): PipeEdge[] {
   const out: PipeEdge[] = []
   for (const e of v) {
     if (!e || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue
-    const edge: PipeEdge = { from: e.from, to: e.to, ...(e.pin === 'data' ? { pin: 'data' as const } : {}) }
-    if (!out.some((o) => o.from === edge.from && o.to === edge.to && o.pin === edge.pin)) out.push(edge)
+    const edge: PipeEdge = { from: e.from, to: e.to, ...(e.pin === 'data' ? { pin: 'data' as const } : {}), ...(typeof e.fromPort === 'string' ? { fromPort: e.fromPort } : {}), ...(typeof e.toPort === 'string' ? { toPort: e.toPort } : {}) }
+    if (!out.some((o) => o.from === edge.from && o.to === edge.to && o.pin === edge.pin && o.fromPort === edge.fromPort && o.toPort === edge.toPort)) out.push(edge)
   }
   return out
 }
@@ -49,7 +52,9 @@ export async function listPipelines(ctx: Ctx): Promise<Pipeline[]> {
     const nodes = readNodes(data.nodes)
     const ids = new Set(nodes.map((n) => n.id))
     const edges = readEdges(data.edges, ids)
-    out.push({ id: data.id ?? path.basename(file, '.md'), title: data.title ?? '', ...(data.template ? { template: true } : {}), nodes, edges, updated: data.updated, file })
+    const id = data.id ?? path.basename(file, '.md')
+    const graph = data.template ? withFunctionBoundary({ nodes, edges }, id) : { nodes, edges }
+    out.push({ id, title: data.title ?? '', ...(data.template ? { template: true } : {}), ...graph, updated: data.updated, file })
   }
   return out
 }
@@ -63,7 +68,8 @@ export async function savePipeline(
   const nodes = readNodes(input.nodes)
   const ids = new Set(nodes.map((n) => n.id))
   const edges = readEdges(input.edges, ids)
-  const data = { id, kind: 'pipeline', title: input.title.trim() || '이름 없는 작업 그래프', ...(input.template ? { template: true } : {}), nodes, edges, updated: nowIso() }
+  const graph = input.template ? withFunctionBoundary({ nodes, edges }, id) : { nodes, edges }
+  const data = { id, kind: 'pipeline', title: input.title.trim() || '이름 없는 작업 그래프', ...(input.template ? { template: true } : {}), ...graph, updated: nowIso() }
   await writeMd(file, data, '')
   return (await listPipelines(ctx)).find((p) => p.id === id)!
 }
@@ -79,6 +85,6 @@ export async function deletePipeline(ctx: Ctx, id: string): Promise<void> {
   const p = all.find((x) => x.id === id)
   if (!p) return
   const users = templateUsers(all, id)
-  if (users.length) throw new Error(`다음 작업 그래프가 이 템플릿을 쓰고 있어 지울 수 없습니다: ${users.map((u) => u.title).join(', ')}`)
+  if (users.length) throw new Error(`다음 작업 그래프가 이 함수를 쓰고 있어 지울 수 없습니다: ${users.map((u) => u.title).join(', ')}`)
   await fs.rm(p.file, { force: true })
 }

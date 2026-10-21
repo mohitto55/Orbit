@@ -21,7 +21,12 @@ export const CONCEPT_KINDS = ['Entity', 'Value Object', 'Aggregate', 'Event', 'P
 export type { DomainMap, MapNode, MapEdge, EdgeVia, DomainScope, ScopeNode, ScopeEdge } from '../../core/domainmap'
 export type { NodeKind, PipeNode, PipeEdge, Pipeline, RunState, NodeRun } from '../../core/pipeline'
 export type { InnerValue } from '../../core/pipeline'
+export type { FunctionParam, DataShape } from '../../core/pipeline'
 export {
+  PARAM_TYPE_NAME,
+  functionParams,
+  isFunctionBoundary,
+  withFunctionBoundary,
   KIND_NAME,
   SHAPE_NAME,
   TEMPLATE_INPUT,

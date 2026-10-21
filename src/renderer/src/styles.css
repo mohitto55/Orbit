@@ -716,6 +716,9 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .pipe-panel h4 { margin: 0 0 8px; }
 .pipe-panel p { margin: 0 0 8px; }
 .pipe-panel textarea { min-height: 140px; }
+.pipe-parameter { display: grid; grid-template-columns: minmax(0, 1fr) 110px 28px; gap: 6px; margin: 8px 0; align-items: center; }
+.pipe-parameter input, .pipe-parameter select { min-width: 0; width: 100%; }
+.pipe-panel textarea[rows="2"] { min-height: 60px; }
 @media (max-width: 1100px) { .pipe-body { grid-template-columns: 1fr; } }
 .pipe-list-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; color: var(--muted); margin: 10px 4px 2px; }
 .pipe-list-head:first-child { margin-top: 0; }

@@ -19,19 +19,22 @@ import type { TerminalInfo, TerminalKind } from './terminal'
  * spec·feature·ac: 도메인의 기능 명세 / 그 안의 기능 하나 / 기능의 수용 기준 하나 (실행할 때마다 명세의 지금 내용을 읽는다).
  *   명세 노드에서 기능 노드를, 기능 노드에서 수용 기준 노드를, 리스트 노드에서 항목을 텍스트 노드로 꺼낼 수 있다 (innerValues).
  */
-export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'complete', 'text', 'list', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
+export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'complete', 'text', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
 
-export const DATA_KINDS: NodeKind[] = ['text', 'list', 'join', 'task', 'skill', 'spec', 'feature', 'ac']
+export const DATA_KINDS: NodeKind[] = ['text', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac']
 export const isData = (n: Pick<PipeNode, 'kind'>) => DATA_KINDS.includes(n.kind)
 
 /** 데이터의 형태: 단일은 글 하나, 리스트는 글 여러 개 (기능 명세는 기능들의 리스트) */
 export type DataShape = 'single' | 'list'
 export const dataShape = (n: Pick<PipeNode, 'kind'>): DataShape => (n.kind === 'list' || n.kind === 'spec' ? 'list' : 'single')
 export const SHAPE_NAME: Record<DataShape, string> = { single: '단일', list: '리스트' }
+export const PARAM_TYPE_NAME: Record<DataShape, string> = { single: '텍스트', list: '텍스트 리스트' }
+export interface FunctionParam { id: string; name: string; type: DataShape }
+export const isFunctionBoundary = (n: Pick<PipeNode, 'kind'>) => n.kind === 'function-input' || n.kind === 'function-output'
 
 /** 작업 결과를 데이터로 내보내는 실행 노드 (셸: 명령 출력) */
-export const hasDataOut = (n: Pick<PipeNode, 'kind'>) => n.kind === 'shell'
+export const hasDataOut = (n: Pick<PipeNode, 'kind'>) => n.kind === 'shell' || n.kind === 'template' || isFunctionBoundary(n)
 
 export interface PipeNode {
   /** 노드를 가리키는 값 (새 노드는 uuid, 예전 그래프의 노드는 n1·n2…). 선은 이 값으로 잇는다 */
@@ -46,6 +49,12 @@ export interface PipeNode {
   text: string
   /** 리스트 노드: 적어 둔 항목 (입력이 들어오면 대신 들어온 데이터를 항목으로 쓴다) */
   items?: string[]
+  /** 리스트 항목 노드가 읽을 0부터 시작하는 위치 */
+  index?: number
+  /** 함수 입·출력 노드의 고정 ID를 가진 변수들. 이름 변경으로 연결이 바뀌지 않는다. */
+  params?: FunctionParam[]
+  /** 함수 호출 인자의 연결되지 않은 기본값. 리스트는 한 줄에 한 항목. */
+  values?: Record<string, string>
   /** new: 지정한 세션 또는 새 탭에서, continue: 앞 노드(같은 종류)의 터미널에서 이어서 (대화 맥락 유지) */
   terminal: 'new' | 'continue'
   /**
@@ -67,6 +76,8 @@ export interface PipeEdge {
   to: string
   /** 'data': 실행 노드의 데이터 출력 핀에서 나온 선 (실행이 끝난 뒤의 결과를 넘긴다). 없으면 출발 노드의 기본 출력 */
   pin?: 'data'
+  fromPort?: string
+  toPort?: string
 }
 
 export interface Pipeline {
@@ -80,7 +91,7 @@ export interface Pipeline {
   file: string
 }
 
-type Graph = Pick<Pipeline, 'nodes' | 'edges'>
+export type Graph = Pick<Pipeline, 'nodes' | 'edges'>
 
 /** 그래프 밖에서 가져오는 것: 템플릿으로 쓸 작업 그래프들, 할 일 */
 export interface Env {
@@ -167,11 +178,12 @@ export interface InnerValue {
   ref?: string
   /** 텍스트 노드로 꺼낼 때 담을 글 (리스트의 항목) */
   text?: string
+  index?: number
   label: string
 }
-export function innerValues(n: Pick<PipeNode, 'kind' | 'ref' | 'items'>, env: Env): InnerValue[] {
+export function innerValues(n: Pick<PipeNode, 'kind' | 'ref' | 'items'> & { id?: string }, env: Env, graph?: Graph): InnerValue[] {
   // 리스트 노드: 적어 둔 항목 하나하나를 단일 텍스트 노드로
-  if (n.kind === 'list') return (n.items ?? []).filter((t) => t.trim()).map((t) => ({ kind: 'text', text: t, label: plain(t).split('\n')[0] }))
+  if (n.kind === 'list') return (graph && n.id ? dataItems(graph, n.id, env) : n.items ?? []).filter((t) => t.trim()).map((t, index) => ({ kind: 'item', index, label: plain(t).split('\n')[0] }))
   const { spec, feature } = specTarget(n, env)
   if (n.kind === 'spec' && spec) return spec.features.map((f) => ({ kind: 'feature', ref: `${spec.id}#${f.id}`, label: `${f.id} ${f.name}` }))
   if (n.kind === 'feature' && spec && feature) return feature.acs.map((a) => ({ kind: 'ac', ref: `${spec.id}#${a.id}`, label: `AC${a.num} ${plain(a.text).split('\n')[0]}` }))
@@ -182,6 +194,45 @@ export function innerValues(n: Pick<PipeNode, 'kind' | 'ref' | 'items'>, env: En
 export const TEMPLATE_SEP = '/'
 /** 템플릿 프롬프트·명령에서 템플릿 노드의 입력으로 바뀌는 자리 */
 export const TEMPLATE_INPUT = '{{입력}}'
+
+/** 예전 템플릿도 입·출력 경계가 있는 함수로 읽는다. 기존 실행 흐름은 경계 사이에 둔다. */
+export function withFunctionBoundary(p: Graph, key = 'function'): Graph {
+  const input = p.nodes.find((n) => n.kind === 'function-input')
+  const output = p.nodes.find((n) => n.kind === 'function-output')
+  if (input && output) return p
+  const starts = p.nodes.filter((n) => n.kind === 'start')
+  const entry: PipeNode = input ?? { id: starts[0]?.id ?? `${key}/input`, name: '함수 Input', kind: 'function-input', text: '', terminal: 'new', x: -260, y: 0, params: [{ id: 'input', name: '입력', type: 'single' }] }
+  const exit: PipeNode = output ?? { id: `${key}/output`, name: '함수 Output', kind: 'function-output', text: '', terminal: 'new', x: Math.max(0, ...p.nodes.map((n) => n.x ?? 0)) + 280, y: 0, params: [] }
+  const nodes = [entry, ...p.nodes.filter((n) => n.kind !== 'start' && !isFunctionBoundary(n)), exit]
+  const oldStarts = new Set(starts.map((n) => n.id))
+  const edges = p.edges.map((e) => ({ ...e, from: oldStarts.has(e.from) ? entry.id : e.from, to: oldStarts.has(e.to) ? entry.id : e.to }))
+  const actions = nodes.filter((n) => !isData(n) && !isFunctionBoundary(n))
+  const execution = execEdges({ nodes, edges })
+  if (!input && !starts.length) for (const n of actions.filter((n) => !execution.some((e) => e.to === n.id))) edges.push({ from: entry.id, to: n.id })
+  if (!output) for (const n of actions.filter((n) => !execution.some((e) => e.from === n.id))) edges.push({ from: n.id, to: exit.id })
+  if (!actions.length && !edges.some((e) => e.from === entry.id && e.to === exit.id)) edges.push({ from: entry.id, to: exit.id })
+  return { nodes, edges }
+}
+
+export function functionParams(n: PipeNode, env: Env): { inputs: FunctionParam[]; outputs: FunctionParam[] } {
+  if (n.kind === 'function-input') return { inputs: [], outputs: n.params ?? [] }
+  if (n.kind === 'function-output') return { inputs: n.params ?? [], outputs: [] }
+  if (n.kind !== 'template') return { inputs: [], outputs: [] }
+  const definition = env.library?.find((p) => p.id === n.ref)
+  const graph = definition && withFunctionBoundary(definition, definition.id)
+  return {
+    inputs: graph?.nodes.find((x) => x.kind === 'function-input')?.params ?? [],
+    outputs: graph?.nodes.find((x) => x.kind === 'function-output')?.params ?? []
+  }
+}
+
+const inputToken = (node: string, port: string) => `\u0000입력:${JSON.stringify([node, port])}\u0000`
+function resolveInputs(text: string, p: Graph, env: Env, seen: string[] = []): string {
+  return text.replace(/\u0000입력:([^\u0000]+)\u0000/g, (_match, value: string) => {
+    const [id, port] = JSON.parse(value) as [string, string]
+    return portItems(p, id, port, env, seen).join('\n\n')
+  })
+}
 
 const preds = (p: Pick<Pipeline, 'edges'>, id: string) => p.edges.filter((e) => e.to === id).map((e) => e.from)
 const byId = (p: Graph, id: string) => p.nodes.find((n) => n.id === id)
@@ -202,12 +253,47 @@ export function execEdges(p: Graph): PipeEdge[] {
 }
 
 /** 노드로 글을 넘기는 노드 (데이터 노드, 또는 결과를 내보내는 실행 노드). 위에 있는 노드부터 (같으면 왼쪽부터). */
-function dataPreds(p: Graph, id: string): PipeNode[] {
+function incomingData(p: Graph, id: string): PipeEdge[] {
   return p.edges
     .filter((e) => e.to === id && isDataEdge(p, e))
-    .map((e) => byId(p, e.from)!)
-    .filter(Boolean)
-    .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+    .filter((e) => byId(p, e.from))
+    .sort((a, b) => {
+      const x = byId(p, a.from)!, y = byId(p, b.from)!
+      return (x.y ?? 0) - (y.y ?? 0) || (x.x ?? 0) - (y.x ?? 0)
+    })
+}
+const dataPreds = (p: Graph, id: string) => incomingData(p, id).map((e) => byId(p, e.from)!)
+
+function portItems(p: Graph, id: string, port: string | undefined, env: Env, seen: string[]): string[] {
+  const n = byId(p, id)
+  const param = n?.params?.find((v) => v.id === (port ?? n.params?.[0]?.id))
+  if (!n || !param) throw new Error(`${n ? nodeName(n) : id}: 함수 변수를 찾을 수 없습니다`)
+  const key = `${id}#${param.id}`
+  if (seen.includes(key)) throw new Error('함수 데이터 선이 고리를 이룹니다')
+  const next = [...seen, key]
+  const edges = incomingData(p, id).filter((e) => (e.toPort ?? n.params?.[0]?.id) === param.id)
+  if (edges.length) {
+    const items = edges.flatMap((e) => edgeItems(p, e, env, next))
+    // 이름 없는 예전 템플릿 입력은 직접 쓴 글 뒤에 연결된 데이터를 붙였다.
+    if (n.kind === 'function-input' && edges.some((e) => !e.toPort) && n.text.trim()) items.unshift(resolveInputs(n.text, p, env, next))
+    return items
+  }
+  const literal = n.values?.[param.id]
+  if (literal === undefined) return n.kind === 'function-input' ? [`{{${param.name}}}`] : []
+  return (param.type === 'list' ? literal.split('\n').filter((x) => x.trim()) : [literal]).map((x) => resolveInputs(x, p, env, next))
+}
+
+function edgeItems(p: Graph, edge: PipeEdge, env: Env, seen: string[] = []): string[] {
+  const n = byId(p, edge.from)
+  if (n && isFunctionBoundary(n)) return portItems(p, n.id, edge.fromPort, env, seen)
+  // 편집 중 미리 보기에도 함수의 리스트 형태를 보존한다. 실행되지 않는 호출의 결과는 실행 순서 검사에서 알린다.
+  if (n?.kind === 'template' && liveNodes(p).has(n.id)) {
+    const graph = lowerFunctions(p, env, [])
+    const definition = env.library?.find((x) => x.id === n.ref)!
+    const exit = withFunctionBoundary(definition, definition.id).nodes.find((x) => x.kind === 'function-output')!
+    return portItems(graph, `${n.id}${TEMPLATE_SEP}${exit.id}`, edge.fromPort, env, seen)
+  }
+  return dataItems(p, edge.from, env, seen)
 }
 
 /**
@@ -232,6 +318,14 @@ export function dataValue(p: Graph, id: string, env: Env = {}, seen: string[] = 
   const n = byId(p, id)
   if (!n) return ''
   if (!isData(n)) return outputToken(n.id)
+  if (n.kind === 'item') {
+    const source = incomingData(p, id)[0]
+    if (!source) throw new Error(`${nodeName(n)}: 원본 리스트를 연결하세요`)
+    const items = edgeItems(p, source, env, [...seen, id])
+    const index = n.index ?? 0
+    if (!Number.isInteger(index) || index < 0 || index >= items.length) throw new Error(`${nodeName(n)}: 리스트에 ${index + 1}번째 항목이 없습니다`)
+    return items[index]
+  }
   if (n.kind === 'list') return dataItems(p, id, env, seen).join('\n\n')
   if (n.kind === 'task') {
     const t = env.tasks?.find((x) => x.id === n.ref)
@@ -245,13 +339,13 @@ export function dataValue(p: Graph, id: string, env: Env = {}, seen: string[] = 
     if (n.kind === 'feature') return featureText(feature)
     return ac ? `기능 ${feature.id} ${feature.name}의 수용 기준 ${acLine(ac)}` : ''
   }
-  const inputs = dataPreds(p, id).map((x) => dataValue(p, x.id, env, [...seen, id]))
+  const inputs = incomingData(p, id).map((e) => edgeItems(p, e, env, [...seen, id]).join('\n\n'))
   // 텍스트 노드: 입력이 들어오면 적어 둔 글 대신 들어온 글을 그대로 내보낸다
-  if (n.kind === 'text') return inputs.length ? inputs.filter((t) => t.trim()).join('\n\n') : n.text
+  if (n.kind === 'text') return inputs.length ? inputs.filter((t) => t.trim()).join('\n\n') : resolveInputs(n.text, p, env, [...seen, id])
   // 합치기: 리스트가 들어오면 그 항목들을 하나씩 잇는다
   const sep = n.text ? n.text.replace(/\\n/g, '\n') : '\n\n'
-  return dataPreds(p, id)
-    .flatMap((x) => dataItems(p, x.id, env, [...seen, id]))
+  return incomingData(p, id)
+    .flatMap((e) => edgeItems(p, e, env, [...seen, id]))
     .filter((t) => t.trim())
     .join(sep)
 }
@@ -266,13 +360,13 @@ export function dataItems(p: Graph, id: string, env: Env = {}, seen: string[] = 
   if (n.kind === 'spec') return specTarget(n, env).spec?.features.map(featureText) ?? []
   if (n.kind !== 'list') return [dataValue(p, id, env, seen)]
   if (seen.includes(id)) throw new Error(`데이터 선이 고리를 이룹니다: ${[...seen, id].join(' → ')}`)
-  const from = dataPreds(p, id)
-  const items = from.length ? from.flatMap((x) => dataItems(p, x.id, env, [...seen, id])) : (n.items ?? [])
+  const from = incomingData(p, id)
+  const items = from.length ? from.flatMap((e) => edgeItems(p, e, env, [...seen, id])) : (n.items ?? []).map((x) => resolveInputs(x, p, env, [...seen, id]))
   return items.filter((t) => t.trim())
 }
 
 /** 입력 핀이 있는 노드인지 (시작·할 일·스킬·명세 계열 노드는 출력만 있다) */
-export const hasInput = (n: Pick<PipeNode, 'kind'>) => !['task', 'start', 'skill', 'spec', 'feature', 'ac'].includes(n.kind)
+export const hasInput = (n: Pick<PipeNode, 'kind'>) => !['task', 'start', 'skill', 'spec', 'function-input'].includes(n.kind)
 
 /**
  * 실행되는 노드: 시작 노드가 있으면 시작에서 실행 선을 따라 닿는 노드만, 없으면 모든 실행 노드.
@@ -281,7 +375,7 @@ export const hasInput = (n: Pick<PipeNode, 'kind'>) => !['task', 'start', 'skill
 export function liveNodes(p: Graph): Set<string> {
   const ex = execEdges(p)
   const live = new Set<string>()
-  const starts = p.nodes.filter((n) => n.kind === 'start').map((n) => n.id)
+  const starts = p.nodes.filter((n) => n.kind === 'start' || (n.kind === 'function-input' && !ex.some((e) => e.to === n.id))).map((n) => n.id)
   if (starts.length) {
     const stack = [...starts]
     while (stack.length) {
@@ -304,14 +398,41 @@ export function liveNodes(p: Graph): Set<string> {
 }
 
 /** from → to 선을 그을 수 있는지. 안 되면 이유. pin: 'data'면 실행 노드의 데이터 출력 핀에서 나온 선 */
-export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['pin']): string | null {
+export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['pin'], env: Env = {}, ports: Pick<PipeEdge, 'fromPort' | 'toPort'> = {}): string | null {
   const a = byId(p, from)
   const b = byId(p, to)
   if (!a || !b) return '노드를 찾을 수 없습니다'
   if (from === to) return '자기 자신에게는 이을 수 없습니다'
+  if (a.kind === 'function-output') return '함수 Output은 함수의 끝입니다'
   if (pin === 'data' && (isData(a) || !hasDataOut(a))) return `${KIND_NAME[a.kind]} 노드에는 결과를 내보내는 데이터 출력이 없습니다`
   if (!pin && !isData(a) && isData(b)) return '실행 노드의 실행 출력에서 데이터 노드로는 이을 수 없습니다'
   if (!hasInput(b)) return `${KIND_NAME[b.kind]} 노드에는 입력이 없습니다`
+  const data = pin === 'data' || isData(a)
+  if (!data && (ports.fromPort || ports.toPort)) return '데이터 변수에는 데이터 핀을 연결하세요'
+  if (data) {
+    const sourcePorts = functionParams(a, env).outputs
+    const source = sourcePorts.find((v) => v.id === (ports.fromPort ?? sourcePorts[0]?.id))
+    if ((a.kind === 'template' || a.kind === 'function-input') && !source) return '함수의 출력 변수를 고르세요'
+    if (ports.fromPort && !source) return '존재하지 않는 출력 변수입니다'
+    const shape = source?.type ?? dataShape(a)
+    if (b.kind === 'item' && shape !== 'list') return '리스트 항목에는 리스트를 연결하세요'
+    if (b.kind === 'feature' && a.kind !== 'spec') return '기능에는 원본 기능 명세를 연결하세요'
+    if (b.kind === 'ac' && a.kind !== 'feature') return '수용 기준에는 원본 기능을 연결하세요'
+    if (['item', 'feature', 'ac'].includes(b.kind) && incomingData(p, to).some((e) => e.from !== from || e.fromPort !== ports.fromPort)) return '원본 데이터는 하나만 연결할 수 있습니다'
+    if (b.kind === 'feature' && b.ref?.split('#')[0] !== a.ref) return '이 기능의 원본 명세가 아닙니다'
+    if (b.kind === 'ac' && b.ref && a.ref) {
+      const target = specTarget(b, env)
+      if (target.feature && `${target.spec?.id}#${target.feature.id}` !== a.ref) return '이 수용 기준의 원본 기능이 아닙니다'
+    }
+    if (b.kind === 'template' || b.kind === 'function-output') {
+      const targetPorts = functionParams(b, env).inputs
+      const target = targetPorts.find((v) => v.id === (ports.toPort ?? targetPorts[0]?.id))
+      if (!target) return '함수의 입력 변수를 고르세요'
+      // 예전 템플릿의 이름 없는 입력 선은 글을 합쳐 넘기던 동작을 유지한다.
+      if ((ports.toPort || b.kind === 'function-output') && target.type !== shape) return `${target.name}: ${PARAM_TYPE_NAME[target.type]} 입력에 ${PARAM_TYPE_NAME[shape]}을 연결할 수 없습니다`
+      if (ports.toPort && p.edges.some((e) => e.to === to && e.toPort === ports.toPort && isDataEdge(p, e) && (e.from !== from || e.fromPort !== ports.fromPort))) return `${target.name}: 이미 연결된 입력입니다`
+    } else if (ports.toPort) return '존재하지 않는 입력 변수입니다'
+  }
   return null
 }
 
@@ -320,10 +441,13 @@ export const KIND_NAME: Record<NodeKind, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   shell: '셸',
-  template: '템플릿',
+  template: '함수 호출',
+  'function-input': '함수 Input',
+  'function-output': '함수 Output',
   complete: '할 일 완료',
   text: '텍스트',
   list: '리스트',
+  item: '리스트 항목',
   join: '합치기',
   task: '할 일',
   skill: '스킬',
@@ -336,7 +460,7 @@ export const KIND_NAME: Record<NodeKind, string> = {
 export function nodeInput(p: Graph, id: string, env: Env = {}): string {
   const n = byId(p, id)
   if (!n) return ''
-  return [n.text, ...dataPreds(p, id).map((x) => dataValue(p, x.id, env))]
+  return [resolveInputs(n.text, p, env), ...incomingData(p, id).map((e) => edgeItems(p, e, env).join('\n\n'))]
     .map((t) => t.trim())
     .filter(Boolean)
     .join('\n\n')
@@ -360,42 +484,105 @@ export function completeTargets(p: Graph, id: string): string[] {
  * 템플릿의 시작 노드가 "이어서"면 바깥 앞 노드의 터미널을 이어 쓴다. 결과에는 실행 노드만 남는다.
  * "할 일 완료" 노드는 완료할 Task id들을 쉼표로 이어 text에 담는다.
  */
-export function expandPipeline(p: Graph, env: Env = {}, stack: string[] = []): Graph {
-  const nodes: PipeNode[] = []
-  const edges: PipeEdge[] = []
-  const entries = new Map<string, string[]>()
-  const exits = new Map<string, string[]>()
+/** 함수 호출을 고유한 범위로 펼치고, 입·출력 변수의 선을 호출자와 연결한다. */
+function lowerFunctions(p: Graph, env: Env, stack: string[]): Graph {
+  let graph: Graph = { nodes: [...p.nodes], edges: [...p.edges] }
   const live = liveNodes(p)
-  for (const n of p.nodes) {
-    // 시작 노드는 자리만 표시한다: 빼면 그 뒤 노드가 앞 노드 없는 첫 노드가 된다
-    if (isData(n) || n.kind === 'start' || !live.has(n.id)) continue
-    if (n.kind !== 'template') {
-      nodes.push({ ...n, text: n.kind === 'complete' ? completeTargets(p, n.id).join(',') : nodeInput(p, n.id, env) })
-      entries.set(n.id, [n.id])
-      exits.set(n.id, [n.id])
-      continue
+  for (const call of p.nodes.filter((n) => n.kind === 'template' && live.has(n.id))) {
+    const definition = env.library?.find((n) => n.id === call.ref)
+    if (!definition) throw new Error(`${nodeName(call)}: 함수를 찾을 수 없습니다 (${call.ref ?? '고르지 않음'})`)
+    if (stack.includes(definition.id)) throw new Error(`${nodeName(call)}: 함수 "${definition.title}"이(가) 자기 자신을 다시 씁니다`)
+    const body = withFunctionBoundary(definition, definition.id)
+    const problems = functionProblems(body, env)
+    if (problems.length) throw new Error(`${nodeName(call)}: ${problems.join('\n')}`)
+    const entry = body.nodes.find((n) => n.kind === 'function-input')!
+    const exit = body.nodes.find((n) => n.kind === 'function-output')!
+    const id = (value: string) => `${call.id}${TEMPLATE_SEP}${value}`
+    const substitute = (text: string) => (entry.params ?? []).reduce((value, param) => value.split(`{{${param.name}}}`).join(inputToken(id(entry.id), param.id)), text)
+    const nodes = body.nodes.map((n) => ({
+      ...n, id: id(n.id), name: `${nodeName(call)}${TEMPLATE_SEP}${nodeName(n)}`,
+      text: substitute(n.text),
+      ...(n.items ? { items: n.items.map(substitute) } : {}),
+      ...(n.values ? { values: Object.fromEntries(Object.entries(n.values).map(([k, v]) => [k, substitute(v)])) } : {})
+    }))
+    const boundEntry = nodes.find((n) => n.id === id(entry.id))!
+    boundEntry.text = call.text
+    boundEntry.values = Object.fromEntries((entry.params ?? []).map((param, i) => [param.id, call.values?.[param.id] ?? (i === 0 ? call.text : '')]))
+    // 호출 밖에서 여러 데이터를 합치는 순서는 함수 정의의 배치가 아니라 호출 노드의 배치를 따른다.
+    const boundExit = nodes.find((n) => n.id === id(exit.id))!
+    boundExit.x = call.x
+    boundExit.y = call.y
+    const inner = lowerFunctions({ nodes, edges: body.edges.map((e) => ({ ...e, from: id(e.from), to: id(e.to) })) }, env, [...stack, definition.id])
+    graph = {
+      nodes: graph.nodes.flatMap((n) => n.id === call.id ? inner.nodes : [n]),
+      edges: [...graph.edges.map((e) => ({
+        ...e,
+        from: e.from === call.id ? id(exit.id) : e.from,
+        to: e.to === call.id ? id(entry.id) : e.to
+      })), ...inner.edges]
     }
-    const tpl = env.library?.find((t) => t.id === n.ref)
-    if (!tpl) throw new Error(`${nodeName(n)}: 템플릿을 찾을 수 없습니다 (${n.ref ?? '고르지 않음'})`)
-    if (stack.includes(tpl.id)) throw new Error(`${nodeName(n)}: 템플릿 "${tpl.title}"이(가) 자기 자신을 다시 씁니다`)
-    const inner = expandPipeline(tpl, env, [...stack, tpl.id])
-    if (!inner.nodes.length) throw new Error(`${nodeName(n)}: 템플릿 "${tpl.title}"에 실행할 노드가 없습니다`)
-    const input = nodeInput(p, n.id, env)
-    const id = (x: string) => `${n.id}${TEMPLATE_SEP}${x}`
-    for (const x of inner.nodes)
-      nodes.push({
-        ...x,
-        id: id(x.id),
-        name: `${nodeName(n)}${TEMPLATE_SEP}${nodeName(x)}`,
-        // 템플릿 안쪽 노드의 결과 자리도 펼친 id로 (바깥 입력은 바꾼 뒤에 넣는다)
-        text: x.kind === 'complete' ? x.text : fillOutputs(x.text, (o) => outputToken(id(o))).split(TEMPLATE_INPUT).join(input)
-      })
-    for (const e of inner.edges) edges.push({ from: id(e.from), to: id(e.to) })
-    entries.set(n.id, inner.nodes.filter((x) => !inner.edges.some((e) => e.to === x.id)).map((x) => id(x.id)))
-    exits.set(n.id, inner.nodes.filter((x) => !inner.edges.some((e) => e.from === x.id)).map((x) => id(x.id)))
   }
-  for (const e of execEdges(p)) for (const a of exits.get(e.from) ?? []) for (const b of entries.get(e.to) ?? []) edges.push({ from: a, to: b })
-  return { nodes, edges }
+  return graph
+}
+
+function functionProblems(p: Graph, env: Env): string[] {
+  const problems: string[] = []
+  const boundaries = p.nodes.filter(isFunctionBoundary)
+  if (!boundaries.length) return problems
+  for (const kind of ['function-input', 'function-output'] as const) {
+    if (boundaries.filter((n) => n.kind === kind).length !== 1) problems.push(`${KIND_NAME[kind]} 노드는 하나만 있어야 합니다`)
+  }
+  for (const n of boundaries) {
+    const names = new Set<string>(), ids = new Set<string>()
+    for (const param of n.params ?? []) {
+      if (!param.name.trim() || /[{}\u0000-\u001f]/.test(param.name)) problems.push(`${nodeName(n)}: 변수 이름을 입력하세요 (중괄호·제어 문자는 쓸 수 없습니다)`)
+      if (!param.id || names.has(param.name.trim()) || ids.has(param.id)) problems.push(`${nodeName(n)}: 변수 이름과 ID는 비어 있거나 겹칠 수 없습니다`)
+      names.add(param.name.trim()); ids.add(param.id)
+      if (param.type !== 'single' && param.type !== 'list') problems.push(`${nodeName(n)}: 지원하지 않는 변수 타입입니다`)
+      if (n.kind === 'function-output' && !incomingData(p, n.id).some((e) => (e.toPort ?? n.params?.[0]?.id) === param.id) && n.values?.[param.id] === undefined) problems.push(`${nodeName(n)}: 출력 변수 ${param.name}에 값을 연결하세요`)
+    }
+  }
+  const live = liveNodes(p)
+  const output = boundaries.find((n) => n.kind === 'function-output')
+  if (output && !live.has(output.id)) problems.push('함수 Input에서 Output까지 실행 선을 연결하세요')
+  const execution = execEdges(p)
+  if (cyclic({ nodes: p.nodes, edges: execution })) problems.push('함수의 실행 선이 고리를 이룹니다')
+  if (output) {
+    const returning = new Set<string>(), pending = [output.id]
+    while (pending.length) {
+      const id = pending.pop()!
+      if (returning.has(id)) continue
+      returning.add(id)
+      pending.push(...execution.filter((e) => e.to === id).map((e) => e.from))
+    }
+    for (const n of p.nodes) if (live.has(n.id) && !isData(n) && !returning.has(n.id)) problems.push(`${nodeName(n)}: 실행이 끝나면 함수 Output으로 이어 주세요`)
+  }
+  for (const edge of p.edges) {
+    const why = edgeProblem(p, edge.from, edge.to, edge.pin, env, edge)
+    if (why) problems.push(`${nodeName(byId(p, edge.to) ?? { id: edge.to })}: ${why}`)
+  }
+  return problems
+}
+
+export function expandPipeline(p: Graph, env: Env = {}, stack: string[] = []): Graph {
+  const graph = lowerFunctions(p, env, stack)
+  const live = liveNodes(graph)
+  const actions = graph.nodes.filter((n) => live.has(n.id) && !isData(n) && n.kind !== 'start' && !isFunctionBoundary(n))
+  const execution = execEdges(graph)
+  const actionIds = new Set(actions.map((n) => n.id))
+  const next = (id: string, seen = new Set<string>()): string[] => {
+    if (actionIds.has(id)) return [id]
+    if (seen.has(id)) throw new Error('함수의 실행 선이 고리를 이룹니다')
+    return execution.filter((e) => e.from === id).flatMap((e) => next(e.to, new Set([...seen, id])))
+  }
+  const edges: PipeEdge[] = []
+  for (const n of actions) for (const e of execution.filter((e) => e.from === n.id)) for (const to of next(e.to)) {
+    if (!edges.some((edge) => edge.from === n.id && edge.to === to)) edges.push({ from: n.id, to })
+  }
+  return {
+    nodes: actions.map((n) => ({ ...n, text: n.kind === 'complete' ? completeTargets(graph, n.id).join(',') : nodeInput(graph, n.id, env) })),
+    edges
+  }
 }
 
 /** 결과를 쓰는 노드마다 그 결과를 낼 노드가 실행 선으로 앞에 있는지 (펼친 그래프에서) */
@@ -433,22 +620,22 @@ export function continueFrom(p: Graph, node: PipeNode): PipeNode | undefined {
  * 시작에서 닿지 않는 노드는 실행하지 않으므로 검사하지 않는다.
  */
 export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?: boolean } = {}): string[] {
-  const out: string[] = []
+  const out: string[] = functionProblems(p, env)
   const name = (id: string) => nodeName(byId(p, id) ?? { id })
-  const hasStart = p.nodes.some((n) => n.kind === 'start')
+  const hasStart = p.nodes.some((n) => n.kind === 'start' || n.kind === 'function-input')
   if (opts.requireStart && !hasStart) out.push('시작 노드가 없습니다. 실행은 시작 노드에서 실행 선을 따라 진행됩니다')
   const live = liveNodes(p)
   if (!p.nodes.some((n) => live.has(n.id) && !isData(n) && n.kind !== 'start'))
-    out.push(hasStart ? '시작 노드에 이어진 실행 노드가 없습니다. 시작의 ▶ 핀을 끌어 다음 노드에 이으세요' : '실행할 노드(Claude·Codex·셸·템플릿·할 일 완료)가 없습니다')
+    out.push(hasStart ? '시작 노드에 이어진 실행 노드가 없습니다. 시작의 ▶ 핀을 끌어 다음 노드에 이으세요' : '실행할 노드(Claude·Codex·셸·함수 호출·할 일 완료)가 없습니다')
   for (const e of p.edges) {
-    const why = edgeProblem(p, e.from, e.to, e.pin)
+    const why = edgeProblem(p, e.from, e.to, e.pin, env, e)
     if (why) out.push(`${name(e.from)} → ${name(e.to)}: ${why}`)
   }
   if (cyclic({ nodes: p.nodes, edges: execEdges(p) })) out.push('실행 선이 고리를 이룹니다 (끝나지 않는 순환)')
   for (const n of p.nodes) {
-    if (!live.has(n.id) || n.kind === 'start') continue
+    if (!live.has(n.id) || n.kind === 'start' || isFunctionBoundary(n)) continue
     const who = nodeName(n)
-    if (n.kind === 'template' && !n.ref) out.push(`${who}: 쓸 템플릿을 고르세요`)
+    if (n.kind === 'template' && !n.ref) out.push(`${who}: 호출할 함수를 고르세요`)
     if (n.kind === 'task' && !n.ref) out.push(`${who}: 가져올 할 일을 고르세요`)
     if (n.kind === 'task' && n.ref && env.tasks && !env.tasks.some((t) => t.id === n.ref)) out.push(`${who}: 할 일을 찾을 수 없습니다 (${n.ref})`)
     if (n.kind === 'skill' && !n.ref) out.push(`${who}: 가져올 스킬을 고르세요`)

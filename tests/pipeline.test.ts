@@ -227,11 +227,12 @@ describe('연동 · 작업 그래프 데이터 노드와 템플릿', () => {
     const flat = expandPipeline(work, { library: [review] })
     expect(flat.nodes.map((n) => n.id)).toEqual(['w', 't/r', 't/c', 'after'])
     expect(flat.nodes[1].text).toBe('코드 리뷰해. 관점: 보안')
-    expect(flat.edges).toEqual([
+    expect(flat.edges).toEqual(expect.arrayContaining([
       { from: 't/r', to: 't/c' },
       { from: 'w', to: 't/r' },
       { from: 't/c', to: 'after' }
-    ])
+    ]))
+    expect(flat.edges).toHaveLength(3)
     // 템플릿을 고치면 다음에 펼칠 때 바로 반영된다
     review.nodes[1].text = '클라이언트 팀 수정 사항을 표로 출력'
     expect(expandPipeline(work, { library: [review] }).nodes[2].text).toBe('클라이언트 팀 수정 사항을 표로 출력')
@@ -424,8 +425,8 @@ describe('터미널 그래프 · 노드 이름과 기능 명세 데이터 노드
 
   it('[DM-F02-AC1] 리스트 노드에서는 적어 둔 항목을 하나씩 단일 텍스트 노드로 꺼낼 수 있다', () => {
     expect(innerValues({ kind: 'list', items: ['첫째\n둘째 줄', ' ', '셋째'] }, {})).toEqual([
-      { kind: 'text', text: '첫째\n둘째 줄', label: '첫째' },
-      { kind: 'text', text: '셋째', label: '셋째' }
+      { kind: 'item', index: 0, label: '첫째' },
+      { kind: 'item', index: 1, label: '셋째' }
     ])
   })
 

@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import edgehandles from 'cytoscape-edgehandles'
 import { api, on } from '../api'
-import type { InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task } from '../types'
+import type { DataShape, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task } from '../types'
 import {
   KIND_NAME,
+  PARAM_TYPE_NAME,
+  functionParams,
+  isFunctionBoundary,
+  withFunctionBoundary,
   SHAPE_NAME,
-  TEMPLATE_INPUT,
   TEMPLATE_SEP,
   dataItems,
   dataShape,
@@ -34,9 +37,10 @@ cytoscape.use(edgehandles)
 type Draft = Omit<Pipeline, 'file' | 'updated'>
 type Sel = { node: string } | { edge: PipeEdge } | null
 /** 끌기 시작한 출력 핀: 'data'면 실행 노드의 데이터 출력, 없으면 그 노드의 기본 출력 */
-type OutPin = PipeEdge['pin']
-const sameEdge = (a: PipeEdge, b: PipeEdge) => a.from === b.from && a.to === b.to && a.pin === b.pin
-const edgeKey = (e: PipeEdge) => `${e.from}->${e.to}${e.pin ? `:${e.pin}` : ''}`
+type OutPin = string | undefined
+const sameEdge = (a: PipeEdge, b: PipeEdge) => a.from === b.from && a.to === b.to && a.pin === b.pin && a.fromPort === b.fromPort && a.toPort === b.toPort
+const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort, e.toPort])
+const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
 type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[] }
 
@@ -51,9 +55,12 @@ const KIND_COLOR: Record<NodeKind, string> = {
   codex: '#10a37f',
   shell: '#8b919c',
   template: '#3a6fc4',
+  'function-input': '#a353b9',
+  'function-output': '#a353b9',
   complete: '#5a8f2e',
   text: '#8a63d2',
   list: '#8a63d2',
+  item: '#8a63d2',
   join: '#8a63d2',
   task: '#b98a2e',
   skill: '#2f9a8a'
@@ -83,11 +90,12 @@ const DATA_H = 44
 const EXEC_DY = -13
 const DATA_DY = 13
 const DATA_COLOR = '#8a63d2'
-type Pin = { side: 'in' | 'out'; type: 'exec' | 'data'; dy: number; list?: boolean }
+type Pin = { side: 'in' | 'out'; type: 'exec' | 'data'; dy: number; list?: boolean; id?: string; label?: string }
 function pinsOf(kind: NodeKind): Pin[] {
   const list = dataShape({ kind }) === 'list'
   if (isData({ kind }) && !hasInput({ kind })) return [{ side: 'out', type: 'data', dy: 0, list }]
   if (kind === 'start') return [{ side: 'out', type: 'exec', dy: 0 }]
+  if (kind === 'item') return [{ side: 'in', type: 'data', dy: 0, list: true }, { side: 'out', type: 'data', dy: 0 }]
   if (isData({ kind })) return [{ side: 'in', type: 'data', dy: 0, list }, { side: 'out', type: 'data', dy: 0, list }]
   return [
     { side: 'in', type: 'exec', dy: EXEC_DY },
@@ -96,18 +104,31 @@ function pinsOf(kind: NodeKind): Pin[] {
     ...(hasDataOut({ kind }) ? [{ side: 'out' as const, type: 'data' as const, dy: DATA_DY }] : [])
   ]
 }
+
+function functionGeometry(n: PipeNode, env: Env) {
+  const { inputs, outputs } = functionParams(n, env)
+  const height = 72 + Math.max(inputs.length, outputs.length) * 28
+  const top = -height / 2 + 46
+  const pins: Pin[] = [
+    ...(n.kind !== 'function-input' ? [{ side: 'in' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
+    ...(n.kind !== 'function-output' ? [{ side: 'out' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
+    ...inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', dy: top + (i + 1) * 28 })),
+    ...outputs.map((p, i): Pin => ({ side: 'out', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', dy: top + (i + 1) * 28 }))
+  ]
+  return { pins, width: n.kind === 'template' ? 360 : 260, height }
+}
 const NODE_KINDS_UI = Object.keys(KIND_LABEL) as NodeKind[]
 type Pt = { x: number; y: number }
 const toRendered = (c: Core, m: Pt): Pt => ({ x: m.x * c.zoom() + c.pan().x, y: m.y * c.zoom() + c.pan().y })
 /** 노드의 출력 핀: 기본 출력(데이터 노드는 글, 실행 노드는 ▶), pin이 'data'면 실행 노드의 데이터 출력 */
-const outPin = (kind: NodeKind, pin?: OutPin) => {
-  const outs = pinsOf(kind).filter((p) => p.side === 'out')
-  return (pin === 'data' && !isData({ kind }) ? outs.find((p) => p.type === 'data') : undefined) ?? outs[0]
+const outPin = (node: NodeSingular, pin?: OutPin) => {
+  const outs = (node.data('pins') as Pin[] ?? pinsOf(node.data('kind'))).filter((p) => p.side === 'out')
+  return (pin ? outs.find((p) => pin === 'data' ? p.type === 'data' : p.id === pin) : outs.find((p) => p.type === 'exec') ?? outs[0]) ?? { dy: 0 }
 }
 /** 선이 나오는 출력 핀의 위치 (노드 가운데 기준) */
 function sourceOffset(e: cytoscape.EdgeSingular): Pt {
   const s = e.source()
-  return { x: s.width() / 2 + 2, y: outPin(s.data('kind'), e.data('pin')).dy }
+  return { x: s.width() / 2 + 2, y: outPin(s, e.data('fromPort') ?? e.data('pin')).dy }
 }
 /** 선이 들어가는 입력 핀의 위치. 끌고 있는 동안의 임시 끝점(커서)이면 null */
 function targetOffset(e: cytoscape.EdgeSingular): Pt | null {
@@ -115,7 +136,9 @@ function targetOffset(e: cytoscape.EdgeSingular): Pt | null {
   const kind = t.data('kind') as NodeKind | undefined
   if (!kind) return null
   const fromData = isData({ kind: e.source().data('kind') }) || e.data('pin') === 'data'
-  return { x: -t.width() / 2 - 2, y: isData({ kind }) ? 0 : fromData ? DATA_DY : EXEC_DY }
+  const pins = t.data('pins') as Pin[] | undefined
+  const pin = pins?.find((p) => p.side === 'in' && (e.data('toPort') ? p.id === e.data('toPort') : p.type === (fromData ? 'data' : 'exec')))
+  return { x: -t.width() / 2 - 2, y: pin?.dy ?? (isData({ kind }) ? 0 : fromData ? DATA_DY : EXEC_DY) }
 }
 /**
  * 핀에서 가로로 나와 가로로 들어가는 베지어 곡선. 조절점 둘(출력 핀 오른쪽, 입력 핀 왼쪽)을
@@ -157,8 +180,7 @@ function pinSvg(p: Pin, execColor: string, bg: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14">${shape}</svg>`)}`
 }
 /** 종류마다 핀을 배경 그림으로 그리는 스타일 */
-function pinStyle(kind: NodeKind, execColor: string, bg: string) {
-  const pins = pinsOf(kind)
+function pinStyle(pins: Pin[], execColor: string, bg: string) {
   const each = <T,>(f: (p: Pin) => T) => pins.map(f)
   return {
     'background-image': each((p) => pinSvg(p, execColor, bg)),
@@ -171,6 +193,28 @@ function pinStyle(kind: NodeKind, execColor: string, bg: string) {
     'background-clip': each(() => 'none'),
     'background-image-containment': each(() => 'over'),
     'background-image-opacity': each(() => 1)
+  }
+}
+
+function functionStyle(n: PipeNode, env: Env, color: string, bg: string) {
+  const { pins, width, height } = functionGeometry(n, env)
+  const style = pinStyle(pins, color, bg)
+  const xml = (text: string) => text.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]!)
+  const heading = n.kind === 'template' ? `${nodeName(n)} · ${env.library.find((p) => p.id === n.ref)?.title ?? '함수 선택'}` : KIND_LABEL[n.kind]
+  const labels = pins.map((p) => `<text x="${p.side === 'in' ? 14 : width - 14}" y="${height / 2 + p.dy + 4}" text-anchor="${p.side === 'in' ? 'start' : 'end'}" font-size="12" fill="${p.type === 'data' ? DATA_COLOR : color}">${xml(short(p.label ?? '', n.kind === 'template' ? 16 : 26))}</text>`).join('')
+  const svg = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><text x="${width / 2}" y="21" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="12" fill="${color}">${xml(short(heading, 36))}</text><path d="M12 30H${width - 12}" stroke="${color}" opacity=".2"/>${labels}</svg>`)}`
+  return {
+    width, height, label: '', ...style,
+    'background-image': [svg, ...style['background-image']],
+    'background-width': [`${width}px`, ...style['background-width']],
+    'background-height': [`${height}px`, ...style['background-height']],
+    'background-position-x': ['50%', ...style['background-position-x']],
+    'background-position-y': ['50%', ...style['background-position-y']],
+    'background-offset-x': [0, ...style['background-offset-x']],
+    'background-offset-y': [0, ...style['background-offset-y']],
+    'background-clip': ['none', ...style['background-clip']],
+    'background-image-containment': ['over', ...style['background-image-containment']],
+    'background-image-opacity': [1, ...style['background-image-opacity']]
   }
 }
 
@@ -272,9 +316,11 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
   const create = async (template: boolean) => {
     try {
       if (draft) await flush(draft)
-      // 작업 그래프는 시작 노드를 하나 두고 시작한다 (템플릿은 앞 노드가 없는 노드부터 시작하므로 없어도 된다)
-      const nodes: PipeNode[] = template ? [] : [{ id: newNodeId(), name: KIND_LABEL.start, kind: 'start', text: '', terminal: 'new', x: 0, y: 0 }]
-      const p = await api.savePipeline({ title: template ? '새 템플릿' : '새 작업 그래프', template, nodes, edges: [] })
+      const nodes: PipeNode[] = template ? [
+        { id: newNodeId(), name: '함수 Input', kind: 'function-input', text: '', terminal: 'new', x: 0, y: 0, params: [{ id: newNodeId(), name: '입력', type: 'single' }] },
+        { id: newNodeId(), name: '함수 Output', kind: 'function-output', text: '', terminal: 'new', x: 500, y: 0, params: [{ id: newNodeId(), name: '결과', type: 'single' }] }
+      ] : [{ id: newNodeId(), name: KIND_LABEL.start, kind: 'start', text: '', terminal: 'new', x: 0, y: 0 }]
+      const p = await api.savePipeline({ title: template ? '새 함수' : '새 작업 그래프', template, nodes, edges: template ? [{ from: nodes[0].id, to: nodes[1].id }] : [] })
       await reload(p.id)
     } catch (e) {
       errorToast(e)
@@ -295,7 +341,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
 
   /** 새 노드의 이름: 노드 종류 이름, 이미 있으면 뒤에 숫자 */
   const freshName = (d: Draft, kind: NodeKind) => uniqueName(KIND_LABEL[kind], d.nodes.map(nodeName))
-  /** after: 그 노드의 출력(pin)에 이어 붙인다. link: false면 선 없이 옆에 놓는다 (꺼낸 안쪽 값) */
+  /** after: 그 노드의 출력(pin)에 이어 붙인다. */
   const addNode = (kind: NodeKind, extra: Partial<PipeNode> = {}, after?: PipeNode, link = true, pin?: OutPin) => {
     if (!draft) return
     const id = newNodeId()
@@ -312,14 +358,18 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
       y: after?.y ?? (last?.y ?? 120) + (isData({ kind }) ? -110 : 0),
       ...extra
     }
-    update((d) => ({ ...d, nodes: [...d.nodes, node], edges: after && link ? [...d.edges, { from: after.id, to: id, ...(pin ? { pin } : {}) }] : d.edges }))
+    const toPort = after && (isData(after) || pin) ? functionParams(node, env).inputs[0]?.id : undefined
+    const edge = after && link ? edgeOf(after.id, id, pin, toPort) : undefined
+    const why = edge && edgeProblem({ ...draft, nodes: [...draft.nodes, node] }, edge.from, edge.to, edge.pin, env, edge)
+    if (why) return toast(why, 'error')
+    update((d) => ({ ...d, nodes: [...d.nodes, node], edges: edge ? [...d.edges, edge] : d.edges }))
     setSel({ node: id })
   }
   /** 데이터 노드의 안쪽 값(명세의 기능, 기능의 수용 기준, 리스트의 항목)을 새 데이터 노드로 꺼낸다 */
   const extract = (from: PipeNode, v: InnerValue, at?: Pt) => {
     // 패널에서 꺼낼 때는 같은 종류가 겹치지 않게 아래로 쌓는다
     const i = draft?.nodes.filter((n) => n.kind === v.kind).length ?? 0
-    addNode(v.kind, { ...innerExtra(v), ...(at ??{ x: (from.x ?? 0) + 230, y: (from.y ?? 0) + 60 * i }) }, from, false)
+    addNode(v.kind, { ...innerExtra(v), ...(at ?? { x: (from.x ?? 0) + 230, y: (from.y ?? 0) + 60 * i }) }, from)
   }
   /** 이름 바꾸기. 겹치면 뒤에 숫자를 붙인다 */
   const rename = (id: string, want: string) => {
@@ -329,19 +379,29 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     if (name !== want.trim() && want.trim()) toast(`"${want.trim()}"은(는) 이미 있는 이름이라 "${name}"(으)로 붙였습니다`)
     patchNode(id, { name })
   }
-  const patchNode = (id: string, patch: Partial<PipeNode>) => update((d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)) }))
+  const patchNode = (id: string, patch: Partial<PipeNode>) => update((d) => {
+    const removed = new Set((d.nodes.find((n) => n.id === id)?.params ?? []).filter((p) => patch.params && !patch.params.some((v) => v.id === p.id)).map((p) => p.id))
+    return {
+      ...d,
+      nodes: d.nodes.map((n) => n.id === id ? { ...n, ...patch } : n),
+      edges: d.edges.filter((e) => !(e.from === id && removed.has(e.fromPort ?? '')) && !(e.to === id && removed.has(e.toPort ?? '')))
+    }
+  })
   const nm = (id: string) => nodeName(draft?.nodes.find((n) => n.id === id) ?? { id })
   const removeNode = (id: string) => {
+    if (draft?.nodes.some((n) => n.id === id && isFunctionBoundary(n))) return toast('함수 Input·Output은 고정 노드입니다')
     update((d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== id), edges: d.edges.filter((e) => e.from !== id && e.to !== id) }))
     setSel(null)
   }
-  const edgeOf = (from: string, to: string, pin?: OutPin): PipeEdge => ({ from, to, ...(pin ? { pin } : {}) })
-  const canConnect = (d: Draft, from: string, to: string, pin?: OutPin) => !edgeProblem(d, from, to, pin) && !d.edges.some((e) => sameEdge(e, edgeOf(from, to, pin)))
-  const connect = (from: string, to: string, pin?: OutPin) => {
+  const canConnect = (d: Draft, from: string, to: string, pin?: OutPin, toPort?: string) => {
+    const edge = edgeOf(from, to, pin, toPort)
+    return !edgeProblem(d, from, to, edge.pin, env, edge) && !d.edges.some((e) => sameEdge(e, edge))
+  }
+  const connect = (from: string, to: string, pin?: OutPin, toPort?: string) => {
     if (!draft) return
-    const why = edgeProblem(draft, from, to, pin)
+    const edge = edgeOf(from, to, pin, toPort)
+    const why = edgeProblem(draft, from, to, edge.pin, env, edge)
     if (why) return toast(why, 'error')
-    const edge = edgeOf(from, to, pin)
     if (draft.edges.some((e) => sameEdge(e, edge))) return
     update((d) => ({ ...d, edges: [...d.edges, edge] }))
   }
@@ -351,8 +411,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     if (!menu || !draft) return
     const from = menu.from ? draft.nodes.find((n) => n.id === menu.from) : undefined
     // 노드 가운데가 아니라 왼쪽 입력 핀이 놓은 자리에 오도록
-    const w = isData({ kind: item.kind }) ? DATA_W : EXEC_W
-    addNode(item.kind, { ...item.extra, x: Math.round(menu.pos.x + (from ? w / 2 : 0)), y: Math.round(menu.pos.y) }, from, !item.inner, menu.pin)
+    const w = item.kind === 'template' ? 360 : isData({ kind: item.kind }) ? DATA_W : EXEC_W
+    addNode(item.kind, { ...item.extra, x: Math.round(menu.pos.x + (from ? w / 2 : 0)), y: Math.round(menu.pos.y) }, from, true, menu.pin)
     setMenu(null)
   }
   const disconnect = (edge: PipeEdge) => {
@@ -437,12 +497,12 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
           </div>
         ))}
         <div className="pipe-list-head">
-          템플릿
-          <button className="ghost" title="새 템플릿" onClick={() => create(true)}>
+          함수
+          <button className="ghost" title="새 함수" onClick={() => create(true)}>
             +
           </button>
         </div>
-        {templates.length === 0 && <div className="small muted">작업 그래프를 템플릿으로 표시하면 다른 그래프에서 노드로 쓸 수 있습니다</div>}
+        {templates.length === 0 && <div className="small muted">입·출력 변수가 있는 함수를 만들어 다른 그래프에서 호출할 수 있습니다</div>}
         {templates.map((p) => (
           <div key={p.id} className={`tree-item ${draft?.id === p.id ? 'on' : ''}`} onClick={() => void switchTo(p.id)}>
             {p.title}
@@ -457,7 +517,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
             <div className="row" style={{ margin: 0, flex: 1 }}>
               <input className="pipe-title" value={draft.title} onChange={(e) => update((d) => ({ ...d, title: e.target.value }))} disabled={running} />
               <label className="small">
-                <input type="checkbox" checked={!!draft.template} disabled={running} onChange={(e) => update((d) => ({ ...d, template: e.target.checked }))} /> 템플릿으로 쓰기
+                <input type="checkbox" checked={!!draft.template} disabled={running || !!draft.template} onChange={() => update((d) => ({ ...d, template: true, ...withFunctionBoundary(d, d.id) }))} /> 함수로 쓰기
               </label>
             </div>
             <div className="row" style={{ margin: 0 }}>
@@ -466,7 +526,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
                   ■ 중지
                 </button>
               ) : (
-                <button className="primary" disabled={problems.length > 0} title={problems.join('\n')} onClick={start}>
+                <button className="primary" disabled={!!draft.template || problems.length > 0} title={draft.template ? '함수는 작업 그래프에서 호출해 실행합니다' : problems.join('\n')} onClick={start}>
                   ▶ 실행
                 </button>
               )}
@@ -477,7 +537,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
           </div>
           <div className="pipe-palette">
             <span className="small muted">실행</span>
-            <button disabled={running} onClick={() => addNode('start')}>
+            <button disabled={running || !!draft.template} onClick={() => addNode('start')}>
               <span className="dot" style={{ background: KIND_COLOR.start }} /> 시작
             </button>
             {AGENT_KINDS.map((k) => (
@@ -486,7 +546,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
               </button>
             ))}
             <select value="" disabled={running || !usableTemplates.length} onChange={(e) => e.target.value && addNode('template', { ref: e.target.value })}>
-              <option value="">{usableTemplates.length ? '+ 템플릿' : '템플릿 없음'}</option>
+              <option value="">{usableTemplates.length ? '+ 함수 호출' : '함수 없음'}</option>
               {usableTemplates.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.title}
@@ -568,7 +628,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
               sel={sel}
               connectFrom={connectFrom}
               locked={running}
-              canConnect={(a, b, pin) => canConnect(draft, a, b, pin)}
+              canConnect={(a, b, pin, toPort) => canConnect(draft, a, b, pin, toPort)}
               onConnect={connect}
               onTapNode={(id) => {
                 if (connectFrom) {
@@ -653,18 +713,19 @@ interface MenuItem {
   /** 검색어로 찾을 말 (한글·영문) */
   words: string
   extra?: Partial<PipeNode>
-  /** 끌어 온 데이터 노드에서 꺼낸 안쪽 값: 선으로 잇지 않고 새 데이터 노드로 만든다 */
-  inner?: boolean
 }
 
 /** 꺼낸 안쪽 값으로 만드는 새 데이터 노드의 내용 */
-const innerExtra = (v: InnerValue): Partial<PipeNode> => ({ ...(v.ref ? { ref: v.ref } : {}), ...(v.text !== undefined ? { text: v.text } : {}) })
+const innerExtra = (v: InnerValue): Partial<PipeNode> => ({ ...(v.ref ? { ref: v.ref } : {}), ...(v.text !== undefined ? { text: v.text } : {}), ...(v.index !== undefined ? { index: v.index } : {}) })
 
 const KIND_WORDS: Record<NodeKind, string> = {
   claude: 'claude code 클로드 에이전트 agent 프롬프트',
   codex: 'codex 코덱스 에이전트 agent openai',
   shell: 'shell 셸 쉘 터미널 명령 command cmd',
-  template: 'template 템플릿 모듈 module',
+  template: 'function 함수 호출 template 템플릿 모듈 module',
+  'function-input': '함수 입력 input',
+  'function-output': '함수 출력 output',
+  item: '리스트 항목 array get index',
   complete: 'complete done 할일완료 완료 task',
   text: 'text 텍스트 글 문자열 string 단일',
   list: 'list array 리스트 목록 배열 여러',
@@ -681,15 +742,16 @@ const KIND_WORDS: Record<NodeKind, string> = {
 function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuItem[] {
   const base = (k: NodeKind, group: string): MenuItem => ({ key: k, kind: k, label: KIND_LABEL[k], group, words: KIND_WORDS[k] })
   const items: MenuItem[] = [
-    base('start', '실행'),
+    ...(!draft.template ? [base('start', '실행')] : []),
     ...AGENT_KINDS.map((k) => base(k, '실행')),
     base('complete', '실행'),
     base('text', '데이터'),
     { ...base('list', '데이터'), extra: { items: [''] } },
+    { ...base('item', '데이터'), extra: { index: 0 } },
     base('join', '데이터'),
     ...env.library
       .filter((p) => p.template && p.id !== draft.id)
-      .map((p) => ({ key: `tpl:${p.id}`, kind: 'template' as NodeKind, label: p.title, group: '템플릿', words: `${KIND_WORDS.template} ${p.title}`, extra: { ref: p.id } })),
+      .map((p) => ({ key: `tpl:${p.id}`, kind: 'template' as NodeKind, label: p.title, group: '함수', words: `${KIND_WORDS.template} ${p.title}`, extra: { ref: p.id } })),
     ...env.tasks
       .filter((t) => t.status === '대기' || t.status === '진행')
       .map((t) => ({ key: `task:${t.id}`, kind: 'task' as NodeKind, label: `${t.id} ${t.title}`, group: '할 일', words: `${KIND_WORDS.task} ${t.id} ${t.title}`, extra: { ref: t.id } })),
@@ -706,18 +768,22 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
   const src = from ? draft.nodes.find((n) => n.id === from) : undefined
   if (!src) return items
   // 데이터 출력을 빈 곳에 놓으면 그 노드가 가진 안쪽 값을 새 데이터 노드로 꺼낼 수 있다 (맨 위에)
-  const inner: MenuItem[] = innerValues(src, env).map((v, i) => ({
+  const values = (() => { try { return innerValues(src, env, draft) } catch { return [] } })()
+  const inner: MenuItem[] = values.map((v, i) => ({
     key: `inner:${v.ref ?? i}`,
     kind: v.kind,
     label: v.label,
     group: `${nodeName(src)}에서 꺼내기`,
     words: `${KIND_WORDS[v.kind]} ${v.label}`,
-    extra: innerExtra(v),
-    inner: true
+    extra: innerExtra(v)
   }))
   // 실행 핀에서는 실행 노드만, 글 핀(데이터 노드·실행 노드의 데이터 출력)에서는 입력이 있는 노드만
-  const givesData = isData(src) || pin === 'data'
-  return [...inner, ...items.filter((i) => hasInput({ kind: i.kind }) && (givesData || !isData({ kind: i.kind })))]
+  return [...inner, ...items].filter((item) => {
+    const candidate: PipeNode = { id: '__candidate', kind: item.kind, text: '', terminal: 'new', ...item.extra }
+    const toPort = (isData(src) || pin) ? functionParams(candidate, env).inputs[0]?.id : undefined
+    const edge = edgeOf(src.id, candidate.id, pin, toPort)
+    return !edgeProblem({ ...draft, nodes: [...draft.nodes, candidate] }, edge.from, edge.to, edge.pin, env, edge)
+  })
 }
 
 /** 블루프린트처럼 우클릭한 자리에 뜨는 노드 검색 메뉴 */
@@ -782,7 +848,7 @@ function SearchMenu({ at, items, title, onPick, onClose }: { at: { x: number; y:
               <div className={`pipe-menu-item ${idx === cur ? 'on' : ''}`} onMouseEnter={() => setCur(idx)} onMouseDown={(e) => (e.preventDefault(), onPick(i))}>
                 <span className="pipe-menu-swatch" style={{ background: KIND_COLOR[i.kind] }} />
                 {i.label}
-                {(i.inner || (i.group !== '실행' && i.group !== '데이터')) && <span className="small muted"> · {KIND_LABEL[i.kind]}</span>}
+                {i.group !== '실행' && i.group !== '데이터' && <span className="small muted"> · {KIND_LABEL[i.kind]}</span>}
               </div>
             </div>
           )
@@ -803,7 +869,7 @@ function Help({ empty }: { empty: boolean }) {
         <b>▶ 실행 핀</b>(흰색)을 이으면 "앞 작업이 끝나면 다음 실행"입니다. 한 노드에서 여러 선이 나가면 동시에, 여러 선이 모이면 모두 끝난 뒤에 실행합니다.
       </p>
       <p>
-        <b>● 글 핀</b>(보라색)은 글을 넘깁니다. 실행 노드의 아래쪽 글 입력으로 들어가면 프롬프트 뒤에 붙고, 템플릿으로 들어가면 <code>{TEMPLATE_INPUT}</code> 자리에 들어갑니다. 텍스트 노드에 글이 들어오면 그 글을 그대로 내보냅니다. 할 일을 "할 일 완료"에 이으면 그 할 일을 완료합니다.
+        <b>● 글 핀</b>(보라색)은 글을 넘깁니다. 실행 노드의 아래쪽 글 입력으로 들어가면 프롬프트 뒤에 붙고, 함수의 변수 핀으로 들어가면 해당 인자로 전달됩니다. 텍스트 노드에 글이 들어오면 그 글을 그대로 내보냅니다. 할 일을 "할 일 완료"에 이으면 그 할 일을 완료합니다.
       </p>
       <p>
         <b>단일·리스트</b>: 데이터는 글 하나(● 단일)이거나 글 여러 개(▦ 리스트)입니다. 리스트 노드는 항목을 적거나 들어온 데이터를 항목으로 모읍니다. 리스트가 실행 노드에 들어가면 항목을 빈 줄로 이어 한 번에 붙이고, 합치기에 들어가면 항목마다 구분자로 잇습니다. 기능 명세 노드는 기능들의 리스트입니다.
@@ -815,13 +881,13 @@ function Help({ empty }: { empty: boolean }) {
         <b>잇기</b>: 오른쪽 출력 핀을 눌러 다른 노드까지 끌어 놓으세요. 빈 곳에 놓으면 이어 붙일 노드를 검색합니다. 선을 누르고 Delete로 끊습니다.
       </p>
       <p>
-        <b>꺼내기</b>: 기능 명세 노드의 ● 출력 핀을 빈 곳에 놓으면 그 안의 기능을, 기능 노드에서는 수용 기준(AC1…)을 골라 새 데이터 노드로 꺼냅니다.
+        <b>꺼내기</b>: 리스트·기능 명세·기능 노드의 데이터 출력 핀을 빈 곳에 놓거나, 오른쪽 패널에서 항목을 고르세요. 꺼낸 노드는 원본에 자동으로 연결됩니다. 리스트 항목은 인덱스로 원본의 현재 값을 읽습니다.
       </p>
       <p>
         <b>이름</b>: 노드를 누르고 오른쪽에서 이름을 바꿀 수 있습니다. 같은 이름은 둘 수 없어 겹치면 뒤에 숫자가 붙습니다.
       </p>
       <p>
-        <b>템플릿</b>: 작업 그래프에서 "템플릿으로 쓰기"를 켜면 다른 그래프에 노드로 넣을 수 있습니다. 복사가 아니라 참조라서 템플릿을 고치면 쓰는 곳 모두 다음 실행부터 바뀝니다.
+        <b>함수</b>: 새 함수에는 고정된 Input·Output 노드가 있습니다. 각 노드에서 변수 이름과 타입을 정하고, 변수 핀으로 값을 연결하세요. 함수 호출 노드에도 같은 변수가 나타납니다. 함수를 고치면 호출하는 곳 모두 다음 실행부터 바뀝니다.
       </p>
     </div>
   )
@@ -889,6 +955,33 @@ function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'c
   )
 }
 
+function FunctionParameters({ node, locked, onPatch }: { node: PipeNode; locked: boolean; onPatch: (patch: Partial<PipeNode>) => void }) {
+  const params = node.params ?? []
+  const input = node.kind === 'function-input'
+  return <div className="field">
+    <label>{input ? '함수 입력 변수' : '함수 출력 변수'}</label>
+    <div className="small muted">변수마다 별도의 핀이 생깁니다. 이름을 바꿔도 연결은 유지됩니다.</div>
+    {params.map((param) => <div className="pipe-parameter" key={param.id}>
+      <input aria-label={`${input ? '입력' : '출력'} 변수 이름`} value={param.name} disabled={locked} onChange={(e) => onPatch({ params: params.map((p) => p.id === param.id ? { ...p, name: e.target.value } : p) })} />
+      <select aria-label={`${param.name} 타입`} value={param.type} disabled={locked} onChange={(e) => onPatch({ params: params.map((p) => p.id === param.id ? { ...p, type: e.target.value as DataShape } : p) })}>
+        {Object.entries(PARAM_TYPE_NAME).map(([type, name]) => <option key={type} value={type}>{name}</option>)}
+      </select>
+      <button className="ghost" title={`${param.name} 변수 삭제`} disabled={locked} onClick={() => onPatch({ params: params.filter((p) => p.id !== param.id) })}>×</button>
+    </div>)}
+    <button disabled={locked} onClick={() => onPatch({ params: [...params, { id: newNodeId(), name: uniqueName(input ? '입력' : '결과', params.map((p) => p.name)), type: 'single' }] })}>+ {input ? '입력' : '출력'} 변수</button>
+  </div>
+}
+
+function FunctionValues({ node, params, draft, locked, onPatch }: { node: PipeNode; params: FunctionParam[]; draft: Draft; locked: boolean; onPatch: (patch: Partial<PipeNode>) => void }) {
+  return <>{params.map((param, index) => {
+    const linked = draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e) && (e.toPort ?? params[0]?.id) === param.id)
+    return <div className="field" key={param.id}>
+      <label>{param.name} · {PARAM_TYPE_NAME[param.type]}{linked ? ' (핀으로 연결됨)' : ''}</label>
+      <textarea aria-label={`${param.name} 기본값`} rows={2} disabled={locked || linked} value={node.values?.[param.id] ?? (node.kind === 'template' && index === 0 ? node.text : '')} placeholder={linked ? '연결된 노드의 값을 사용합니다' : param.type === 'list' ? '한 줄에 한 항목' : '핀을 연결하거나 기본값을 입력하세요'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />
+    </div>
+  })}</>
+}
+
 function NodePanel({
   node,
   draft,
@@ -926,7 +1019,7 @@ function NodePanel({
   const nm = (id: string) => nodeName(draft.nodes.find((n) => n.id === id) ?? { id })
   const inputs = draft.edges.filter((e) => e.to === node.id).map((e) => nm(e.from))
   const outputs = draft.edges.filter((e) => e.from === node.id).map((e) => nm(e.to))
-  const inner = innerValues(node, env)
+  const inner = (() => { try { return innerValues(node, env, draft) } catch { return [] } })()
   const target = specTarget(node, env)
   // 실행 노드의 결과가 들어갈 자리는 "[셸의 출력]"처럼 보여 준다
   const preview = (() => {
@@ -957,7 +1050,17 @@ function NodePanel({
 
   return (
     <>
-      <NameField key={node.id} name={nodeName(node)} kind={KIND_LABEL[node.kind]} disabled={locked} onRename={onRename} />
+      <NameField key={node.id} name={nodeName(node)} kind={KIND_LABEL[node.kind]} disabled={locked || isFunctionBoundary(node)} onRename={onRename} />
+      {isFunctionBoundary(node) && <>
+        <div className="small muted">함수의 고정 {node.kind === 'function-input' ? '입력' : '출력'} 노드입니다.</div>
+        <FunctionParameters node={node} locked={locked} onPatch={onPatch} />
+        {node.kind === 'function-output' && <FunctionValues node={node} params={node.params ?? []} draft={draft} locked={locked} onPatch={onPatch} />}
+      </>}
+      {node.kind === 'item' && <div className="field">
+        <label>항목 인덱스 (0부터 시작)</label>
+        <input aria-label="항목 인덱스" type="number" min="0" step="1" value={node.index ?? 0} disabled={locked} onChange={(e) => onPatch({ index: Math.max(0, Math.trunc(Number(e.target.value))) })} />
+        <div className="small muted">연결된 리스트의 해당 항목을 읽습니다. 원본 값이 바뀌면 함께 바뀝니다.</div>
+      </div>}
       <div className="small muted" title="이름을 바꿔도 이어진 선은 그대로입니다">
         {isData(node) ? `데이터 노드 (${SHAPE_NAME[dataShape(node)]})` : '액션 노드'} · {KIND_LABEL[node.kind]}
       </div>
@@ -1016,7 +1119,7 @@ function NodePanel({
               className="task-body"
               value={node.text}
               disabled={locked}
-              placeholder={node.kind === 'shell' ? '예: npm test' : `예: 로그인 API를 구현해${draft.template ? ` (템플릿이면 ${TEMPLATE_INPUT} 자리에 입력이 들어갑니다)` : ''}`}
+              placeholder={node.kind === 'shell' ? '예: npm test' : `예: 로그인 API를 구현해${draft.template ? ' (Input의 변수 핀을 연결하거나 {{변수 이름}}을 사용하세요)' : ''}`}
               onChange={(e) => onPatch({ text: e.target.value })}
             />
           </div>
@@ -1026,7 +1129,7 @@ function NodePanel({
       {node.kind === 'template' && (
         <>
           <div className="field">
-            <label>템플릿</label>
+            <label>호출할 함수</label>
             <div className="row" style={{ margin: 0 }}>
               <select value={node.ref ?? ''} disabled={locked} onChange={(e) => onPatch({ ref: e.target.value })}>
                 {!tpl && <option value="">골라 주세요</option>}
@@ -1043,13 +1146,11 @@ function NodePanel({
           </div>
           {tpl && (
             <div className="small muted">
-              노드 {tpl.nodes.filter((n) => !isData(n)).length}개 · 실행할 때 템플릿의 지금 내용을 씁니다. 템플릿의 첫 노드가 "이어서"면 앞 노드의 터미널을 이어 씁니다.
+              함수의 Input·Output에서 변수 이름과 타입을 설정합니다. 함수 변경은 다음 호출부터 반영됩니다.
             </div>
           )}
-          <div className="field">
-            <label>입력 ({TEMPLATE_INPUT} 자리에 들어갈 글, 들어오는 데이터 선의 글이 뒤에 붙습니다)</label>
-            <textarea className="task-body" value={node.text} disabled={locked} onChange={(e) => onPatch({ text: e.target.value })} />
-          </div>
+          <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} locked={locked} onPatch={onPatch} />
+          <div className="small muted">출력: {functionParams(node, env).outputs.map((p) => `${p.name} (${PARAM_TYPE_NAME[p.type]})`).join(', ') || '없음'}</div>
         </>
       )}
 
@@ -1208,7 +1309,7 @@ function NodePanel({
 
       {preview && node.kind !== 'text' && (
         <details className="pipe-preview" open={isData(node)}>
-          <summary className="small">{isData(node) ? '내보내는 글' : node.kind === 'template' ? '템플릿에 넘길 입력' : '실제로 보낼 글'}</summary>
+          <summary className="small">{isData(node) ? '내보내는 글' : node.kind === 'template' ? '함수에 넘길 입력' : '실제로 보낼 글'}</summary>
           <pre>{preview}</pre>
         </details>
       )}
@@ -1217,10 +1318,10 @@ function NodePanel({
         들어옴: {inputs.length ? inputs.join(', ') : '없음'} · 나감: {outputs.length ? outputs.join(', ') : '없음'}
       </div>
       <div className="row">
-        <button disabled={locked} onClick={onConnect}>
+        <button disabled={locked || node.kind === 'function-output'} onClick={onConnect}>
           → 이어 줄 노드 고르기
         </button>
-        {!isData(node) && (
+        {!isData(node) && node.kind !== 'function-output' && (
           <select value="" disabled={locked} onChange={(e) => e.target.value && onAddAfter(e.target.value as NodeKind)}>
             <option value="">+ 뒤에 새 노드</option>
             {AGENT_KINDS.map((k) => (
@@ -1231,7 +1332,7 @@ function NodePanel({
             <option value="complete">{KIND_LABEL.complete}</option>
           </select>
         )}
-        <button className="danger" disabled={locked} onClick={onRemove}>
+        <button className="danger" disabled={locked || isFunctionBoundary(node)} onClick={onRemove}>
           노드 삭제
         </button>
       </div>
@@ -1263,8 +1364,8 @@ function Canvas({
   sel: Sel
   connectFrom: string | null
   locked: boolean
-  canConnect: (from: string, to: string, pin?: OutPin) => boolean
-  onConnect: (from: string, to: string, pin?: OutPin) => void
+  canConnect: (from: string, to: string, pin?: OutPin, toPort?: string) => boolean
+  onConnect: (from: string, to: string, pin?: OutPin, toPort?: string) => void
   onTapNode: (id: string) => void
   onOpenNode: (id: string) => void
   onTapEdge: (edge: PipeEdge) => void
@@ -1314,7 +1415,7 @@ function Canvas({
           }
         },
         { selector: 'node[?data]', style: { height: DATA_H, width: DATA_W, 'border-style': 'dashed', 'background-opacity': 0.12 } },
-        ...NODE_KINDS_UI.map((k) => ({ selector: `node[kind = "${k}"]`, style: pinStyle(k, execColor, bg) as unknown as cytoscape.Css.Node })),
+        ...NODE_KINDS_UI.map((k) => ({ selector: `node[kind = "${k}"]`, style: pinStyle(pinsOf(k), execColor, bg) as unknown as cytoscape.Css.Node })),
         { selector: 'node[kind = "template"]', style: { 'border-width': 3, 'border-style': 'double' } },
         { selector: 'node.running, node.starting', style: { 'border-width': 3.5, 'border-color': accent, 'background-opacity': 0.32 } },
         { selector: 'node.done', style: { 'border-color': '#5a8f2e', 'border-width': 2.5 } },
@@ -1354,11 +1455,30 @@ function Canvas({
     })
     // 지금 끌고 있는 출력 핀 (실행 노드의 데이터 출력이면 'data')
     let dragPin: OutPin
+    let pointer: Pt | undefined
+    const targetPins = (source: NodeSingular, target: NodeSingular) => {
+      const type = dragPin || source.data('data') ? 'data' : 'exec'
+      return ((target.data('pins') as Pin[] | undefined) ?? []).filter((p) => p.side === 'in' && p.type === type)
+    }
+    const targetPort = (source: NodeSingular, target?: NodeSingular): string | undefined => {
+      if (!target || target.empty()) return undefined
+      const pins = targetPins(source, target)
+      const y = (pointer?.y ?? target.position().y) - target.position().y
+      return pins.sort((a, b) => Math.abs(a.dy - y) - Math.abs(b.dy - y))[0]?.id
+    }
+    instance.on('mousemove tapdrag', (event) => {
+      if (event.position) pointer = event.position
+      instance.edges('.eh-preview').forEach((e) => {
+        const port = targetPort(e.source(), e.target())
+        if (port) e.data('toPort', port)
+      })
+    })
     const eh = (instance as unknown as { edgehandles: (o: object) => { start: (n: NodeSingular) => void } }).edgehandles({
       // 빈 곳에 놓을 때는 대상이 비어서 오는데, 여기서 막으면 ehcancel(→ 검색 메뉴)이 오지 않는다
-      canConnect: (s: NodeSingular, t: NodeSingular) => !t || t.empty() || h.current.canConnect(s.id(), t.id(), dragPin),
+      // edgehandles는 노드 단위로 결과를 기억한다. 가능한 포트가 있으면 허용하고, 놓을 때 고른 포트를 검사한다.
+      canConnect: (s: NodeSingular, t: NodeSingular) => !t || t.empty() || targetPins(s, t).some((p) => h.current.canConnect(s.id(), t.id(), dragPin, p.id)),
       // 미리 보기 선도 끌고 있는 핀에서 나오게
-      edgeParams: () => ({ data: dragPin ? { pin: dragPin } : {} }),
+      edgeParams: (s: NodeSingular, t: NodeSingular) => ({ data: { ...edgeOf(s.id(), t?.id() ?? '', dragPin, targetPort(s, t)) } }),
       snap: true,
       snapThreshold: 30,
       hoverDelay: 80
@@ -1377,9 +1497,9 @@ function Canvas({
           const c = x.renderedPosition()
           const kind = x.data('kind') as NodeKind | undefined
           if (!kind) return null
-          const pins = pinsOf(kind).filter((p) => p.side === 'out')
+          const pins = ((x.data('pins') as Pin[] | undefined) ?? pinsOf(kind)).filter((p) => p.side === 'out')
           const pin = pins.find((p) => Math.hypot(r.x - (c.x + x.renderedWidth() / 2), r.y - (c.y + p.dy * z)) <= reach)
-          return pin ? { node: x, pin: (pin.type === 'data' && !isData({ kind }) ? 'data' : undefined) as OutPin } : null
+          return pin ? { node: x, pin: pin.id ?? (pin.type === 'data' && !isData({ kind }) ? 'data' : undefined) } : null
         })
         .find(Boolean)
       if (!hit) return
@@ -1392,13 +1512,15 @@ function Canvas({
       grabbed?.grabify()
       grabbed = null
     })
-    instance.on('ehcomplete', (_e, source: NodeSingular, target: NodeSingular, added: cytoscape.EdgeSingular) => {
+    instance.on('ehcomplete', (event, source: NodeSingular, target: NodeSingular, added: cytoscape.EdgeSingular) => {
+      if (event.position) pointer = event.position
       added.remove()
-      h.current.onConnect(source.id(), target.id(), dragPin)
+      h.current.onConnect(source.id(), target.id(), dragPin, targetPort(source, target))
     })
     // 블루프린트처럼: 핀을 빈 곳에 놓으면 그 자리에 이어 붙일 노드를 검색한다
     instance.on('ehcancel', (e, source: NodeSingular) => {
       const m = e.position
+      if (m) pointer = m
       const s = source.position()
       if (!m || Math.hypot(m.x - s.x, m.y - s.y) < source.width() / 2 + 30) return
       // 노드 위에 놓았는데 머문 시간이 짧아 대상으로 잡히지 않았으면 그 노드에 바로 잇는다
@@ -1407,7 +1529,7 @@ function Canvas({
         // 끄는 동안 커서 밑에 있는 edgehandles의 보이지 않는 노드는 빼고 그래프의 노드만 (kind가 있는 것)
         return !!n.data('kind') && n.id() !== source.id() && m.x >= bb.x1 && m.x <= bb.x2 && m.y >= bb.y1 && m.y <= bb.y2
       })[0]
-      if (over) return h.current.onConnect(source.id(), over.id(), dragPin)
+      if (over) return h.current.onConnect(source.id(), over.id(), dragPin, targetPort(source, over))
       h.current.onMenu(toRendered(instance, m), m, source.id(), dragPin)
     })
     // 빈 곳을 우클릭하면 그 자리에 놓을 노드를 검색한다
@@ -1418,8 +1540,7 @@ function Canvas({
     instance.on('tap', 'node', (e) => h.current.onTapNode(e.target.id()))
     instance.on('dbltap', 'node', (e) => h.current.onOpenNode(e.target.id()))
     instance.on('tap', 'edge', (e) => {
-      const pin = e.target.data('pin') as OutPin
-      h.current.onTapEdge({ from: e.target.data('source'), to: e.target.data('target'), ...(pin ? { pin } : {}) })
+      h.current.onTapEdge(edgeOf(e.target.data('source'), e.target.data('target'), e.target.data('fromPort') ?? e.target.data('pin'), e.target.data('toPort')))
     })
     instance.on('tap', (e) => e.target === instance && h.current.onTapBackground())
     // 곡선 조절점은 양 끝 위치로 정하므로 노드가 움직이면 다시 계산한다
@@ -1456,10 +1577,14 @@ function Canvas({
       for (const n of draft.nodes) {
         const st = live && !live.has(n.id) ? 'unused' : nodeStatus(run, n.id)
         const label = nodeLabel(n, env, draft)
-        const data = { id: n.id, kind: n.kind, data: isData(n), label, color: KIND_COLOR[n.kind] }
+        const functional = n.kind === 'template' || isFunctionBoundary(n)
+        const pins = functional ? functionGeometry(n, env).pins : pinsOf(n.kind)
+        const data = { id: n.id, kind: n.kind, data: isData(n), label: functional ? '' : label, pins, color: KIND_COLOR[n.kind] }
         let el = c.getElementById(n.id)
         if (el.empty()) el = c.add({ group: 'nodes', data, position: { x: n.x ?? 0, y: n.y ?? 0 } })
         else el.data(data)
+        const color = dark ? '#e4e7ec' : '#3d4454', background = dark ? '#1c2026' : '#ffffff'
+        el.style((functional ? functionStyle(n, env, color, background) : { ...pinStyle(pins, color, background), label, width: n.kind === 'start' ? 110 : isData(n) ? DATA_W : EXEC_W, height: n.kind === 'start' ? 40 : isData(n) ? DATA_H : EXEC_H }) as unknown as cytoscape.Css.Node)
         const selected = !!sel && 'node' in sel && sel.node === n.id
         el.classes([st ?? '', selected ? 'sel' : '', connectFrom === n.id ? 'source' : ''].filter(Boolean))
       }
@@ -1468,11 +1593,12 @@ function Canvas({
       for (const e of draft.edges) {
         const id = edgeKey(e)
         let el = c.getElementById(id)
-        if (el.empty()) el = c.add({ group: 'edges', data: { id, source: e.from, target: e.to, ...(e.pin ? { pin: e.pin } : {}) } })
+        if (el.empty()) el = c.add({ group: 'edges', data: { id, source: e.from, target: e.to, pin: e.pin, fromPort: e.fromPort, toPort: e.toPort } })
         const s = !!sel && 'edge' in sel && sameEdge(sel.edge, e)
         el.classes([isDataEdge(draft, e) ? 'data' : '', s ? 'sel' : ''].filter(Boolean))
       }
     })
+    c.style().update()
     const ext = c.extent()
     const outside = c.nodes().some((n) => {
       const b = n.boundingBox({})
@@ -1499,7 +1625,7 @@ function nodeLabel(n: PipeNode, env: Env, draft: Draft): string {
   const name = nodeName(n)
   const head = `${name}${name.startsWith(KIND_LABEL[n.kind]) ? '' : ` · ${KIND_LABEL[n.kind]}`}${n.terminal === 'continue' && AGENT_KINDS.includes(n.kind) ? ' (이어서)' : n.session ? ' (세션 불러옴)' : ''}`
   let body = ''
-  if (n.kind === 'template') body = env.library.find((p) => p.id === n.ref)?.title ?? '(템플릿 없음)'
+  if (n.kind === 'template') body = env.library.find((p) => p.id === n.ref)?.title ?? '(함수 없음)'
   else if (SPEC_KINDS.includes(n.kind)) {
     const { spec, feature, ac } = specTarget(n, env)
     body =
@@ -1517,6 +1643,10 @@ function nodeLabel(n: PipeNode, env: Env, draft: Draft): string {
     const t = env.tasks.find((x) => x.id === n.ref)
     body = t ? `${t.id} ${t.title}` : n.kind === 'complete' ? '이어진 할 일' : '(할 일 없음)'
   } else if (n.kind === 'skill') body = env.skills.find((s) => s.id === n.ref)?.name ?? '(스킬 없음)'
+  else if (n.kind === 'item') {
+    try { body = `[${n.index ?? 0}] ${dataValue(draft, n.id, env)}` }
+    catch { body = `[${n.index ?? 0}] 원본 리스트 확인` }
+  }
   else if (n.kind === 'join') body = '입력을 차례로 이어 붙임'
   else if (n.kind === 'list') {
     const from = draft.edges.filter((e) => e.to === n.id).map((e) => e.from)
