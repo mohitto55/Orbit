@@ -495,7 +495,8 @@ export function createApi(deps: ApiDeps) {
       const problems = pipelineProblems(p, env, { requireStart: !p.template })
       if (problems.length) throw new Error(problems.join('\n'))
       await terms()
-      return pipes.start({ ...p, ...expandPipeline(p, env) })
+      // 빈 리스트를 반복하면 실행할 작업이 없어도 정상 완료한다. 원본 그래프는 위에서 검사했다.
+      return pipes.start({ ...p, ...expandPipeline(p, env) }, true)
     },
     stopPipeline: (runId: string) => pipes.stop(runId),
     /** 스킬 노드에서 고를 Claude Code 스킬 (프로젝트·내 홈) */

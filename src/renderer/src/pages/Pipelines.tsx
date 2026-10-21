@@ -6,6 +6,9 @@ import type { DataShape, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode
 import {
   KIND_NAME,
   PARAM_TYPE_NAME,
+  LOOP_PORT,
+  isLoopExecPort,
+  withInputPort,
   functionParams,
   isFunctionBoundary,
   withFunctionBoundary,
@@ -40,7 +43,8 @@ type Sel = { node: string } | { edge: PipeEdge } | null
 type OutPin = string | undefined
 const sameEdge = (a: PipeEdge, b: PipeEdge) => a.from === b.from && a.to === b.to && a.pin === b.pin && a.fromPort === b.fromPort && a.toPort === b.toPort
 const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort, e.toPort])
-const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
+const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isLoopExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
+const isPortNode = (n: PipeNode) => n.kind === 'template' || n.kind === 'foreach' || isFunctionBoundary(n)
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
 type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[] }
 
@@ -57,6 +61,7 @@ const KIND_COLOR: Record<NodeKind, string> = {
   template: '#3a6fc4',
   'function-input': '#a353b9',
   'function-output': '#a353b9',
+  foreach: '#aa782b',
   complete: '#5a8f2e',
   text: '#8a63d2',
   list: '#8a63d2',
@@ -106,6 +111,14 @@ function pinsOf(kind: NodeKind): Pin[] {
 }
 
 function functionGeometry(n: PipeNode, env: Env) {
+  if (n.kind === 'foreach') return { width: 300, height: 158, pins: [
+    { side: 'in', type: 'exec', dy: -33, label: '실행' },
+    { side: 'in', type: 'data', dy: -5, id: LOOP_PORT.list, list: true, label: '리스트' },
+    { side: 'out', type: 'exec', dy: -33, id: LOOP_PORT.body, label: '반복 본문' },
+    { side: 'out', type: 'data', dy: -5, id: LOOP_PORT.item, label: '항목' },
+    { side: 'out', type: 'data', dy: 23, id: LOOP_PORT.index, label: '인덱스 (0부터)' },
+    { side: 'out', type: 'exec', dy: 51, id: LOOP_PORT.done, label: '완료' }
+  ] as Pin[] }
   const { inputs, outputs } = functionParams(n, env)
   const height = 72 + Math.max(inputs.length, outputs.length) * 28
   const top = -height / 2 + 46
@@ -218,11 +231,13 @@ function functionStyle(n: PipeNode, env: Env, color: string, bg: string) {
   }
 }
 
-/** 템플릿 노드는 안쪽 노드들의 상태를 모아 보여준다 */
+const nodeRuns = (run: RunState | undefined, id: string) => run ? Object.entries(run.nodes).filter(([key, state]) => state.sourceIds ? state.sourceIds.includes(id) : key === id || key.startsWith(`${id}${TEMPLATE_SEP}`)) : []
+
+/** 함수 호출·반복 노드와 반복 본문은 원본 노드에 각 실행의 상태를 모아 보여준다 */
 function nodeStatus(run: RunState | undefined, id: string): string | undefined {
   if (!run) return undefined
   if (run.nodes[id]) return run.nodes[id].status
-  const inner = Object.entries(run.nodes).filter(([k]) => k.startsWith(`${id}${TEMPLATE_SEP}`)).map(([, v]) => v.status)
+  const inner = nodeRuns(run, id).map(([, v]) => v.status)
   if (!inner.length) return undefined
   for (const s of ['failed', 'running', 'starting'] as const) if (inner.includes(s)) return s
   if (inner.every((s) => s === 'done')) return 'done'
@@ -358,9 +373,9 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
       y: after?.y ?? (last?.y ?? 120) + (isData({ kind }) ? -110 : 0),
       ...extra
     }
-    const toPort = after && (isData(after) || pin) ? functionParams(node, env).inputs[0]?.id : undefined
-    const edge = after && link ? edgeOf(after.id, id, pin, toPort) : undefined
-    const why = edge && edgeProblem({ ...draft, nodes: [...draft.nodes, node] }, edge.from, edge.to, edge.pin, env, edge)
+    const graph = { ...draft, nodes: [...draft.nodes, node] }
+    const edge = after && link ? withInputPort(graph, edgeOf(after.id, id, pin), env) : undefined
+    const why = edge && edgeProblem(graph, edge.from, edge.to, edge.pin, env, edge)
     if (why) return toast(why, 'error')
     update((d) => ({ ...d, nodes: [...d.nodes, node], edges: edge ? [...d.edges, edge] : d.edges }))
     setSel({ node: id })
@@ -394,12 +409,12 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     setSel(null)
   }
   const canConnect = (d: Draft, from: string, to: string, pin?: OutPin, toPort?: string) => {
-    const edge = edgeOf(from, to, pin, toPort)
+    const edge = withInputPort(d, edgeOf(from, to, pin, toPort), env)
     return !edgeProblem(d, from, to, edge.pin, env, edge) && !d.edges.some((e) => sameEdge(e, edge))
   }
   const connect = (from: string, to: string, pin?: OutPin, toPort?: string) => {
     if (!draft) return
-    const edge = edgeOf(from, to, pin, toPort)
+    const edge = withInputPort(draft, edgeOf(from, to, pin, toPort), env)
     const why = edgeProblem(draft, from, to, edge.pin, env, edge)
     if (why) return toast(why, 'error')
     if (draft.edges.some((e) => sameEdge(e, edge))) return
@@ -411,7 +426,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     if (!menu || !draft) return
     const from = menu.from ? draft.nodes.find((n) => n.id === menu.from) : undefined
     // 노드 가운데가 아니라 왼쪽 입력 핀이 놓은 자리에 오도록
-    const w = item.kind === 'template' ? 360 : isData({ kind: item.kind }) ? DATA_W : EXEC_W
+    const w = item.kind === 'template' ? 360 : item.kind === 'foreach' ? 300 : isData({ kind: item.kind }) ? DATA_W : EXEC_W
     addNode(item.kind, { ...item.extra, x: Math.round(menu.pos.x + (from ? w / 2 : 0)), y: Math.round(menu.pos.y) }, from, true, menu.pin)
     setMenu(null)
   }
@@ -556,6 +571,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
             <button disabled={running} onClick={() => addNode('complete')}>
               할 일 완료
             </button>
+            <span className="small muted">유틸리티</span>
+            <button disabled={running} onClick={() => addNode('foreach')} title="리스트를 한 항목씩 순서대로 처리합니다">For Each</button>
             <span className="small muted" style={{ marginLeft: 8 }}>
               데이터
             </span>
@@ -725,6 +742,7 @@ const KIND_WORDS: Record<NodeKind, string> = {
   template: 'function 함수 호출 template 템플릿 모듈 module',
   'function-input': '함수 입력 input',
   'function-output': '함수 출력 output',
+  foreach: 'for foreach for each loop 반복 순회 유틸 리스트 배열 항목 인덱스',
   item: '리스트 항목 array get index',
   complete: 'complete done 할일완료 완료 task',
   text: 'text 텍스트 글 문자열 string 단일',
@@ -745,6 +763,7 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
     ...(!draft.template ? [base('start', '실행')] : []),
     ...AGENT_KINDS.map((k) => base(k, '실행')),
     base('complete', '실행'),
+    base('foreach', '유틸리티'),
     base('text', '데이터'),
     { ...base('list', '데이터'), extra: { items: [''] } },
     { ...base('item', '데이터'), extra: { index: 0 } },
@@ -780,9 +799,9 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
   // 실행 핀에서는 실행 노드만, 글 핀(데이터 노드·실행 노드의 데이터 출력)에서는 입력이 있는 노드만
   return [...inner, ...items].filter((item) => {
     const candidate: PipeNode = { id: '__candidate', kind: item.kind, text: '', terminal: 'new', ...item.extra }
-    const toPort = (isData(src) || pin) ? functionParams(candidate, env).inputs[0]?.id : undefined
-    const edge = edgeOf(src.id, candidate.id, pin, toPort)
-    return !edgeProblem({ ...draft, nodes: [...draft.nodes, candidate] }, edge.from, edge.to, edge.pin, env, edge)
+    const graph = { ...draft, nodes: [...draft.nodes, candidate] }
+    const edge = withInputPort(graph, edgeOf(src.id, candidate.id, pin), env)
+    return !edgeProblem(graph, edge.from, edge.to, edge.pin, env, edge)
   })
 }
 
@@ -885,6 +904,9 @@ function Help({ empty }: { empty: boolean }) {
       </p>
       <p>
         <b>이름</b>: 노드를 누르고 오른쪽에서 이름을 바꿀 수 있습니다. 같은 이름은 둘 수 없어 겹치면 뒤에 숫자가 붙습니다.
+      </p>
+      <p>
+        <b>For Each</b>: 리스트 입력을 연결하고 반복 본문 핀에 실행할 작업을 이으세요. 항목·인덱스 핀은 본문 안에서 사용합니다. 한 항목의 작업이 모두 끝나면 다음 항목을 처리하고, 빈 리스트이거나 모든 항목을 마치면 완료 핀으로 넘어갑니다.
       </p>
       <p>
         <b>함수</b>: 새 함수에는 고정된 Input·Output 노드가 있습니다. 각 노드에서 변수 이름과 타입을 정하고, 변수 핀으로 값을 연결하세요. 함수 호출 노드에도 같은 변수가 나타납니다. 함수를 고치면 호출하는 곳 모두 다음 실행부터 바뀝니다.
@@ -1014,8 +1036,7 @@ function NodePanel({
   onShowTerminal: (termId: string) => void
 }) {
   const status = nodeStatus(run, node.id)
-  // 템플릿 노드면 안쪽 노드마다, 아니면 이 노드의 실행 상태
-  const runs = run ? Object.entries(run.nodes).filter(([k]) => k === node.id || k.startsWith(`${node.id}${TEMPLATE_SEP}`)) : []
+  const runs = nodeRuns(run, node.id)
   const nm = (id: string) => nodeName(draft.nodes.find((n) => n.id === id) ?? { id })
   const inputs = draft.edges.filter((e) => e.to === node.id).map((e) => nm(e.from))
   const outputs = draft.edges.filter((e) => e.from === node.id).map((e) => nm(e.to))
@@ -1061,6 +1082,10 @@ function NodePanel({
         <input aria-label="항목 인덱스" type="number" min="0" step="1" value={node.index ?? 0} disabled={locked} onChange={(e) => onPatch({ index: Math.max(0, Math.trunc(Number(e.target.value))) })} />
         <div className="small muted">연결된 리스트의 해당 항목을 읽습니다. 원본 값이 바뀌면 함께 바뀝니다.</div>
       </div>}
+      {node.kind === 'foreach' && <>
+        <div className="small muted">리스트를 한 항목씩 순서대로 처리합니다. 반복 본문에 작업을 연결하고 항목·인덱스 핀으로 값을 넘기세요. 본문 끝을 다시 연결할 필요가 없습니다. 모든 반복을 마치면 완료 핀으로 넘어갑니다.</div>
+        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} locked={locked} onPatch={onPatch} />
+      </>}
       <div className="small muted" title="이름을 바꿔도 이어진 선은 그대로입니다">
         {isData(node) ? `데이터 노드 (${SHAPE_NAME[dataShape(node)]})` : '액션 노드'} · {KIND_LABEL[node.kind]}
       </div>
@@ -1069,7 +1094,7 @@ function NodePanel({
         <div className="pipe-runs">
           {runs.map(([k, st]) => (
             <div key={k} className="row" style={{ margin: '4px 0' }}>
-              {k !== node.id && <span className="small">{k.slice(node.id.length + 1)}</span>}
+              {k !== node.id && <span className="small">{st.name ?? nodeName(node)}</span>}
               <Badge kind={st.status === 'done' ? 'pass' : st.status === 'failed' ? 'fail' : ''}>{STATUS_LABEL[st.status]}</Badge>
               {st.message && <span className="small muted">{st.message}</span>}
               {st.termId && tabs.some((t) => t.id === st.termId) && <button onClick={() => onShowTerminal(st.termId!)}>터미널 보기</button>}
@@ -1307,7 +1332,7 @@ function NodePanel({
         </div>
       )}
 
-      {preview && node.kind !== 'text' && (
+      {preview && node.kind !== 'text' && node.kind !== 'foreach' && (
         <details className="pipe-preview" open={isData(node)}>
           <summary className="small">{isData(node) ? '내보내는 글' : node.kind === 'template' ? '함수에 넘길 입력' : '실제로 보낼 글'}</summary>
           <pre>{preview}</pre>
@@ -1457,12 +1482,14 @@ function Canvas({
     let dragPin: OutPin
     let pointer: Pt | undefined
     const targetPins = (source: NodeSingular, target: NodeSingular) => {
-      const type = dragPin || source.data('data') ? 'data' : 'exec'
+      const type = (dragPin && !isLoopExecPort(dragPin)) || source.data('data') ? 'data' : 'exec'
       return ((target.data('pins') as Pin[] | undefined) ?? []).filter((p) => p.side === 'in' && p.type === type)
     }
     const targetPort = (source: NodeSingular, target?: NodeSingular): string | undefined => {
       if (!target || target.empty()) return undefined
-      const pins = targetPins(source, target)
+      const all = targetPins(source, target)
+      const compatible = all.filter((p) => h.current.canConnect(source.id(), target.id(), dragPin, p.id))
+      const pins = compatible.length ? compatible : all
       const y = (pointer?.y ?? target.position().y) - target.position().y
       return pins.sort((a, b) => Math.abs(a.dy - y) - Math.abs(b.dy - y))[0]?.id
     }
@@ -1491,17 +1518,14 @@ function Canvas({
       const z = instance.zoom()
       const reach = Math.max(9, (PIN / 2 + 4) * z)
       // 실행 노드는 출력 핀이 둘(▶ 실행, ● 데이터)일 수 있다: 누른 쪽을 고른다
-      const hit = instance
-        .nodes()
-        .map((x) => {
-          const c = x.renderedPosition()
-          const kind = x.data('kind') as NodeKind | undefined
-          if (!kind) return null
-          const pins = ((x.data('pins') as Pin[] | undefined) ?? pinsOf(kind)).filter((p) => p.side === 'out')
-          const pin = pins.find((p) => Math.hypot(r.x - (c.x + x.renderedWidth() / 2), r.y - (c.y + p.dy * z)) <= reach)
-          return pin ? { node: x, pin: pin.id ?? (pin.type === 'data' && !isData({ kind }) ? 'data' : undefined) } : null
-        })
-        .find(Boolean)
+      const hits = instance.nodes().toArray().flatMap((x) => {
+        const c = x.renderedPosition()
+        const kind = x.data('kind') as NodeKind | undefined
+        if (!kind) return []
+        const pins = ((x.data('pins') as Pin[] | undefined) ?? pinsOf(kind)).filter((p) => p.side === 'out')
+        return pins.map((p) => ({ node: x, pin: p.id ?? (p.type === 'data' && !isData({ kind }) ? 'data' : undefined), distance: Math.hypot(r.x - (c.x + x.renderedWidth() / 2), r.y - (c.y + p.dy * z)) })).filter((p) => p.distance <= reach)
+      })
+      const hit = hits.sort((a, b) => a.distance - b.distance)[0]
       if (!hit) return
       hit.node.ungrabify()
       grabbed = hit.node
@@ -1577,7 +1601,7 @@ function Canvas({
       for (const n of draft.nodes) {
         const st = live && !live.has(n.id) ? 'unused' : nodeStatus(run, n.id)
         const label = nodeLabel(n, env, draft)
-        const functional = n.kind === 'template' || isFunctionBoundary(n)
+        const functional = isPortNode(n)
         const pins = functional ? functionGeometry(n, env).pins : pinsOf(n.kind)
         const data = { id: n.id, kind: n.kind, data: isData(n), label: functional ? '' : label, pins, color: KIND_COLOR[n.kind] }
         let el = c.getElementById(n.id)

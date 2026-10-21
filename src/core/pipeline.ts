@@ -19,7 +19,7 @@ import type { TerminalInfo, TerminalKind } from './terminal'
  * spec·feature·ac: 도메인의 기능 명세 / 그 안의 기능 하나 / 기능의 수용 기준 하나 (실행할 때마다 명세의 지금 내용을 읽는다).
  *   명세 노드에서 기능 노드를, 기능 노드에서 수용 기준 노드를, 리스트 노드에서 항목을 텍스트 노드로 꺼낼 수 있다 (innerValues).
  */
-export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'complete', 'text', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
+export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'foreach', 'complete', 'text', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
 
 export const DATA_KINDS: NodeKind[] = ['text', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac']
@@ -32,15 +32,19 @@ export const SHAPE_NAME: Record<DataShape, string> = { single: '단일', list: '
 export const PARAM_TYPE_NAME: Record<DataShape, string> = { single: '텍스트', list: '텍스트 리스트' }
 export interface FunctionParam { id: string; name: string; type: DataShape }
 export const isFunctionBoundary = (n: Pick<PipeNode, 'kind'>) => n.kind === 'function-input' || n.kind === 'function-output'
+export const LOOP_PORT = { body: '$body', done: '$done', list: '$list', item: '$item', index: '$index' } as const
+export const isLoopExecPort = (port?: string) => port === LOOP_PORT.body || port === LOOP_PORT.done
 
 /** 작업 결과를 데이터로 내보내는 실행 노드 (셸: 명령 출력) */
-export const hasDataOut = (n: Pick<PipeNode, 'kind'>) => n.kind === 'shell' || n.kind === 'template' || isFunctionBoundary(n)
+export const hasDataOut = (n: Pick<PipeNode, 'kind'>) => n.kind === 'shell' || n.kind === 'template' || n.kind === 'foreach' || isFunctionBoundary(n)
 
 export interface PipeNode {
   /** 노드를 가리키는 값 (새 노드는 uuid, 예전 그래프의 노드는 n1·n2…). 선은 이 값으로 잇는다 */
   id: string
   /** 사람이 붙이는 이름. 한 그래프 안에서 겹치지 않는다 (기본은 노드 종류 이름, 겹치면 뒤에 숫자) */
   name?: string
+  /** 실행용으로 펼친 노드가 상태를 표시할 원본 노드들. 그래프 파일에는 저장하지 않는다. */
+  sourceIds?: string[]
   kind: NodeKind
   /**
    * 에이전트면 프롬프트, 셸이면 명령, 템플릿이면 {{입력}} 자리에 넣을 글 (들어오는 데이터 선의 글이 뒤에 붙는다).
@@ -209,12 +213,22 @@ export function withFunctionBoundary(p: Graph, key = 'function'): Graph {
   const actions = nodes.filter((n) => !isData(n) && !isFunctionBoundary(n))
   const execution = execEdges({ nodes, edges })
   if (!input && !starts.length) for (const n of actions.filter((n) => !execution.some((e) => e.to === n.id))) edges.push({ from: entry.id, to: n.id })
-  if (!output) for (const n of actions.filter((n) => !execution.some((e) => e.from === n.id))) edges.push({ from: n.id, to: exit.id })
+  if (!output) {
+    const bodies = new Set(actions.filter((n) => n.kind === 'foreach').flatMap((n) => [...loopScope({ nodes, edges }, n).body]))
+    for (const n of actions.filter((n) => !bodies.has(n.id))) {
+      const fromPort = n.kind === 'foreach' ? LOOP_PORT.done : undefined
+      if (!execution.some((e) => e.from === n.id && (!fromPort || e.fromPort === fromPort))) edges.push({ from: n.id, to: exit.id, ...(fromPort ? { fromPort } : {}) })
+    }
+  }
   if (!actions.length && !edges.some((e) => e.from === entry.id && e.to === exit.id)) edges.push({ from: entry.id, to: exit.id })
   return { nodes, edges }
 }
 
 export function functionParams(n: PipeNode, env: Env): { inputs: FunctionParam[]; outputs: FunctionParam[] } {
+  if (n.kind === 'foreach') return {
+    inputs: [{ id: LOOP_PORT.list, name: '리스트', type: 'list' }],
+    outputs: [{ id: LOOP_PORT.item, name: '항목', type: 'single' }, { id: LOOP_PORT.index, name: '인덱스', type: 'single' }]
+  }
   if (n.kind === 'function-input') return { inputs: [], outputs: n.params ?? [] }
   if (n.kind === 'function-output') return { inputs: n.params ?? [], outputs: [] }
   if (n.kind !== 'template') return { inputs: [], outputs: [] }
@@ -285,6 +299,7 @@ function portItems(p: Graph, id: string, port: string | undefined, env: Env, see
 
 function edgeItems(p: Graph, edge: PipeEdge, env: Env, seen: string[] = []): string[] {
   const n = byId(p, edge.from)
+  if (n?.kind === 'foreach') return [edge.fromPort === LOOP_PORT.index ? '[반복 인덱스]' : '[반복 항목]']
   if (n && isFunctionBoundary(n)) return portItems(p, n.id, edge.fromPort, env, seen)
   // 편집 중 미리 보기에도 함수의 리스트 형태를 보존한다. 실행되지 않는 호출의 결과는 실행 순서 검사에서 알린다.
   if (n?.kind === 'template' && liveNodes(p).has(n.id)) {
@@ -408,11 +423,11 @@ export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['
   if (!pin && !isData(a) && isData(b)) return '실행 노드의 실행 출력에서 데이터 노드로는 이을 수 없습니다'
   if (!hasInput(b)) return `${KIND_NAME[b.kind]} 노드에는 입력이 없습니다`
   const data = pin === 'data' || isData(a)
-  if (!data && (ports.fromPort || ports.toPort)) return '데이터 변수에는 데이터 핀을 연결하세요'
+  if (!data && (ports.toPort || (ports.fromPort && !(a.kind === 'foreach' && isLoopExecPort(ports.fromPort))))) return '데이터 변수에는 데이터 핀을 연결하세요'
   if (data) {
     const sourcePorts = functionParams(a, env).outputs
     const source = sourcePorts.find((v) => v.id === (ports.fromPort ?? sourcePorts[0]?.id))
-    if ((a.kind === 'template' || a.kind === 'function-input') && !source) return '함수의 출력 변수를 고르세요'
+    if ((a.kind === 'template' || a.kind === 'function-input' || a.kind === 'foreach') && !source) return '출력 변수를 고르세요'
     if (ports.fromPort && !source) return '존재하지 않는 출력 변수입니다'
     const shape = source?.type ?? dataShape(a)
     if (b.kind === 'item' && shape !== 'list') return '리스트 항목에는 리스트를 연결하세요'
@@ -424,16 +439,26 @@ export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['
       const target = specTarget(b, env)
       if (target.feature && `${target.spec?.id}#${target.feature.id}` !== a.ref) return '이 수용 기준의 원본 기능이 아닙니다'
     }
-    if (b.kind === 'template' || b.kind === 'function-output') {
+    if (b.kind === 'template' || b.kind === 'function-output' || b.kind === 'foreach') {
       const targetPorts = functionParams(b, env).inputs
       const target = targetPorts.find((v) => v.id === (ports.toPort ?? targetPorts[0]?.id))
       if (!target) return '함수의 입력 변수를 고르세요'
       // 예전 템플릿의 이름 없는 입력 선은 글을 합쳐 넘기던 동작을 유지한다.
-      if ((ports.toPort || b.kind === 'function-output') && target.type !== shape) return `${target.name}: ${PARAM_TYPE_NAME[target.type]} 입력에 ${PARAM_TYPE_NAME[shape]}을 연결할 수 없습니다`
-      if (ports.toPort && p.edges.some((e) => e.to === to && e.toPort === ports.toPort && isDataEdge(p, e) && (e.from !== from || e.fromPort !== ports.fromPort))) return `${target.name}: 이미 연결된 입력입니다`
+      if ((ports.toPort || b.kind !== 'template') && target.type !== shape) return `${target.name}: ${PARAM_TYPE_NAME[target.type]} 입력에 ${PARAM_TYPE_NAME[shape]}을 연결할 수 없습니다`
+      if ((ports.toPort || b.kind === 'foreach') && p.edges.some((e) => e.to === to && (e.toPort ?? targetPorts[0]?.id) === target.id && isDataEdge(p, e) && (e.from !== from || e.fromPort !== ports.fromPort))) return `${target.name}: 이미 연결된 입력입니다`
     } else if (ports.toPort) return '존재하지 않는 입력 변수입니다'
   }
   return null
+}
+
+/** 노드 본체에 놓거나 검색으로 새 노드를 만들 때 타입이 맞는 입력을 찾는다. 명시한 핀은 바꾸지 않는다. */
+export function withInputPort(p: Graph, edge: PipeEdge, env: Env): PipeEdge {
+  if (edge.toPort || !isDataEdge(p, edge)) return edge
+  const target = byId(p, edge.to)
+  if (!target) return edge
+  const inputs = functionParams(target, env).inputs
+  const port = inputs.find((param) => !edgeProblem(p, edge.from, edge.to, edge.pin, env, { ...edge, toPort: param.id })) ?? inputs[0]
+  return port ? { ...edge, toPort: port.id } : edge
 }
 
 export const KIND_NAME: Record<NodeKind, string> = {
@@ -444,6 +469,7 @@ export const KIND_NAME: Record<NodeKind, string> = {
   template: '함수 호출',
   'function-input': '함수 Input',
   'function-output': '함수 Output',
+  foreach: 'For Each',
   complete: '할 일 완료',
   text: '텍스트',
   list: '리스트',
@@ -500,7 +526,7 @@ function lowerFunctions(p: Graph, env: Env, stack: string[]): Graph {
     const id = (value: string) => `${call.id}${TEMPLATE_SEP}${value}`
     const substitute = (text: string) => (entry.params ?? []).reduce((value, param) => value.split(`{{${param.name}}}`).join(inputToken(id(entry.id), param.id)), text)
     const nodes = body.nodes.map((n) => ({
-      ...n, id: id(n.id), name: `${nodeName(call)}${TEMPLATE_SEP}${nodeName(n)}`,
+      ...n, id: id(n.id), name: `${nodeName(call)}${TEMPLATE_SEP}${nodeName(n)}`, sourceIds: call.sourceIds ?? [call.id],
       text: substitute(n.text),
       ...(n.items ? { items: n.items.map(substitute) } : {}),
       ...(n.values ? { values: Object.fromEntries(Object.entries(n.values).map(([k, v]) => [k, substitute(v)])) } : {})
@@ -523,6 +549,102 @@ function lowerFunctions(p: Graph, env: Env, stack: string[]): Graph {
     }
   }
   return graph
+}
+
+function reachable(execution: PipeEdge[], roots: string[], stop = new Set<string>()): Set<string> {
+  const seen = new Set<string>(), pending = [...roots]
+  while (pending.length) {
+    const id = pending.pop()!
+    if (seen.has(id) || stop.has(id)) continue
+    seen.add(id)
+    pending.push(...execution.filter((e) => e.from === id).map((e) => e.to))
+  }
+  return seen
+}
+
+function loopScope(p: Graph, loop: PipeNode) {
+  const execution = execEdges(p)
+  const roots = execution.filter((e) => e.from === loop.id && e.fromPort !== LOOP_PORT.done).map((e) => e.to)
+  const stops = new Set(p.nodes.filter((n) => n.kind === 'function-output' && n.ref === '$iteration-end').map((n) => n.id))
+  const body = reachable(execution, roots, stops)
+  const completed = execution.filter((e) => (e.from === loop.id && e.fromPort === LOOP_PORT.done) || (body.has(e.from) && stops.has(e.to)))
+  return { execution, roots, completed, body }
+}
+
+function loopProblems(p: Graph, loop: PipeNode): string[] {
+  const out: string[] = []
+  const { execution, roots, completed, body } = loopScope(p, loop)
+  const name = nodeName(loop)
+  if (!incomingData(p, loop.id).length && loop.values?.[LOOP_PORT.list] === undefined) out.push(`${name}: 리스트를 연결하거나 기본 항목을 입력하세요`)
+  if (!roots.length) out.push(`${name}: 반복 본문 핀에 실행할 노드를 연결하세요`)
+  if ([...reachable(execution, completed.map((e) => e.to))].some((id) => body.has(id))) out.push(`${name}: 반복 본문과 완료 경로는 따로 연결하세요`)
+  if (body.has(loop.id)) out.push(`${name}: 본문 끝을 For Each로 다시 연결하지 마세요. 다음 항목은 자동으로 실행됩니다`)
+  if (execution.some((e) => body.has(e.to) && !body.has(e.from) && e.from !== loop.id)) out.push(`${name}: 반복 본문은 For Each의 본문 핀에서만 실행해야 합니다`)
+  // 현재 항목·인덱스와 본문 실행 결과는 그 반복 안에서만 유효하다.
+  const dataScope = new Set([loop.id, ...body]), pending = [...dataScope]
+  while (pending.length) {
+    const id = pending.pop()!
+    for (const e of p.edges.filter((e) => e.from === id && isDataEdge(p, e))) {
+      const target = byId(p, e.to)
+      if (!target) continue
+      if (!isData(target) && !body.has(target.id)) out.push(`${name}: 항목·인덱스와 본문 결과는 반복 본문 안에서만 연결할 수 있습니다`)
+      if (isData(target) && !dataScope.has(target.id)) { dataScope.add(target.id); pending.push(target.id) }
+    }
+  }
+  return [...new Set(out)]
+}
+
+/** 각 반복의 본문을 별도 범위로 펼치고, 모든 갈래가 끝난 뒤 다음 항목을 실행한다. */
+function lowerLoops(p: Graph, env: Env): Graph {
+  let graph = p
+  for (;;) {
+    const live = liveNodes(graph)
+    const loops = graph.nodes.filter((n) => n.kind === 'foreach' && live.has(n.id))
+    if (!loops.length) return graph
+    // 바깥 반복의 항목을 먼저 바인딩해야 안쪽 반복의 입력을 계산할 수 있다.
+    const loop = loops.find((n) => !loops.some((other) => other.id !== n.id && loopScope(graph, other).body.has(n.id)))
+    if (!loop) throw new Error('For Each의 실행 선이 고리를 이룹니다')
+    const problems = loopProblems(graph, loop)
+    if (problems.length) throw new Error(problems.join('\n'))
+    const { execution, roots, completed, body } = loopScope(graph, loop)
+    const input = incomingData(graph, loop.id)
+    const items = input.length ? input.flatMap((e) => edgeItems(graph, e, env)) : (loop.values?.[LOOP_PORT.list] ?? '').split('\n').filter((s) => s.trim())
+    const scope = new Set(body), pending = [...body]
+    while (pending.length) {
+      for (const n of dataPreds(graph, pending.pop()!)) if (isData(n) && !scope.has(n.id)) { scope.add(n.id); pending.push(n.id) }
+    }
+    if (graph.nodes.length + items.length * (scope.size + 3) > 10000) throw new Error(`${nodeName(loop)}: 반복을 펼친 노드는 10,000개까지 실행할 수 있습니다. 리스트를 나누어 실행하세요`)
+    const leaves = [...body].filter((id) => !execution.some((e) => e.from === id && body.has(e.to)))
+    const gate = (id: string): PipeNode => ({ id, kind: 'function-output', text: '', terminal: 'new' })
+    const nodes = graph.nodes.filter((n) => !body.has(n.id)).map((n) => n.id === loop.id ? gate(n.id) : n)
+    const edges = graph.edges.filter((e) => !body.has(e.from) && !body.has(e.to) && e.from !== loop.id && !(e.to === loop.id && isDataEdge(graph, e)))
+    let previous = loop.id
+    for (const [index, value] of items.entries()) {
+      const prefix = `${loop.id}/${index}/`
+      const id = (old: string) => scope.has(old) ? `${prefix}${old}` : old
+      const rewrite = (text: string) => fillOutputs(text.replace(/\u0000입력:([^\u0000]+)\u0000/g, (_match, raw: string) => {
+        const [source, port] = JSON.parse(raw) as [string, string]
+        return inputToken(id(source), port)
+      }), (source) => outputToken(id(source)))
+      const itemId = `${prefix}$item`, indexId = `${prefix}$index`, end = `${prefix}$end`
+      nodes.push({ id: itemId, kind: 'text', text: value, terminal: 'new', x: loop.x, y: loop.y }, { id: indexId, kind: 'text', text: String(index), terminal: 'new', x: loop.x, y: loop.y }, { ...gate(end), ref: '$iteration-end' })
+      nodes.push(...graph.nodes.filter((n) => scope.has(n.id)).map((n) => ({
+        ...n, id: id(n.id), name: `${nodeName(loop)}[${index}]/${nodeName(n)}`, text: rewrite(n.text),
+        sourceIds: [...new Set([...(n.sourceIds ?? [n.id]), ...(loop.sourceIds ?? [loop.id])])],
+        ...(n.items ? { items: n.items.map(rewrite) } : {}),
+        ...(n.values ? { values: Object.fromEntries(Object.entries(n.values).map(([k, v]) => [k, rewrite(v)])) } : {})
+      })))
+      for (const e of graph.edges.filter((e) => scope.has(e.to))) {
+        if (e.from === loop.id) {
+          if (isDataEdge(graph, e)) edges.push({ from: e.fromPort === LOOP_PORT.index ? indexId : itemId, to: id(e.to), ...(e.toPort ? { toPort: e.toPort } : {}) })
+        } else edges.push({ ...e, from: id(e.from), to: id(e.to) })
+      }
+      edges.push(...roots.map((root) => ({ from: previous, to: id(root) })), ...leaves.map((leaf) => ({ from: id(leaf), to: end })))
+      previous = end
+    }
+    edges.push(...completed.map((e) => ({ from: previous, to: e.to })))
+    graph = { nodes, edges }
+  }
 }
 
 function functionProblems(p: Graph, env: Env): string[] {
@@ -555,6 +677,7 @@ function functionProblems(p: Graph, env: Env): string[] {
       returning.add(id)
       pending.push(...execution.filter((e) => e.to === id).map((e) => e.from))
     }
+    for (const loop of p.nodes.filter((n) => n.kind === 'foreach' && returning.has(n.id))) for (const id of loopScope(p, loop).body) returning.add(id)
     for (const n of p.nodes) if (live.has(n.id) && !isData(n) && !returning.has(n.id)) problems.push(`${nodeName(n)}: 실행이 끝나면 함수 Output으로 이어 주세요`)
   }
   for (const edge of p.edges) {
@@ -565,7 +688,7 @@ function functionProblems(p: Graph, env: Env): string[] {
 }
 
 export function expandPipeline(p: Graph, env: Env = {}, stack: string[] = []): Graph {
-  const graph = lowerFunctions(p, env, stack)
+  const graph = lowerLoops(lowerFunctions(p, env, stack), env)
   const live = liveNodes(graph)
   const actions = graph.nodes.filter((n) => live.has(n.id) && !isData(n) && n.kind !== 'start' && !isFunctionBoundary(n))
   const execution = execEdges(graph)
@@ -636,6 +759,7 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
     if (!live.has(n.id) || n.kind === 'start' || isFunctionBoundary(n)) continue
     const who = nodeName(n)
     if (n.kind === 'template' && !n.ref) out.push(`${who}: 호출할 함수를 고르세요`)
+    if (n.kind === 'foreach') { out.push(...loopProblems(p, n)); continue }
     if (n.kind === 'task' && !n.ref) out.push(`${who}: 가져올 할 일을 고르세요`)
     if (n.kind === 'task' && n.ref && env.tasks && !env.tasks.some((t) => t.id === n.ref)) out.push(`${who}: 할 일을 찾을 수 없습니다 (${n.ref})`)
     if (n.kind === 'skill' && !n.ref) out.push(`${who}: 가져올 스킬을 고르세요`)
@@ -700,6 +824,8 @@ function continueProblems(p: Graph): string[] {
 export type NodeStatus = 'waiting' | 'starting' | 'running' | 'done' | 'failed' | 'skipped'
 
 export interface NodeRun {
+  name?: string
+  sourceIds?: string[]
   status: NodeStatus
   termId?: string
   /** 셸 명령의 종료 코드 */
@@ -762,8 +888,8 @@ export class PipelineRunner {
     return [...this.runs.values()].map(({ pipe: _p, sentAt: _s, ...s }) => JSON.parse(JSON.stringify(s)))
   }
 
-  start(pipe: Pipeline): RunState {
-    const problems = pipelineProblems(pipe)
+  start(pipe: Pipeline, allowEmpty = false): RunState {
+    const problems = allowEmpty && !pipe.nodes.length ? [] : pipelineProblems(pipe)
     if (problems.length) throw new Error(problems.join('\n'))
     if ([...this.runs.values()].some((r) => r.pipelineId === pipe.id && r.status === 'running')) throw new Error('이 작업 그래프는 이미 실행 중입니다')
     // 같은 그래프의 지난 실행 기록은 새 실행으로 바꾼다
@@ -773,7 +899,7 @@ export class PipelineRunner {
       pipelineId: pipe.id,
       title: pipe.title,
       status: 'running',
-      nodes: Object.fromEntries(pipe.nodes.map((n) => [n.id, { status: 'waiting' as NodeStatus }])),
+      nodes: Object.fromEntries(pipe.nodes.map((n) => [n.id, { status: 'waiting' as NodeStatus, name: nodeName(n), sourceIds: n.sourceIds ?? [n.id] }])),
       started: new Date(this.now()).toISOString(),
       pipe: JSON.parse(JSON.stringify(pipe)),
       sentAt: {}

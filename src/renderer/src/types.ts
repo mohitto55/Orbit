@@ -24,6 +24,9 @@ export type { InnerValue } from '../../core/pipeline'
 export type { FunctionParam, DataShape } from '../../core/pipeline'
 export {
   PARAM_TYPE_NAME,
+  LOOP_PORT,
+  isLoopExecPort,
+  withInputPort,
   functionParams,
   isFunctionBoundary,
   withFunctionBoundary,
