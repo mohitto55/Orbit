@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { spawn } from 'node-pty'
@@ -17,6 +17,7 @@ import {
   uniqueName,
   type PipeNode,
   type Pipeline,
+  type RunnerDeps,
   type RunState
 } from '../src/core/pipeline'
 import { deletePipeline, listPipelines, savePipeline } from '../src/core/pipelineStore'
@@ -28,7 +29,7 @@ const node = (id: string, kind: PipeNode['kind'] = 'claude', terminal: PipeNode[
 const pipe = (nodes: PipeNode[], edges: [string, string][]): Pipeline => ({ id: 'p1', title: '테스트', nodes, edges: edges.map(([from, to]) => ({ from, to })), file: '' })
 
 /** 가짜 터미널로 돌리는 실행기. 시계는 직접 넘긴다. */
-function setup() {
+function setup(overrides: Partial<RunnerDeps> = {}) {
   let clock = 0
   let seq = 0
   const opened: { id: string; kind: string; session?: string }[] = []
@@ -49,13 +50,61 @@ function setup() {
     runCommand: (termId, text) => sent.push({ termId, text, via: 'command' }),
     completeTasks: async (ids) => void completed.push(...ids),
     emit: (s) => (last = s),
-    now: () => clock
+    now: () => clock,
+    ...overrides
   })
   const settle = () => new Promise((r) => setTimeout(r, 0))
   return { runner, opened, sent, live, completed, state: () => last!, tick: (ms = 5000) => (clock += ms), settle }
 }
 
 describe('연동 · 터미널 작업 그래프', () => {
+  it('[DM-F02-AC4] 새 탭 준비 중에는 중복 입력을 막고, 이후 재사용할 때는 준비를 다시 기다리지 않는다', async () => {
+    let ready: () => void = () => {}
+    let opened = false
+    const whenReady = vi.fn(() => new Promise<void>((resolve) => { ready = resolve }))
+    const { runner, sent, settle } = setup({
+      createTerminal: async (kind) => {
+        const reused = opened
+        opened = true
+        return { id: 'shared', kind, title: '기존 세션', pid: 1, reused }
+      },
+      whenReady
+    })
+    const first = runner.start(pipe([node('a', 'codex')], []))
+    await settle()
+    expect(runner.list()[0].nodes.a.status).toBe('starting')
+    expect(sent).toEqual([])
+    // 준비 중에 도착한 지난 응답의 끝 신호로 터미널 점유를 풀면 안 된다.
+    expect(runner.agentDone('shared', true)).toBeNull()
+    const other = runner.start({ ...pipe([node('b', 'codex')], []), id: 'p2' })
+    await settle()
+    expect(runner.list().find((r) => r.runId === other.runId)?.nodes.b.status).toBe('failed')
+    expect(sent).toEqual([])
+    ready()
+    await settle()
+    expect(sent.map((s) => s.text)).toEqual(['a 할 일'])
+    runner.markDone(first.runId, 'a')
+    runner.start({ ...pipe([node('c', 'codex')], []), id: 'p3' })
+    await settle()
+    expect(sent.map((s) => s.text)).toEqual(['a 할 일', 'c 할 일'])
+    expect(whenReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('[DM-F02-AC4] 새 탭 준비가 실패해도 터미널을 계속 점유하지 않는다', async () => {
+    let reused = false
+    const { runner, sent, settle } = setup({
+      createTerminal: async (kind) => ({ id: 'shared', kind, title: '기존 세션', pid: 1, reused }),
+      whenReady: async () => { throw new Error('준비 실패') }
+    })
+    runner.start(pipe([node('a', 'codex')], []))
+    await settle()
+    expect(runner.list()[0].status).toBe('failed')
+    reused = true
+    runner.start({ ...pipe([node('b', 'codex')], []), id: 'p2' })
+    await settle()
+    expect(sent.map((s) => s.text)).toEqual(['b 할 일'])
+  })
+
   it('[IN-F11-AC1] 작업 그래프를 저장하고 다시 읽는다 (없는 노드를 잇는 선·자기 자신으로 가는 선은 버린다)', async () => {
     const ctx = await newProject()
     const saved = await savePipeline(ctx, {

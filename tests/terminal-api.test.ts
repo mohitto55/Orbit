@@ -93,6 +93,7 @@ describe('작업 그래프 세션 재사용', () => {
       expect(state.tabs.find((tab) => tab.id === target.id)).toMatchObject({ pid: target.pid, title: '기존 작업 이름', output: '기존 출력', groupId: group.id, sessionId: session })
       expect(state).toMatchObject({ active: other.id, activeGroup: 'ungrouped' })
       expect(targetPty.kill).not.toHaveBeenCalled()
+      expect(TerminalWorkspace.prototype.whenReady).not.toHaveBeenCalled()
     } finally { api.killAllTerminals() }
   })
 
@@ -110,6 +111,7 @@ describe('작업 그래프 세션 재사용', () => {
       await Promise.all([api.runPipeline(first.id), api.runPipeline(second.id)])
       await vi.waitFor(() => expect(api.pipelineRuns().map((r) => r.nodes.work.status).sort()).toEqual(['failed', 'running']))
       expect(ptys).toHaveLength(1)
+      expect(TerminalWorkspace.prototype.whenReady).toHaveBeenCalledTimes(1)
       const state = await api.termState()
       expect(state.tabs).toHaveLength(1)
       expect(state.tabs[0].sessionId).toBe(session)

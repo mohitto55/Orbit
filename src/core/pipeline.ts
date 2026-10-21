@@ -533,7 +533,7 @@ export interface RunState {
 
 export interface RunnerDeps {
   /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
-  createTerminal: (kind: TerminalKind, label: string, session?: string) => Promise<TerminalInfo>
+  createTerminal: (kind: TerminalKind, label: string, session?: string) => Promise<TerminalInfo & { reused?: boolean }>
   hasTerminal: (termId: string) => boolean
   whenReady: (termId: string) => Promise<void>
   submit: (termId: string, text: string) => void
@@ -633,20 +633,25 @@ export class PipelineRunner {
         return
       }
       let termId: string
+      let needsReady = false
       const from = continueFrom(run.pipe, node)
       if (from) {
         termId = run.nodes[from.id].termId!
         if (!termId || !this.deps.hasTerminal(termId)) throw new Error(`${nodeName(from)}의 터미널이 닫혀 이어서 실행할 수 없습니다`)
       } else {
         const session = node.kind === 'claude' || node.kind === 'codex' ? node.session : undefined
-        termId = (await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)).id
-        await this.deps.whenReady(termId)
+        const terminal = await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
+        termId = terminal.id
+        needsReady = !terminal.reused
       }
       if (run.status !== 'running') return
       if (this.owner.has(termId)) throw new Error('이 세션의 터미널에서 다른 작업 노드가 실행 중입니다. 해당 작업이 끝난 뒤 다시 실행하세요')
       st.termId = termId
-      st.status = 'running'
+      // 새 탭의 준비를 기다리는 동안에도 다른 노드가 같은 터미널에 먼저 입력하지 못하게 한다.
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
+      if (needsReady) await this.deps.whenReady(termId)
+      if (run.status !== 'running') return
+      st.status = 'running'
       run.sentAt[node.id] = this.now()
       // 앞에서 끝난 노드의 결과를 이제 넣는다
       const text = fillOutputs(node.text, (id) => run.nodes[id]?.output ?? '')
@@ -666,10 +671,10 @@ export class PipelineRunner {
     if (!o) return null
     const run = this.runs.get(o.runId)
     if (!run) return null
-    if (!manual && this.now() - (run.sentAt[o.nodeId] ?? 0) < GRACE_MS) return null
-    this.owner.delete(termId)
     const st = run.nodes[o.nodeId]
     if (st.status !== 'running') return null
+    if (!manual && this.now() - (run.sentAt[o.nodeId] ?? 0) < GRACE_MS) return null
+    this.owner.delete(termId)
     Object.assign(st, patch, { status: ok ? 'done' : 'failed' })
     this.tick(run)
     return this.publish(run)

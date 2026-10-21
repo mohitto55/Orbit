@@ -155,7 +155,7 @@ export class TerminalWorkspace {
   }
 
   /** 작업 그래프에서 지정한 세션이 이미 실행 중이면 그 탭을 그대로 쓴다. */
-  async open(kind: TerminalKind, settings: ProjectSettings, options: { title?: string; resume?: string } = {}): Promise<TerminalSnapshot> {
+  async open(kind: TerminalKind, settings: ProjectSettings, options: { title?: string; resume?: string } = {}): Promise<TerminalSnapshot & { reused: boolean }> {
     if (options.resume && kind !== 'shell') {
       validateSessionId(options.resume)
       for (const tab of this.tabs.values()) this.syncLaunch(tab)
@@ -166,7 +166,9 @@ export class TerminalWorkspace {
     const existing = options.resume && kind !== 'shell'
       ? [...this.tabs.values()].find((tab) => tab.kind === kind && tab.sessionId === options.resume && (!tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix)) && this.manager.has(tab.id))
       : undefined
-    return existing ? this.snapshot(existing) : this.create(kind, settings, undefined, undefined, options)
+    return existing
+      ? { ...this.snapshot(existing), reused: true }
+      : { ...this.create(kind, settings, undefined, undefined, options), reused: false }
   }
 
   /** 새 탭을 연다. resume을 주면 로컬에 저장된 그 대화를 이어서 연다. */

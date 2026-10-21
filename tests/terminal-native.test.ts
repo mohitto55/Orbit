@@ -3,7 +3,78 @@ import path from 'path'
 import { expect, it, vi } from 'vitest'
 import { spawn } from 'node-pty'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
+import { PipelineRunner } from '../src/core/pipeline'
 import { tempDir } from './helpers'
+
+it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[DM-F02-AC4] 실제 Codex에 작업 그래프 프롬프트를 자동 전송하고 화면 갱신 중에도 기존 탭에 바로 입력한다', async () => {
+  const root = await tempDir('orbit-codex-submit-')
+  const cwd = await fs.realpath(process.cwd())
+  const codexHome = path.join(root, 'codex')
+  await fs.mkdir(codexHome)
+  await fs.writeFile(path.join(codexHome, 'config.toml'), `model = "orbit-probe"\nmodel_provider = "orbit_probe"\n[model_providers.orbit_probe]\nname = "OrbitProbe"\nbase_url = "http://127.0.0.1:1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nplugins = false\n[projects.${JSON.stringify(process.platform === 'win32' ? cwd.toLowerCase() : cwd)}]\ntrust_level = "trusted"\n`)
+  vi.stubEnv('CODEX_HOME', codexHome)
+  let output = ''
+  let workspace: TerminalWorkspace
+  const started = Date.now()
+  const timings: Record<string, number> = {}
+  const settings = { name: 'native submit', driftIntervalDays: 7, reminderTime: '09:00' }
+  let redraw: ReturnType<typeof setInterval> | undefined
+  workspace = new TerminalWorkspace(path.join(root, 'workspace.json'), { projectDir: cwd, dataRoot: path.join(cwd, 'docs') }, spawn, {
+    onData(id, data) {
+      output = (output + data).slice(-200000)
+      if (data.includes('\x1b[6n')) workspace.write(id, '\x1b[1;1R')
+      if (data.includes('\x1b]10;?')) workspace.write(id, '\x1b]10;rgb:ffff/ffff/ffff\x1b\\')
+      if (data.includes('\x1b]11;?')) workspace.write(id, '\x1b]11;rgb:0000/0000/0000\x1b\\')
+    },
+    onExit() {}
+  })
+  try {
+    const tab = workspace.create('codex', settings)
+    await workspace.whenReady(tab.id)
+    timings.ready = Date.now() - started
+    workspace.submit(tab.id, 'OrbitAutomaticInputProbe\n두 번째 줄')
+    await vi.waitFor(async () => {
+      const history = (await fs.readFile(path.join(codexHome, 'history.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { text: string })
+      expect(history.map((entry) => entry.text)).toEqual(['OrbitAutomaticInputProbe\n두 번째 줄'])
+    }, { timeout: 6000 })
+    timings.submitted = Date.now() - started
+    await vi.waitFor(() => expect(workspace.state().tabs[0].sessionId).toBeTruthy(), { timeout: 15000 })
+    const session = workspace.state().tabs[0].sessionId!
+    const runner = new PipelineRunner({
+      createTerminal: (kind, _label, resume) => workspace.open(kind, settings, { resume }),
+      hasTerminal: (id) => workspace.has(id),
+      whenReady: (id) => workspace.whenReady(id),
+      submit: (id, text) => workspace.submit(id, text),
+      runCommand: (id, text) => workspace.runCommand(id, text),
+      completeTasks: async () => {},
+      emit() {}
+    })
+    // 화면이 계속 갱신되면 이전의 "출력 1.5초 멈춤" 조건은 성립하지 않는다.
+    let columns = 100
+    redraw = setInterval(() => workspace.resize(tab.id, columns++ % 2 ? 100 : 101, 30), 100)
+    workspace.resize(tab.id, 101, 30)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    output = ''
+    const reusedAt = Date.now()
+    runner.start({ id: 'reuse', title: '기존 Codex 탭', file: '', nodes: [{ id: 'work', kind: 'codex', text: 'OrbitImmediateReuseProbe', terminal: 'new', session }], edges: [] })
+    await vi.waitFor(() => expect(output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).toContain('OrbitImmediateReuseProbe'), { timeout: 1500 })
+    timings.reusedInput = Date.now() - reusedAt
+    await vi.waitFor(async () => {
+      const history = (await fs.readFile(path.join(codexHome, 'history.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { text: string })
+      expect(history.map((entry) => entry.text)).toContain('OrbitImmediateReuseProbe')
+    }, { timeout: 3000 })
+    timings.reusedSubmitted = Date.now() - reusedAt
+    expect(workspace.state().tabs).toHaveLength(1)
+    expect(runner.list()[0].nodes.work).toMatchObject({ status: 'running', termId: tab.id })
+  } finally {
+    clearInterval(redraw)
+    await fs.writeFile(path.join(root, 'terminal-output.txt'), output)
+    await fs.writeFile(path.join(root, 'timings.json'), JSON.stringify(timings))
+    console.info('Codex automatic-input diagnostics:', root)
+    workspace.suspend()
+    vi.unstubAllEnvs()
+  }
+}, 45000)
 
 // 설치된 Codex의 실제 TUI 연결 확인. 모델 요청은 닫힌 로컬 포트로만 보낸다.
 it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[TE-F01-AC3] [TE-F01-AC8] [TE-F01-AC9] 실제 Codex의 줄바꿈과 일반 터미널에서 재개한 기존 세션을 앱 재시작 후 복원한다', async () => {
