@@ -439,6 +439,7 @@ export function createApi(deps: ApiDeps) {
     async termState() {
       return (await terms()).state()
     },
+    async termAcknowledge(id: string, revision: number) { (await terms()).acknowledge(id, revision) },
     async termActivate(id: string) {
       const workspace = await terms()
       workspace.activate(id)
@@ -505,7 +506,11 @@ export function createApi(deps: ApiDeps) {
     },
     pipelineRuns: () => pipes.list(),
     /** 응답 끝 신호를 놓쳤을 때 사람이 직접 "이 노드는 끝났다"고 넘긴다 */
-    markNodeDone: (runId: string, nodeId: string) => pipes.markDone(runId, nodeId),
+    markNodeDone: (runId: string, nodeId: string) => {
+      const node = pipes.list().find((run) => run.runId === runId)?.nodes[nodeId]
+      if (node?.status === 'running' && node.termId) terminals?.markDone(node.termId)
+      return pipes.markDone(runId, nodeId)
+    },
     killAllTerminals() {
       terminals?.suspend()
     }

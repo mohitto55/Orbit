@@ -4,6 +4,7 @@ import type { ProjectSettings } from './workspace'
 
 /** 연동: 프로젝트 폴더에서 셸·Claude Code·Codex를 실행하는 터미널 세션 관리. */
 export type TerminalKind = 'shell' | 'claude' | 'codex'
+export type TerminalActivity = 'idle' | 'working' | 'completed'
 
 export interface TerminalInfo {
   id: string
@@ -13,6 +14,9 @@ export interface TerminalInfo {
   sessionId?: string
   exited?: number
   groupId?: string
+  /** completed는 작업이 끝났지만 사용자가 아직 확인하지 않은 상태다. */
+  activity?: TerminalActivity
+  activityRevision?: number
 }
 
 export interface TerminalSnapshot extends TerminalInfo {

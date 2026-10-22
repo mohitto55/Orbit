@@ -438,7 +438,10 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 .term-tab:hover { color: var(--text); }
 .term-tab.on { background: var(--panel); border-color: var(--line); color: var(--text); font-weight: 600; margin-bottom: -1px; position: relative; z-index: 1; }
 .term-tab.dim { opacity: 0.55; }
-.term-tab .dot { margin-right: 2px; }
+.term-tab .dot { width: 8px; height: 8px; flex-shrink: 0; margin-right: 2px; }
+.term-tab .dot.idle { background: var(--muted); }
+.term-tab .dot.working { background: var(--warn); }
+.term-tab .dot.completed { background: var(--ok); }
 .term-area { flex: 1; min-height: 300px; position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
 .term-host { position: absolute; inset: 10px 12px; }
 .dot.claude { background: #d97757; }

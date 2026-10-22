@@ -4,13 +4,20 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api, on } from '../api'
 import { Empty, Modal, errorToast } from '../ui'
-import type { TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
+import type { TerminalActivity, TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
 import type { TerminalGroup, TerminalLayout } from '../../../core/terminalWorkspace'
 import PipelineEditor from './Pipelines'
 
 interface Output { id: string; data: string; sequence: number }
 type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
 const TAB_DRAG_TYPE = 'application/x-orbit-terminal'
+const ACTIVITY_LABEL: Record<TerminalActivity, string> = { idle: '기본 상태', working: '작업 중', completed: '작업 완료 · 미확인' }
+
+function mergeActivity<T extends TerminalInfo>(info: T, previous?: TerminalInfo): T {
+  return (previous?.activityRevision ?? 0) > (info.activityRevision ?? 0)
+    ? { ...info, activity: previous?.activity, activityRevision: previous?.activityRevision }
+    : info
+}
 
 function theme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -30,6 +37,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [updating, setUpdating] = useState(false)
   const [name, setName] = useState('')
   const [view, setView] = useState<'terms' | 'graph'>('terms')
+  const [foreground, setForeground] = useState(() => document.visibilityState !== 'hidden' && document.hasFocus())
   const area = useRef<HTMLDivElement>(null)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
@@ -45,7 +53,8 @@ export default function Terminals({ visible }: { visible: boolean }) {
     setActiveGroup(layout.activeGroup)
     setTabs((current) => layout.tabs.map((tab) => {
       const previous = current.find((t) => t.id === tab.id)
-      return previous?.exited !== undefined && tab.exited === undefined ? { ...tab, exited: previous.exited } : tab
+      const updated = mergeActivity(tab, previous)
+      return previous?.exited !== undefined && tab.exited === undefined ? { ...updated, exited: previous.exited } : updated
     }))
     setActive(layout.active)
   }
@@ -105,12 +114,14 @@ export default function Terminals({ visible }: { visible: boolean }) {
     let alive = true
     mounted.current = true
     const exits = new Map<string, number>()
+    const infos = new Map<string, TerminalInfo>()
     const offData = on('term-data', write)
     const offError = on('term-error', (message: string) => errorToast(new Error(message)))
     const offInfo = on('term-info', (info: TerminalInfo) => {
+      infos.set(info.id, mergeActivity(info, infos.get(info.id)))
       const x = xterms.get(info.id)
       if (x) x.kind = info.kind
-      setTabs((all) => all.map((tab) => tab.id === info.id ? { ...tab, ...info } : tab))
+      setTabs((all) => all.map((tab) => tab.id === info.id ? mergeActivity({ ...tab, ...info }, tab) : tab))
     })
     const offExit = on('term-exit', ({ id, code }: { id: string; code: number }) => {
       exits.set(id, code)
@@ -120,13 +131,16 @@ export default function Terminals({ visible }: { visible: boolean }) {
     // IN-F11: 작업 그래프가 연 터미널도 탭으로 붙인다
     const offCreated = on('term-created', (snapshot: TerminalSnapshot) => {
       attach(snapshot)
-      setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, snapshot])
+      setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, mergeActivity(snapshot, infos.get(snapshot.id))])
       setActive((a) => a ?? snapshot.id)
     })
     void api.termState().then((state) => {
       if (!alive) return
       for (const tab of state.tabs) attach(tab)
-      setTabs(state.tabs.map((tab) => exits.has(tab.id) ? { ...tab, exited: exits.get(tab.id) } : tab))
+      setTabs(state.tabs.map((tab) => {
+        const updated = mergeActivity(tab, infos.get(tab.id))
+        return exits.has(tab.id) ? { ...updated, exited: exits.get(tab.id) } : updated
+      }))
       setActive(state.active)
       setGroups(state.groups)
       setActiveGroup(state.activeGroup)
@@ -143,6 +157,24 @@ export default function Terminals({ visible }: { visible: boolean }) {
       xterms.clear(); pending.clear()
     }
   }, [])
+
+  useEffect(() => {
+    const update = () => setForeground(document.visibilityState !== 'hidden' && document.hasFocus())
+    const blur = () => setForeground(false)
+    window.addEventListener('focus', update)
+    window.addEventListener('blur', blur)
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      window.removeEventListener('focus', update)
+      window.removeEventListener('blur', blur)
+      document.removeEventListener('visibilitychange', update)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!visible || view !== 'terms' || !foreground || editing || activeTab?.activity !== 'completed') return
+    void api.termAcknowledge(activeTab.id, activeTab.activityRevision ?? 0).catch(errorToast)
+  }, [visible, view, foreground, editing, activeTab?.id, activeTab?.activity, activeTab?.activityRevision])
 
   function fitTab(id: string) {
     const x = xterms.get(id)
@@ -202,7 +234,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     try {
       if (editing.kind === 'tab') {
         const renamed = await api.termRename(editing.id, name)
-        if (mounted.current) setTabs((all) => all.map((tab) => tab.id === renamed.id ? renamed : tab))
+        if (mounted.current) setTabs((all) => all.map((tab) => tab.id === renamed.id ? mergeActivity(renamed, tab) : tab))
       } else {
         applyLayout(await (editing.kind === 'new-group' ? api.termCreateGroup(name) : api.termRenameGroup(editing.id, name)))
       }
@@ -220,7 +252,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
       const old = xterms.get(id)
       old?.term.dispose(); old?.host.remove(); xterms.delete(id)
       attach(snapshot)
-      setTabs((all) => all.map((tab) => tab.id === id ? snapshot : tab))
+      setTabs((all) => all.map((tab) => tab.id === id ? mergeActivity(snapshot, tab) : tab))
       setActive(id)
     } catch (e) { errorToast(e) }
     finally { if (mounted.current) setOpening(false) }
@@ -242,7 +274,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
           <button disabled={busy} onClick={() => void open('shell')}>+ 터미널</button>
         </div>
       </div>
-      {view === 'graph' && <PipelineEditor tabs={tabs} onShowTerminal={(id) => { setView('terms'); void changeLayout(() => api.termActivate(id)) }} />}
+      {view === 'graph' && <PipelineEditor tabs={tabs} onShowTerminal={(id) => { void changeLayout(() => api.termActivate(id)).then(() => { if (mounted.current) setView('terms') }) }} />}
       {view === 'terms' && <>
       <div className="term-group-bar" role="region" aria-label="터미널 그룹">
         <div className="term-groups">
@@ -278,7 +310,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
             <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}`} draggable={!busy}
               onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id); event.dataTransfer.effectAllowed = 'move' }}>
               <button className="term-tab-select" role="tab" aria-selected={active === tab.id} disabled={busy} onClick={() => void changeLayout(() => api.termActivate(tab.id))}>
-                <span className={`dot ${tab.kind}`} /><span>{tab.title}</span>
+                <span className={`dot ${tab.activity ?? 'idle'}`} role="img" aria-label={ACTIVITY_LABEL[tab.activity ?? 'idle']} title={ACTIVITY_LABEL[tab.activity ?? 'idle']} /><span>{tab.title}</span>
                 {activeGroup === 'all' && tab.groupId && <span className="term-tab-group">{groups.find((g) => g.id === tab.groupId)?.title}</span>}
               </button>
               {tab.exited !== undefined && <button className="icon" disabled={busy} aria-label={`${tab.title} 다시 연결`} title="다시 연결" onClick={() => void restart(tab.id)}>↻</button>}

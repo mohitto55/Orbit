@@ -83,11 +83,16 @@ describe('작업 그래프 세션 재사용', () => {
       for (let i = 0; i < 2; i++) {
         const run = await api.runPipeline(graph.id)
         await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === run.runId)?.nodes.work).toMatchObject({ status: 'running', termId: target.id }))
+        expect((await api.termState()).tabs.find((tab) => tab.id === target.id)?.activity).toBe('working')
         expect(ptys).toHaveLength(2)
         expect(targetPty.write).toHaveBeenCalledWith('\x1b[200~기존 대화에 보내는 작업\x1b[201~')
         await vi.waitFor(() => expect(targetPty.write).toHaveBeenLastCalledWith(kind === 'codex' ? '\x05\r' : '\r'))
         expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
         expect(api.markNodeDone(run.runId, 'work')?.status).toBe('done')
+        const completed = (await api.termState()).tabs.find((tab) => tab.id === target.id)!
+        expect(completed.activity).toBe('completed')
+        await api.termAcknowledge(target.id, completed.activityRevision!)
+        expect((await api.termState()).tabs.find((tab) => tab.id === target.id)?.activity).toBe('idle')
       }
       const state = await api.termState()
       expect(state.tabs).toHaveLength(2)

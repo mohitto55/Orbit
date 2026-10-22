@@ -72,7 +72,7 @@ if ($global:OrbitCodexCommand) {
   function global:codex {
     if ($args -match '^(exec|e|review|login|logout|mcp|mcp-server|app-server|completion|sandbox|debug|apply|a|cloud|features|--help|-h|--version|-V)$') { & $global:OrbitCodexCommand @args; return }
     Invoke-OrbitBridge start codex @args
-    $orbitExtra = @('-c', "tui.terminal_title=['session-id']")
+    $orbitExtra = @('-c', "tui.terminal_title=['session-id','status']", '-c', $env:ORBIT_CODEX_NOTIFY)
     if ($args -notcontains '--no-daemon') { $orbitExtra += '--no-daemon' }
     try { & $global:OrbitCodexCommand @args @orbitExtra }
     finally { $orbitCode = $LASTEXITCODE; Invoke-OrbitBridge stop; $global:LASTEXITCODE = $orbitCode }
@@ -89,6 +89,13 @@ if ($global:OrbitClaudeCommand) {
     finally { $orbitCode = $LASTEXITCODE; Invoke-OrbitBridge stop; $global:LASTEXITCODE = $orbitCode }
   }
 }
+$global:OrbitOriginalPrompt = (Get-Item Function:\prompt).ScriptBlock
+$global:OrbitPromptSequence = 0
+function global:prompt {
+  $global:OrbitPromptSequence += 1
+  [Console]::Write(([char]27).ToString() + ']0;orbit:shell:ready:' + $global:OrbitPromptSequence + [char]7)
+  & $global:OrbitOriginalPrompt
+}
 `
 
 const posixInit = String.raw`
@@ -99,8 +106,8 @@ codex() {
   esac
   orbit_bridge start codex "$@"
   case " $* " in
-    *' --no-daemon '*) command codex "$@" -c "tui.terminal_title=['session-id']";;
-    *) command codex "$@" --no-daemon -c "tui.terminal_title=['session-id']";;
+    *' --no-daemon '*) command codex "$@" -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY";;
+    *) command codex "$@" --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY";;
   esac
   local orbit_code=$?
   orbit_bridge stop
@@ -119,6 +126,22 @@ claude() {
   orbit_bridge stop
   return $orbit_code
 }
+orbit_prompt_sequence=0
+orbit_shell_ready() {
+  local orbit_status=$?
+  orbit_prompt_sequence=$((orbit_prompt_sequence + 1))
+  printf '\033]0;orbit:shell:ready:%s\007' "$orbit_prompt_sequence"
+  return "$orbit_status"
+}
+if [ -n "$ZSH_VERSION" ]; then
+  precmd_functions+=(orbit_shell_ready)
+elif [ -n "$BASH_VERSION" ]; then
+  if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a'* ]]; then
+    PROMPT_COMMAND=(orbit_shell_ready "${'${PROMPT_COMMAND[@]}'}")
+  else
+    PROMPT_COMMAND="orbit_shell_ready; $PROMPT_COMMAND"
+  fi
+fi
 `
 
 const fishInit = String.raw`
@@ -132,9 +155,9 @@ function codex
   end
   orbit_bridge start codex $argv
   if contains -- --no-daemon $argv
-    command codex $argv -c "tui.terminal_title=['session-id']"
+    command codex $argv -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY"
   else
-    command codex $argv --no-daemon -c "tui.terminal_title=['session-id']"
+    command codex $argv --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY"
   end
   set -l orbit_code $status
   orbit_bridge stop
@@ -155,13 +178,19 @@ function claude
   orbit_bridge stop
   return $orbit_code
 end
+set -g orbit_prompt_sequence 0
+function orbit_shell_ready --on-event fish_prompt
+  set -g orbit_prompt_sequence (math $orbit_prompt_sequence + 1)
+  printf '\033]0;orbit:shell:ready:%s\007' "$orbit_prompt_sequence"
+end
 `
 
 const slash = (p: string) => p.replace(/\\/g, '/')
 const signalFile = (dir: string, signal: AgentSignal) => path.join(dir, `agent.${signal}`)
 
-/** IN-F10: 응답 끝(done)·입력 준비(ready) 신호. 훅이 신호 파일에 한 줄을 붙인다. */
-export type AgentSignal = 'done' | 'ready'
+/** IN-F10: 입력 준비·작업 시작·응답 끝·중단 신호. */
+export type AgentSignal = 'ready' | 'working' | 'done' | 'idle'
+const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle']
 
 /** 신호 파일이 있으면 지우고 true를 돌려준다. */
 export function takeAgentSignal(dir: string, signal: AgentSignal): boolean {
@@ -173,6 +202,14 @@ export function takeAgentSignal(dir: string, signal: AgentSignal): boolean {
   } catch {
     return false
   }
+}
+
+/** 한 번의 확인 사이에 끝난 작업과 다음 작업의 시작이 겹치면 발생 순서대로 처리한다. */
+export function takeAgentSignals(dir: string): AgentSignal[] {
+  return AGENT_SIGNALS.flatMap((signal) => {
+    try { return [{ signal, at: statSync(signalFile(dir, signal)).mtimeMs }] }
+    catch { return [] }
+  }).sort((a, b) => a.at - b.at).filter(({ signal }) => takeAgentSignal(dir, signal)).map(({ signal }) => signal)
 }
 
 /** 앱이 만든 셸에만 적용한다. 사용자의 CLI 전역 설정·셸 프로필은 수정하지 않는다. */
@@ -190,21 +227,22 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
     ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`, 'utf16le').toString('base64')}`
     : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`
   // 지난 실행에서 남은 신호는 지운다
-  for (const s of ['done', 'ready'] as const) rmSync(signalFile(dir, s), { force: true })
+  for (const s of AGENT_SIGNALS) rmSync(signalFile(dir, s), { force: true })
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
-  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }, echo('ready')] }], Stop: [{ hooks: [echo('done')] }] } }))
+  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working')] }], Stop: [{ hooks: [echo('done')] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
   const notify = path.join(dir, `notify.${win ? 'cmd' : 'sh'}`)
   writeFileSync(notify, win ? `@echo done>>"${slash(signalFile(dir, 'done'))}"\r\n` : `#!/bin/sh\necho done >> ${shellQuote(slash(signalFile(dir, 'done')), platform)}\n`)
   if (!win) chmodSync(notify, 0o755)
+  const codexNotify = `notify=['${slash(notify).replace(/'/g, '')}']`
   return {
     init: `. ${shellQuote(init)}`,
     claudeSettings: settings,
     // TOML 리터럴 문자열('...') 안에는 작은따옴표를 쓸 수 없다
-    codexNotify: `notify=['${slash(notify).replace(/'/g, '')}']`,
-    env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings }
+    codexNotify,
+    env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings, ORBIT_CODEX_NOTIFY: codexNotify }
   }
 }
 

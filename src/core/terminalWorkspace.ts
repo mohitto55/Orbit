@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
-import { TerminalManager, terminalCommand, validateSessionId, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
+import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignal, type CliLaunch } from './terminalIntegration'
+import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, type CliLaunch } from './terminalIntegration'
 import type { Ctx, ProjectSettings } from './workspace'
 
 interface SavedTab {
@@ -22,6 +22,8 @@ interface SavedTab {
   launch?: CliLaunch
   codexPrefix?: string
   groupId?: string
+  activity?: TerminalActivity
+  activityRevision?: number
 }
 
 export interface TerminalGroup {
@@ -70,6 +72,9 @@ export class TerminalWorkspace {
   private nextBind = 0
   private monitor: NodeJS.Timeout
   private titleBuffers = new Map<string, string>()
+  private codexStatusTabs = new Set<string>()
+  private shellPastes = new Set<string>()
+  private commands = new Set<string>()
 
   constructor(private file: string, private ctx: Ctx, spawn: typeof import('node-pty').spawn, private events: TerminalEvents) {
     this.manager = new TerminalManager(spawn, {
@@ -77,15 +82,30 @@ export class TerminalWorkspace {
         const tab = this.tabs.get(id)
         if (!tab) return
         tab.output = (tab.output + data).slice(-200000)
-        const titles = ((this.titleBuffers.get(id) ?? '') + data).slice(-8192)
-        this.titleBuffers.set(id, titles.slice(-1024))
+        const titles = (this.titleBuffers.get(id) ?? '') + data
         const matches = [...titles.matchAll(/\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)/g)]
+        // 완성된 제목은 한 번만 처리한다. 다음 출력에서 이전 작업 상태가 재생되면 안 된다.
+        const last = matches.at(-1)
+        const tail = titles.slice(last ? last.index! + last[0].length : 0)
+        const pending = tail.lastIndexOf('\x1b]')
+        this.titleBuffers.set(id, pending >= 0 && tail.length - pending <= 8192 ? tail.slice(pending) : tail.endsWith('\x1b') ? '\x1b' : '')
         try {
           if (matches.length) {
             this.syncLaunch(tab)
-            if (tab.kind === 'codex') {
-              const prefix = matches.at(-1)![1].match(/^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{1,12})(?:\.\.\.|\s|$)/i)?.[1]
-              if (prefix && prefix !== tab.codexPrefix) { tab.codexPrefix = prefix; this.nextBind = 0; this.save() }
+            for (const match of matches) {
+              const title = match[1]
+              if (tab.kind === 'shell' && !this.commands.has(id) && /^orbit:shell:ready(?::\d+)?$/.test(title)) this.finishActivity(tab)
+              if (tab.kind === 'codex') {
+                const prefix = title.match(/\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{1,12})(?:\.\.\.|\s|$)/i)?.[1]
+                if (prefix && prefix !== tab.codexPrefix) { tab.codexPrefix = prefix; this.nextBind = 0; this.save() }
+                // Windows ConPTY도 전달하는 OSC 제목의 상태만 읽는다. 방 이름은 바꾸지 않는다.
+                const status = title.match(/(?:^|[|·]\s*)(Working|Thinking|Waiting|Ready)$/)?.[1]
+                if (status) {
+                  this.codexStatusTabs.add(id)
+                  if (status === 'Ready') this.finishActivity(tab)
+                  else this.setActivity(tab, 'working')
+                }
+              }
             }
           }
         } catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
@@ -100,23 +120,41 @@ export class TerminalWorkspace {
         events.onData(id, data, sequence)
       },
       onExit: (id, code) => {
+        this.commands.delete(id)
         const tab = this.tabs.get(id)
-        if (tab) tab.exited = code
+        if (tab) {
+          tab.exited = code
+          if (tab.activity === 'working') this.setActivity(tab, 'idle')
+        }
         this.save()
         events.onExit(id, code)
       },
-      onCommandDone: events.onCommandDone
+      onCommandDone: (id, code, output) => {
+        this.commands.delete(id)
+        const tab = this.tabs.get(id)
+        if (tab) this.finishActivity(tab)
+        events.onCommandDone?.(id, code, output)
+      }
     })
     this.monitor = setInterval(() => {
-      try { for (const tab of this.tabs.values()) this.syncLaunch(tab) }
-      catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
-      // IN-F10: 훅이 남긴 응답 끝·준비 신호
-      for (const tab of this.tabs.values()) {
-        if (tab.exited !== undefined) continue
-        const dir = this.integrationDir(tab.id)
-        if (takeAgentSignal(dir, 'ready')) this.manager.markReady(tab.id)
-        if (takeAgentSignal(dir, 'done')) this.events.onAgentDone?.(tab.id)
-      }
+      try {
+        for (const tab of this.tabs.values()) this.syncLaunch(tab)
+        // IN-F10: 훅이 남긴 작업·준비 신호
+        for (const tab of this.tabs.values()) {
+          if (tab.exited !== undefined) continue
+          const dir = this.integrationDir(tab.id)
+          for (const signal of takeAgentSignals(dir)) {
+            if (signal === 'ready') this.manager.markReady(tab.id)
+            if (signal === 'working') this.setActivity(tab, 'working')
+            if (signal === 'idle') this.setActivity(tab, 'idle')
+            if (signal === 'done') {
+              // Codex 상태 제목과 notify가 같은 완료를 두 번 알리지 않게 한다.
+              if (tab.kind !== 'codex' || !this.codexStatusTabs.has(tab.id)) this.finishActivity(tab)
+              this.events.onAgentDone?.(tab.id)
+            }
+          }
+        }
+      } catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
       void this.bindCodex().catch((e: unknown) => this.events.onError?.(`세션 ID 연결 실패: ${String(e)}`))
     }, 500)
     this.monitor.unref()
@@ -135,7 +173,7 @@ export class TerminalWorkspace {
     for (const tab of saved.tabs) {
       if (!/^term-[a-f0-9-]{36}$/.test(tab.id) || !['shell', 'claude', 'codex'].includes(tab.kind) || typeof tab.title !== 'string') throw new Error('터미널 저장 정보가 올바르지 않습니다')
       if (tab.sessionId) validateSessionId(tab.sessionId)
-      this.tabs.set(tab.id, { ...tab, groupId: this.groups.some((g) => g.id === tab.groupId) ? tab.groupId : undefined, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
+      this.tabs.set(tab.id, { ...tab, activity: tab.activity === 'completed' ? 'completed' : 'idle', activityRevision: Number.isSafeInteger(tab.activityRevision) && tab.activityRevision! >= 0 ? tab.activityRevision : 0, groupId: this.groups.some((g) => g.id === tab.groupId) ? tab.groupId : undefined, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
     }
     this.activeGroup = saved.activeGroup === 'ungrouped' || this.groups.some((g) => g.id === saved.activeGroup) ? saved.activeGroup! : 'all'
     this.active = this.tabs.has(saved.active ?? '') ? saved.active! : [...this.tabs.keys()].at(-1) ?? null
@@ -184,6 +222,10 @@ export class TerminalWorkspace {
   }
 
   private launch(tab: SavedTab, settings: ProjectSettings, restoring: boolean): void {
+    this.codexStatusTabs.delete(tab.id)
+    this.shellPastes.delete(tab.id)
+    this.commands.delete(tab.id)
+    this.titleBuffers.delete(tab.id)
     const cwd = tab.launch?.cwd ?? this.ctx.projectDir
     const integration = prepareTerminalIntegration(this.integrationDir(tab.id), tab.kind, cwd)
     let resume = restoring ? tab.sessionId : undefined
@@ -197,7 +239,7 @@ export class TerminalWorkspace {
     if (command && tab.launch) command += resumeOptions(tab.launch.args, command).map((arg) => ` ${shellQuote(arg)}`).join('')
     // 공유 데몬의 환경·저장 위치가 다른 탭에 섞이지 않도록 각 TUI를 독립 실행한다.
     if (tab.kind === 'codex' && command && !/(^|\s)--no-daemon(?:\s|$)/.test(command)) command += ' --no-daemon'
-    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id']")} -c ${shellQuote(integration.codexNotify)}`
+    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id','status']")} -c ${shellQuote(integration.codexNotify)}`
     if (tab.kind === 'claude' && command) command += ` --settings ${shellQuote(integration.claudeSettings)}`
     // 새 셸의 준비 상태가 기존 launch 인자를 지우지 않도록 시작 이벤트 전에는 비교만 한다.
     const previousLaunch = tab.launch
@@ -216,11 +258,15 @@ export class TerminalWorkspace {
     const launch = readCliLaunch(this.integrationDir(tab.id))
     if (!launch || JSON.stringify(tab.launch) === JSON.stringify(launch)) return
     if (launch.running && launch.runId !== tab.launch?.runId) {
+      // 셸에서 CLI를 켠 명령과, CLI에 실제 작업을 요청한 상태를 구분한다.
+      if (tab.activity === 'working') this.setActivity(tab, 'idle')
       delete tab.sessionId
       delete tab.codexPrefix
       this.titleBuffers.delete(tab.id)
+      this.codexStatusTabs.delete(tab.id)
     }
     if (!launch.running) {
+      if (tab.activity === 'working') this.setActivity(tab, 'idle')
       tab.kind = 'shell'
       delete tab.sessionId
       delete tab.codexPrefix
@@ -254,7 +300,30 @@ export class TerminalWorkspace {
 
   private snapshot(tab: SavedTab): TerminalSnapshot {
     const live = this.manager.snapshot(tab.id)
-    return { id: tab.id, kind: tab.kind, title: tab.title, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
+    return { id: tab.id, kind: tab.kind, title: tab.title, activity: tab.activity ?? 'idle', activityRevision: tab.activityRevision ?? 0, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
+  }
+
+  private setActivity(tab: SavedTab, activity: TerminalActivity): void {
+    if (this.stopped || (tab.activity ?? 'idle') === activity) return
+    tab.activity = activity
+    tab.activityRevision = (tab.activityRevision ?? 0) + 1
+    this.save()
+    this.events.onChange?.(this.snapshot(tab))
+  }
+
+  private finishActivity(tab: SavedTab): void {
+    if (tab.activity === 'working') this.setActivity(tab, 'completed')
+  }
+
+  markDone(id: string): void {
+    const tab = this.tabs.get(id)
+    if (tab) this.finishActivity(tab)
+  }
+
+  /** 화면이 실제로 표시한 완료만 확인한다. 늦은 확인 요청이 다음 작업을 지우지 않는다. */
+  acknowledge(id: string, revision: number): void {
+    const tab = this.tabs.get(id)
+    if (tab?.activity === 'completed' && tab.activityRevision === revision) this.setActivity(tab, 'idle')
   }
 
   /** 그룹 전환에는 탭 정보만 보낸다. 터미널 출력은 다시 전송하거나 재생하지 않는다. */
@@ -333,18 +402,41 @@ export class TerminalWorkspace {
     if (!tab) throw new Error('터미널을 찾을 수 없습니다')
     await this.bindCodex()
     this.manager.kill(id)
+    if (tab.activity === 'working') this.setActivity(tab, 'idle')
     delete tab.exited
     this.launch(tab, settings, true)
     this.activate(id)
     return this.snapshot(tab)
   }
 
-  write(id: string, data: string): void { this.manager.write(id, data) }
+  write(id: string, data: string): void {
+    const tab = this.tabs.get(id)
+    if (tab && this.manager.has(id)) {
+      if (data.includes('\x1b[200~')) this.shellPastes.add(id)
+      if (tab.kind === 'shell' && !this.shellPastes.has(id) && data.endsWith('\r') && !data.endsWith('\x1b\r')) this.setActivity(tab, 'working')
+      if (data.includes('\x1b[201~')) this.shellPastes.delete(id)
+      if (data === '\x03' && tab.activity === 'working') {
+        this.commands.delete(id)
+        this.setActivity(tab, 'idle')
+      }
+    }
+    this.manager.write(id, data)
+  }
   /** IN-F11: 작업 그래프가 터미널에 프롬프트·명령을 보낸다 */
   has(id: string): boolean { return this.manager.has(id) }
   whenReady(id: string): Promise<void> { return this.manager.whenReady(id) }
-  submit(id: string, text: string): void { this.manager.submit(id, text, this.tabs.get(id)?.kind) }
-  runCommand(id: string, command: string): void { this.manager.runCommand(id, command) }
+  submit(id: string, text: string): void {
+    const tab = this.tabs.get(id)
+    this.manager.submit(id, text, tab?.kind)
+    if (tab) this.setActivity(tab, 'working')
+  }
+  runCommand(id: string, command: string): void {
+    this.commands.add(id)
+    try { this.manager.runCommand(id, command) }
+    catch (error) { this.commands.delete(id); throw error }
+    const tab = this.tabs.get(id)
+    if (tab) this.setActivity(tab, 'working')
+  }
   resize(id: string, cols: number, rows: number): void {
     this.manager.resize(id, cols, rows)
     const tab = this.tabs.get(id)
@@ -368,6 +460,9 @@ export class TerminalWorkspace {
   kill(id: string): void {
     this.tabs.delete(id)
     this.titleBuffers.delete(id)
+    this.codexStatusTabs.delete(id)
+    this.shellPastes.delete(id)
+    this.commands.delete(id)
     this.manager.kill(id)
     this.reconcileActive()
     this.save()

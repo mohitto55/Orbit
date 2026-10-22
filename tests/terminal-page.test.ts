@@ -35,9 +35,18 @@ function reconcile() {
   if (!visible.some((tab) => tab.id === active)) active = visible.at(-1)?.id ?? null
 }
 
-async function mount() {
+async function mount(visible = true) {
   root = createRoot(host)
-  await act(async () => root.render(createElement(StrictMode, null, createElement(Terminals, { visible: true }))))
+  await render(visible)
+}
+async function render(visible: boolean) {
+  await act(async () => root.render(createElement(StrictMode, null, createElement(Terminals, { visible }))))
+}
+async function activity(id: string, value: 'idle' | 'working' | 'completed') {
+  const tab = saved.find((item) => item.id === id)!
+  tab.activity = value
+  tab.activityRevision = (tab.activityRevision ?? 0) + 1
+  await act(async () => listeners.get('term-info')?.({ ...tab }))
 }
 async function click(label: string) {
   const button = [...host.querySelectorAll('button')].find((element) => element.textContent?.trim() === label || element.getAttribute('aria-label') === label)
@@ -56,6 +65,8 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   host = document.createElement('div'); document.body.appendChild(host)
   saved = [{ ...first }, { ...second }]; active = first.id; calls = []; inputWrites = []; listeners = new Map(); writes.length = 0; keyHandlers.length = 0
   groups = []; activeGroup = 'all'; disposals.mockClear()
@@ -69,6 +80,15 @@ beforeEach(() => {
         return state
       }
       if (name === 'termActivate') { active = String(args[0]); return layout() }
+      if (name === 'termAcknowledge') {
+        const tab = saved.find((item) => item.id === args[0])!
+        if (tab.activity === 'completed' && tab.activityRevision === args[1]) {
+          tab.activity = 'idle'; tab.activityRevision = (tab.activityRevision ?? 0) + 1
+          listeners.get('term-info')?.({ ...tab })
+        }
+        return
+      }
+      if (['listPipelines', 'listTasks', 'listSkills', 'listSpecs', 'pipelineRuns'].includes(name)) return []
       if (name === 'termKill') { saved = saved.filter((tab) => tab.id !== args[0]); reconcile(); return layout() }
       if (name === 'termRename') { const tab = saved.find((tab) => tab.id === args[0])!; tab.title = String(args[1]); return { ...tab } }
       if (name === 'termSelectGroup') { activeGroup = String(args[0]); reconcile(); return layout() }
@@ -93,7 +113,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   await act(async () => root.unmount())
-  host.remove(); vi.unstubAllGlobals()
+  host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks()
 })
 
 it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원하고 겹치는 출력은 한 번만 그린다', async () => {
@@ -121,6 +141,52 @@ it('[TE-F01-AC4] 탭 이름 변경과 닫기를 저장하고 재마운트에도 
   await mount()
   expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
   expect(host.querySelector('.term-tab')!.textContent).toContain('확인용 셸')
+})
+
+it('[TE-F03-AC1] [TE-F03-AC2] 점은 작업 상태를 표시하고 사용자가 그 탭을 열어야 완료 알림이 해제된다', async () => {
+  await mount()
+  expect(host.querySelector('.term-tab.on .dot')?.getAttribute('aria-label')).toBe('기본 상태')
+  await activity(first.id, 'working')
+  expect(host.querySelector('.term-tab.on .dot')?.classList.contains('working')).toBe(true)
+  await activity(second.id, 'completed')
+  expect(host.querySelector('.dot.completed')?.getAttribute('title')).toBe('작업 완료 · 미확인')
+  expect(calls).not.toContain('termAcknowledge')
+  await click('확인용 셸')
+  expect(host.querySelector('.term-tab.on .dot')?.classList.contains('idle')).toBe(true)
+  expect(saved[0].activity).toBe('working')
+  expect(calls.filter((call) => call === 'termAcknowledge')).toHaveLength(1)
+})
+
+it('[TE-F03-AC2] 다른 페이지·작업 그래프·비활성 창에서는 완료 알림을 유지하고 실제 터미널 화면으로 돌아오면 해제한다', async () => {
+  await mount(false)
+  await activity(first.id, 'working')
+  await activity(first.id, 'completed')
+  expect(saved[0].activity).toBe('completed')
+  expect(calls).not.toContain('termAcknowledge')
+  await render(true)
+  expect(saved[0].activity).toBe('idle')
+  await click('작업 그래프')
+  await activity(first.id, 'working')
+  await activity(first.id, 'completed')
+  expect(saved[0].activity).toBe('completed')
+  await click('터미널')
+  expect(saved[0].activity).toBe('idle')
+  await act(async () => window.dispatchEvent(new Event('blur')))
+  await activity(first.id, 'working')
+  await activity(first.id, 'completed')
+  expect(saved[0].activity).toBe('completed')
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  expect(saved[0].activity).toBe('idle')
+})
+
+it('[TE-F03-AC2] 뒤늦은 화면 정보가 새 작업 상태를 덮어쓰지 않으며 보고 있는 세션의 완료는 확인 처리한다', async () => {
+  await mount()
+  await activity(first.id, 'working')
+  await act(async () => listeners.get('term-info')?.({ ...first, activity: 'completed', activityRevision: 0 }))
+  expect(host.querySelector('.term-tab.on .dot')?.classList.contains('working')).toBe(true)
+  expect(calls).not.toContain('termAcknowledge')
+  await activity(first.id, 'completed')
+  expect(host.querySelector('.term-tab.on .dot')?.classList.contains('idle')).toBe(true)
 })
 
 it('[DM-F02-AC4] 작업 그래프가 기존 터미널을 재사용하면 탭과 출력을 중복해서 만들지 않는다', async () => {
