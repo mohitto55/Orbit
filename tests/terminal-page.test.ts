@@ -122,8 +122,8 @@ it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원
   expect(host.querySelector('.term-tab.on')!.textContent).toContain('결제 작업')
   expect(host.textContent).not.toContain('저장된 대화')
   expect(calls.every((name) => name === 'termState' || name === 'termResize')).toBe(true)
-  expect(writes.filter((text) => text === '이전 출력')).toHaveLength(1)
-  expect(writes.filter((text) => text === '새 출력')).toHaveLength(1)
+  expect(writes.join('').match(/이전 출력/g)).toHaveLength(1)
+  expect(writes.join('').match(/새 출력/g)).toHaveLength(1)
   await act(async () => host.querySelectorAll<HTMLButtonElement>('.term-tab-select')[1].click())
   expect(active).toBe(second.id)
   await act(async () => root.unmount())
@@ -141,6 +141,46 @@ it('[TE-F01-AC4] 탭 이름 변경과 닫기를 저장하고 재마운트에도 
   await mount()
   expect(host.querySelectorAll('.term-tab')).toHaveLength(1)
   expect(host.querySelector('.term-tab')!.textContent).toContain('확인용 셸')
+})
+
+it('[TE-F01-AC11] 탭 100개의 화면은 선택할 때 만들고 숨긴 출력은 중복 없이 보관한다', async () => {
+  saved = Array.from({ length: 100 }, (_, index) => ({ ...second, id: `many-${index}`, title: `작업 ${index}`, output: `기록 ${index}\n` }))
+  active = saved[0].id
+  await mount(false)
+  expect(host.querySelectorAll('.term-tab')).toHaveLength(100)
+  expect(host.querySelectorAll('.term-host')).toHaveLength(0)
+  expect(writes).toEqual([])
+  await act(async () => {
+    listeners.get('term-data')?.({ id: saved[99].id, sequence: 1, data: '첫 번째 추가\n' })
+    listeners.get('term-data')?.({ id: saved[99].id, sequence: 1, data: '중복 출력\n' })
+    listeners.get('term-data')?.({ id: saved[99].id, sequence: 2, data: '두 번째 추가\n' })
+  })
+  await render(true)
+  expect(host.querySelectorAll('.term-host')).toHaveLength(1)
+  expect(writes).toEqual(['기록 0\n'])
+  await click('작업 99')
+  expect(host.querySelectorAll('.term-host')).toHaveLength(2)
+  expect(writes.at(-1)).toBe('기록 99\n첫 번째 추가\n두 번째 추가\n')
+  await click('작업 0')
+  expect(writes.filter((value) => value === '기록 0\n')).toHaveLength(1)
+  expect(calls).not.toContain('termCreate')
+  expect(calls).not.toContain('termRestart')
+})
+
+it('[TE-F01-AC11] 처음 보는 탭의 대량 출력은 최근 20만 자를 보관하고 종료 상태도 표시한다', async () => {
+  await mount()
+  expect(host.querySelectorAll('.term-host')).toHaveLength(1)
+  await act(async () => {
+    listeners.get('term-data')?.({ id: second.id, sequence: 1, data: '오래된 기록' + 'x'.repeat(200000) })
+    listeners.get('term-data')?.({ id: second.id, sequence: 2, data: '\n최근 기록' })
+    listeners.get('term-exit')?.({ id: second.id, code: 0 })
+  })
+  expect(writes.join('')).not.toContain('최근 기록')
+  await click('확인용 셸')
+  expect(writes.at(-1)?.length).toBeLessThanOrEqual(200000)
+  expect(writes.at(-1)).toContain('최근 기록')
+  expect(writes.at(-1)).toContain('프로세스 종료: 0')
+  expect(writes.at(-1)).not.toContain('오래된 기록')
 })
 
 it('[TE-F03-AC1] [TE-F03-AC2] 점은 작업 상태를 표시하고 사용자가 그 탭을 열어야 완료 알림이 해제된다', async () => {
@@ -232,7 +272,7 @@ it('[TE-F02-AC1] [TE-F02-AC2] [TE-F02-AC5] 그룹 생성·선택 이동·이름 
   expect(calls).not.toContain('termKill')
   expect(calls).not.toContain('termRestart')
   expect(calls).not.toContain('termCreate')
-  expect(writes.filter((text) => text === '이전 출력')).toHaveLength(1)
+  expect(writes.join('').match(/이전 출력/g)).toHaveLength(1)
 })
 
 it('[TE-F02-AC2] [TE-F02-AC3] [TE-F02-AC4] 선택한 그룹에서 새 탭을 열고 드래그로 옮기며 다시 마운트해도 그룹을 복원한다', async () => {

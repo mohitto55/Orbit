@@ -62,6 +62,7 @@ export default function App() {
 
   useEffect(() => {
     const offFiles = on('files-changed', () => setRefreshKey((k) => k + 1))
+    const offError = on('project-error', (message: string) => errorToast(new Error(message)))
     const offTests = on('test-done', () => setRefreshKey((k) => k + 1))
     const offCapture = on('quick-capture', () => setCapture(true))
     const onKey = (e: KeyboardEvent) => {
@@ -70,6 +71,7 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => {
       offFiles()
+      offError()
       offTests()
       offCapture()
       window.removeEventListener('keydown', onKey)

@@ -7,7 +7,7 @@ import type { Feature } from './spec'
 
 export const AC_ID_RE = /\[([A-Z][A-Z0-9]*-F\d+-AC\d+)\]/g
 const TEST_FILE_RE = /(\.(test|spec)\.[cm]?[jt]sx?$)|(_test\.(py|go)$)|(^test_.*\.py$)|(Tests?\.(java|kt|cs)$)/
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'release', '.orbit', '.girsktop', '.venv', 'venv', 'target'])
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', 'release', '.orbit', '.girsktop', '.venv', 'venv', 'target', 'cdk.out', '__pycache__', 'coverage'])
 
 export interface TestLink {
   acId: string
@@ -53,7 +53,8 @@ export type TestRunEvent =
 
 export type AcStatus = 'pass' | 'fail' | 'none' | 'notrun' | 'review'
 
-async function walk(dir: string, root: string, out: string[]): Promise<void> {
+async function walk(dir: string, out: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -61,20 +62,22 @@ async function walk(dir: string, root: string, out: string[]): Promise<void> {
     return
   }
   for (const e of entries) {
+    signal?.throwIfAborted()
     if (e.isDirectory()) {
-      if (!IGNORE_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(path.join(dir, e.name), root, out)
+      if (!IGNORE_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(path.join(dir, e.name), out, signal)
     } else if (TEST_FILE_RE.test(e.name)) {
       out.push(path.join(dir, e.name))
     }
   }
 }
 
-export async function scanTestLinks(projectDir: string): Promise<TestLink[]> {
+export async function scanTestLinks(projectDir: string, signal?: AbortSignal): Promise<TestLink[]> {
   const files: string[] = []
-  await walk(projectDir, projectDir, files)
+  await walk(projectDir, files, signal)
   const out: TestLink[] = []
   for (const f of files) {
-    const lines = (await fs.readFile(f, 'utf8')).split(/\r?\n/)
+    signal?.throwIfAborted()
+    const lines = (await fs.readFile(f, { encoding: 'utf8', signal })).split(/\r?\n/)
     lines.forEach((text, i) => {
       for (const m of text.matchAll(AC_ID_RE)) {
         out.push({ acId: m[1], file: path.relative(projectDir, f).replace(/\\/g, '/'), line: i + 1, text: text.trim() })

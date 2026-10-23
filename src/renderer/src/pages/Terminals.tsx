@@ -39,9 +39,11 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [view, setView] = useState<'terms' | 'graph'>('terms')
   const [foreground, setForeground] = useState(() => document.visibilityState !== 'hidden' && document.hasFocus())
   const area = useRef<HTMLDivElement>(null)
+  const tabList = useRef<HTMLDivElement>(null)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
   const pending = useRef(new Map<string, Output[]>()).current
+  const snapshots = useRef(new Map<string, TerminalSnapshot>()).current
   const busy = loading || opening || updating
   const shownTabs = tabs.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
   const selectedGroup = groups.find((g) => g.id === activeGroup)
@@ -79,7 +81,22 @@ export default function Terminals({ visible }: { visible: boolean }) {
       if (event.sequence <= x.sequence) return
       x.term.write(event.data)
       x.sequence = event.sequence
-    } else pending.set(event.id, [...(pending.get(event.id) ?? []), event].slice(-200))
+    } else {
+      const snapshot = snapshots.get(event.id)
+      if (snapshot) {
+        if (event.sequence <= snapshot.sequence) return
+        snapshot.output = (snapshot.output + event.data).slice(-200000)
+        snapshot.sequence = event.sequence
+      } else pending.set(event.id, [...(pending.get(event.id) ?? []), event].slice(-200))
+    }
+  }
+
+  function remember(snapshot: TerminalSnapshot) {
+    if (xterms.has(snapshot.id)) return
+    const previous = snapshots.get(snapshot.id)
+    if (!previous || previous.sequence <= snapshot.sequence) snapshots.set(snapshot.id, { ...snapshot })
+    for (const event of pending.get(snapshot.id) ?? []) write(event)
+    pending.delete(snapshot.id)
   }
 
   function attach(snapshot: TerminalSnapshot) {
@@ -87,6 +104,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     const { id, kind } = snapshot
     const host = document.createElement('div')
     host.className = 'term-host'
+    host.style.display = 'none'
     area.current.appendChild(host)
     const term = new Terminal({ fontFamily: "'Cascadia Code', Consolas, 'D2Coding', monospace", fontSize: 13, cursorBlink: true, theme: theme(), scrollback: 5000 })
     const fit = new FitAddon()
@@ -94,6 +112,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     term.open(host)
     xterms.set(id, { term, fit, host, sequence: snapshot.sequence, kind })
     term.write(snapshot.output)
+    snapshots.delete(id)
     for (const event of pending.get(id) ?? []) write(event)
     pending.delete(id)
     term.onData((data) => void api.termWrite(id, data).catch(errorToast))
@@ -121,22 +140,27 @@ export default function Terminals({ visible }: { visible: boolean }) {
       infos.set(info.id, mergeActivity(info, infos.get(info.id)))
       const x = xterms.get(info.id)
       if (x) x.kind = info.kind
+      const snapshot = snapshots.get(info.id)
+      if (snapshot) snapshot.kind = info.kind
       setTabs((all) => all.map((tab) => tab.id === info.id ? mergeActivity({ ...tab, ...info }, tab) : tab))
     })
     const offExit = on('term-exit', ({ id, code }: { id: string; code: number }) => {
       exits.set(id, code)
       setTabs((all) => all.map((tab) => tab.id === id ? { ...tab, exited: code } : tab))
-      xterms.get(id)?.term.write(`\r\n\x1b[90m[프로세스 종료: ${code}]\x1b[0m\r\n`)
+      const message = `\r\n\x1b[90m[프로세스 종료: ${code}]\x1b[0m\r\n`
+      xterms.get(id)?.term.write(message)
+      const snapshot = snapshots.get(id)
+      if (snapshot) snapshot.output = (snapshot.output + message).slice(-200000)
     })
     // IN-F11: 작업 그래프가 연 터미널도 탭으로 붙인다
     const offCreated = on('term-created', (snapshot: TerminalSnapshot) => {
-      attach(snapshot)
+      remember(snapshot)
       setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, mergeActivity(snapshot, infos.get(snapshot.id))])
       setActive((a) => a ?? snapshot.id)
     })
     void api.termState().then((state) => {
       if (!alive) return
-      for (const tab of state.tabs) attach(tab)
+      for (const tab of state.tabs) remember(tab)
       setTabs(state.tabs.map((tab) => {
         const updated = mergeActivity(tab, infos.get(tab.id))
         return exits.has(tab.id) ? { ...updated, exited: exits.get(tab.id) } : updated
@@ -154,7 +178,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
       offData(); offExit(); offError(); offInfo(); offCreated()
       query.removeEventListener('change', onTheme)
       for (const x of xterms.values()) { x.term.dispose(); x.host.remove() }
-      xterms.clear(); pending.clear()
+      xterms.clear(); pending.clear(); snapshots.clear()
     }
   }, [])
 
@@ -186,12 +210,18 @@ export default function Terminals({ visible }: { visible: boolean }) {
   }
 
   useEffect(() => {
+    // CLI는 모두 복원하지만 터미널 화면은 처음 보는 탭만 만든다.
+    if (active && visible && view === 'terms') {
+      const snapshot = snapshots.get(active)
+      if (snapshot) attach(snapshot)
+    }
     for (const [id, x] of xterms) x.host.style.display = id === active ? 'block' : 'none'
+    if (visible && view === 'terms') tabList.current?.querySelector('.term-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     if (active && visible && !editing && view === 'terms') {
       const frame = requestAnimationFrame(() => { fitTab(active); xterms.get(active)?.term.focus() })
       return () => cancelAnimationFrame(frame)
     }
-  }, [active, visible, tabs.length, editing, activeGroup, view])
+  }, [active, visible, tabs.length, editing, activeGroup, view, opening])
 
   useEffect(() => {
     if (!area.current) return
@@ -207,7 +237,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
     try {
       const snapshot = await api.termCreate(kind)
       if (!mounted.current) return
-      attach(snapshot)
+      remember(snapshot)
       setTabs((all) => [...all, snapshot])
       setActive(snapshot.id)
     } catch (e) { errorToast(e) }
@@ -222,7 +252,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
       if (!mounted.current) return
       const x = xterms.get(id)
       x?.term.dispose(); x?.host.remove()
-      xterms.delete(id); pending.delete(id)
+      xterms.delete(id); pending.delete(id); snapshots.delete(id)
       applyLayout(layout)
     } catch (e) { errorToast(e) }
     finally { if (mounted.current) setUpdating(false) }
@@ -251,7 +281,9 @@ export default function Terminals({ visible }: { visible: boolean }) {
       if (!mounted.current) return
       const old = xterms.get(id)
       old?.term.dispose(); old?.host.remove(); xterms.delete(id)
-      attach(snapshot)
+      snapshots.delete(id); pending.delete(id)
+      remember(snapshot)
+      if (visible && view === 'terms') attach(snapshot)
       setTabs((all) => all.map((tab) => tab.id === id ? mergeActivity(snapshot, tab) : tab))
       setActive(id)
     } catch (e) { errorToast(e) }
@@ -305,7 +337,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
         </label>}
       </div>
       {shownTabs.length > 0 && (
-        <div className="term-tabs" role="tablist" aria-label="터미널 탭">
+        <div ref={tabList} className="term-tabs" role="tablist" aria-label="터미널 탭">
           {shownTabs.map((tab) => (
             <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}`} draggable={!busy}
               onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id); event.dataTransfer.effectAllowed = 'move' }}>

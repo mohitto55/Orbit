@@ -155,6 +155,7 @@ it('[TE-F03-AC3] 재시작하면 미확인 완료를 유지하고 중단된 작�
   const working = workspace.create('shell', settings)
   workspace.runCommand(working.id, 'sleep 10')
   workspace.suspend()
+  vi.useRealTimers()
   const restored = create()
   await restored.restore(settings)
   expect(restored.state().tabs.find((tab) => tab.id === completed.id)?.activity).toBe('completed')

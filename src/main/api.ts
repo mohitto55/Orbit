@@ -41,6 +41,7 @@ export function createApi(deps: ApiDeps) {
   let testSession: { projectDir: string; state: vr.TestRunState } | null = null
   let terminals: TerminalWorkspace | null = null
   let loadingTerminals: Promise<TerminalWorkspace> | null = null
+  let recovery: AbortController | null = null
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
@@ -123,6 +124,7 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function opened(c: ws.Ctx) {
+    recovery?.abort()
     if (ctx?.projectDir !== c.projectDir) stopTerminals()
     ctx = c
     await remember(c.projectDir)
@@ -138,10 +140,20 @@ export function createApi(deps: ApiDeps) {
   }
 
   /** 앱이 꺼져 있던 동안 생긴 큰 변경을 다시 처리한다. */
-  async function replayChanges() {
-    const c = need()
-    const links = await vr.scanTestLinks(c.projectDir)
-    for (const ch of await listChanges(c)) if (ch.size === 'major') await ir.openReview(c, ch, links)
+  async function replayChanges(c: ws.Ctx, signal: AbortSignal) {
+    const [changes, reviews] = await Promise.all([listChanges(c), ir.listReviews(c)])
+    // 검토 파일이 만들어진 변경은 완료됐다. 일부 항목에만 합쳐진 변경은 중단된 복원일 수 있다.
+    const reviewed = new Set(reviews.map((review) => review.trigger))
+    const pending = changes.filter((change) => change.size === 'major' && !reviewed.has(change.id))
+    if (signal.aborted || !pending.length) return false
+    const links = pending.some((change) => change.target.startsWith('spec-')) ? await vr.scanTestLinks(c.projectDir, signal) : []
+    let changed = false
+    for (const change of pending) {
+      if (signal.aborted) break
+      await ir.openReview(c, change, links)
+      changed = true
+    }
+    return changed
   }
 
   return {
@@ -156,14 +168,27 @@ export function createApi(deps: ApiDeps) {
       return opened(await ws.createProject(dir, name))
     },
     async openProject(dir: string) {
-      const r = await opened(await ws.openProject(dir))
-      await replayChanges()
+      const c = await ws.openProject(dir)
+      const r = await opened(c)
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const controller = new AbortController()
+      recovery = controller
+      // 프로젝트 화면부터 연다. 저장소 전체 검사는 열기 응답을 기다리게 하지 않는다.
+      setTimeout(() => {
+        if (controller.signal.aborted) return
+        void replayChanges(c, controller.signal).then((changed) => {
+          if (changed && ctx === c && !controller.signal.aborted) deps.send('files-changed', null)
+        }).catch((error: unknown) => {
+          if (ctx === c && !controller.signal.aborted) deps.send('project-error', `변경 검토 복원 실패: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }, 0)
       return r
     },
     async currentProject() {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
     closeProject() {
+      recovery?.abort()
       stopTerminals()
       ctx = null
     },
@@ -512,6 +537,7 @@ export function createApi(deps: ApiDeps) {
       return pipes.markDone(runId, nodeId)
     },
     killAllTerminals() {
+      recovery?.abort()
       terminals?.suspend()
     }
   }

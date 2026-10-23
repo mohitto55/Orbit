@@ -15,7 +15,7 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE).each([
   const cwd = await fs.realpath(process.cwd())
   const codexHome = path.join(root, 'codex')
   await fs.mkdir(codexHome)
-  await fs.writeFile(path.join(codexHome, 'config.toml'), `model = "orbit-probe"\nmodel_provider = "orbit_probe"\n[model_providers.orbit_probe]\nname = "OrbitProbe"\nbase_url = "http://127.0.0.1:1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nplugins = false\n[projects.${JSON.stringify(process.platform === 'win32' ? cwd.toLowerCase() : cwd)}]\ntrust_level = "trusted"\n`)
+  await fs.writeFile(path.join(codexHome, 'config.toml'), `check_for_update_on_startup = false\nmodel = "orbit-probe"\nmodel_provider = "orbit_probe"\n[model_providers.orbit_probe]\nname = "OrbitProbe"\nbase_url = "http://127.0.0.1:1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nplugins = false\n[projects.${JSON.stringify(process.platform === 'win32' ? cwd.toLowerCase() : cwd)}]\ntrust_level = "trusted"\n`)
   vi.stubEnv('CODEX_HOME', codexHome)
   let output = ''
   let workspace: TerminalWorkspace
@@ -88,7 +88,7 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE)('[TE-F01-AC3] [TE-F01-AC8] [TE-F01-AC
   const cwd = await fs.realpath(process.cwd())
   const codexHome = path.join(root, 'codex')
   await fs.mkdir(codexHome)
-  await fs.writeFile(path.join(codexHome, 'config.toml'), `model = "orbit-probe"\nmodel_provider = "orbit_probe"\n[model_providers.orbit_probe]\nname = "OrbitProbe"\nbase_url = "http://127.0.0.1:1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nplugins = false\n[projects.${JSON.stringify(process.platform === 'win32' ? cwd.toLowerCase() : cwd)}]\ntrust_level = "trusted"\n`)
+  await fs.writeFile(path.join(codexHome, 'config.toml'), `check_for_update_on_startup = false\nmodel = "orbit-probe"\nmodel_provider = "orbit_probe"\n[model_providers.orbit_probe]\nname = "OrbitProbe"\nbase_url = "http://127.0.0.1:1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nplugins = false\n[projects.${JSON.stringify(process.platform === 'win32' ? cwd.toLowerCase() : cwd)}]\ntrust_level = "trusted"\n`)
   vi.stubEnv('CODEX_HOME', codexHome)
   const settings = { name: 'native smoke', driftIntervalDays: 7, reminderTime: '09:00' }
   const file = path.join(root, 'workspace.json')

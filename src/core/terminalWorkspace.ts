@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, promises as fs, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
@@ -68,6 +68,8 @@ export class TerminalWorkspace {
   private manager: TerminalManager
   private timer: NodeJS.Timeout | null = null
   private stopped = false
+  private restoring = false
+  private restoreLaunches = new Map<string, CliLaunch | undefined>()
   private binding: Promise<void> | null = null
   private nextBind = 0
   private monitor: NodeJS.Timeout
@@ -137,6 +139,7 @@ export class TerminalWorkspace {
       }
     })
     this.monitor = setInterval(() => {
+      if (this.restoring) return
       try {
         for (const tab of this.tabs.values()) this.syncLaunch(tab)
         // IN-F10: 훅이 남긴 작업·준비 신호
@@ -161,33 +164,42 @@ export class TerminalWorkspace {
   }
 
   async restore(settings: ProjectSettings): Promise<void> {
-    if (!existsSync(this.file)) return
-    if (statSync(this.file).size > 32 * 1024 * 1024) throw new Error('터미널 저장 파일이 너무 큽니다')
-    const saved = JSON.parse(readFileSync(this.file, 'utf8')) as { tabs?: SavedTab[]; active?: string; groups?: TerminalGroup[]; activeGroup?: string }
-    if (!Array.isArray(saved.tabs)) throw new Error('터미널 저장 파일을 읽을 수 없습니다')
-    // 그룹이 없는 구버전 저장 파일은 모든 탭을 미분류로 복원한다.
-    if (saved.groups !== undefined) {
-      if (!Array.isArray(saved.groups) || saved.groups.some((g) => !g || !/^group-[a-f0-9-]{36}$/.test(g.id) || typeof g.title !== 'string' || !g.title.trim() || g.title.length > 100) || new Set(saved.groups.map((g) => g.id)).size !== saved.groups.length) throw new Error('터미널 그룹 저장 정보가 올바르지 않습니다')
-      this.groups = saved.groups.map((g) => ({ id: g.id, title: g.title.trim() }))
-    }
-    for (const tab of saved.tabs) {
-      if (!/^term-[a-f0-9-]{36}$/.test(tab.id) || !['shell', 'claude', 'codex'].includes(tab.kind) || typeof tab.title !== 'string') throw new Error('터미널 저장 정보가 올바르지 않습니다')
-      if (tab.sessionId) validateSessionId(tab.sessionId)
-      this.tabs.set(tab.id, { ...tab, activity: tab.activity === 'completed' ? 'completed' : 'idle', activityRevision: Number.isSafeInteger(tab.activityRevision) && tab.activityRevision! >= 0 ? tab.activityRevision : 0, groupId: this.groups.some((g) => g.id === tab.groupId) ? tab.groupId : undefined, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
-    }
-    this.activeGroup = saved.activeGroup === 'ungrouped' || this.groups.some((g) => g.id === saved.activeGroup) ? saved.activeGroup! : 'all'
-    this.active = this.tabs.has(saved.active ?? '') ? saved.active! : [...this.tabs.keys()].at(-1) ?? null
-    this.reconcileActive()
-    for (const tab of this.tabs.values()) this.syncLaunch(tab)
-    await this.bindCodex()
-    for (const tab of this.tabs.values()) {
+    this.restoring = true
+    try {
+      let raw: string
+      try { raw = await fs.readFile(this.file, 'utf8') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
       if (this.stopped) return
-      if (tab.exited !== undefined) continue
-      try { this.launch(tab, settings, true) } catch (e) {
-        tab.exited = -1
-        tab.output += `\r\n[세션 복원 실패: ${e instanceof Error ? e.message : String(e)}]\r\n`
+      const saved = JSON.parse(raw) as { tabs?: SavedTab[]; active?: string; groups?: TerminalGroup[]; activeGroup?: string }
+      if (!Array.isArray(saved.tabs)) throw new Error('터미널 저장 파일을 읽을 수 없습니다')
+      // 그룹이 없는 구버전 저장 파일은 모든 탭을 미분류로 복원한다.
+      if (saved.groups !== undefined) {
+        if (!Array.isArray(saved.groups) || saved.groups.some((g) => !g || !/^group-[a-f0-9-]{36}$/.test(g.id) || typeof g.title !== 'string' || !g.title.trim() || g.title.length > 100) || new Set(saved.groups.map((g) => g.id)).size !== saved.groups.length) throw new Error('터미널 그룹 저장 정보가 올바르지 않습니다')
+        this.groups = saved.groups.map((g) => ({ id: g.id, title: g.title.trim() }))
       }
-    }
+      for (const tab of saved.tabs) {
+        if (!/^term-[a-f0-9-]{36}$/.test(tab.id) || !['shell', 'claude', 'codex'].includes(tab.kind) || typeof tab.title !== 'string') throw new Error('터미널 저장 정보가 올바르지 않습니다')
+        if (tab.sessionId) validateSessionId(tab.sessionId)
+        this.tabs.set(tab.id, { ...tab, activity: tab.activity === 'completed' ? 'completed' : 'idle', activityRevision: Number.isSafeInteger(tab.activityRevision) && tab.activityRevision! >= 0 ? tab.activityRevision : 0, groupId: this.groups.some((g) => g.id === tab.groupId) ? tab.groupId : undefined, output: typeof tab.output === 'string' ? tab.output.slice(-200000) : '' })
+      }
+      this.activeGroup = saved.activeGroup === 'ungrouped' || this.groups.some((g) => g.id === saved.activeGroup) ? saved.activeGroup! : 'all'
+      this.active = this.tabs.has(saved.active ?? '') ? saved.active! : [...this.tabs.keys()].at(-1) ?? null
+      this.reconcileActive()
+      for (const tab of this.tabs.values()) this.syncLaunch(tab)
+      await this.bindCodex()
+      // 하나씩 복원하며 이벤트 루프를 돌려 프로젝트 화면과 닫기 요청이 응답하게 한다.
+      const ordered = [...this.tabs.values()].sort((a, b) => Number(b.id === this.active) - Number(a.id === this.active))
+      for (const tab of ordered) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        if (this.stopped) return
+        if (tab.exited !== undefined) continue
+        this.restoreLaunches.set(tab.id, readCliLaunch(this.integrationDir(tab.id)))
+        try { this.launch(tab, settings, true) } catch (e) {
+          tab.exited = -1
+          tab.output += `\r\n[세션 복원 실패: ${e instanceof Error ? e.message : String(e)}]\r\n`
+        }
+      }
+    } finally { this.restoring = false; this.restoreLaunches.clear() }
     this.save()
   }
 
@@ -276,7 +288,7 @@ export class TerminalWorkspace {
     }
     tab.launch = launch
     this.save()
-    this.events.onChange?.(this.snapshot(tab))
+    this.events.onChange?.(this.info(tab))
   }
 
   private bindCodex(force = false): Promise<void> {
@@ -291,7 +303,7 @@ export class TerminalWorkspace {
         if (tab.sessionId && (!prefix || tab.sessionId.startsWith(prefix))) continue
         const id = await findCodexSession(tab.launch?.cwd ?? this.ctx.projectDir, tab.id, tab.launch?.home, tab.createdAt, prefix)
         if (id && id !== tab.sessionId && prefix === tab.codexPrefix && !this.stopped && this.tabs.has(tab.id)) {
-          tab.sessionId = id; this.save(); this.events.onChange?.(this.snapshot(tab))
+          tab.sessionId = id; this.save(); this.events.onChange?.(this.info(tab))
         }
       }
     })().finally(() => { this.binding = null })
@@ -303,12 +315,17 @@ export class TerminalWorkspace {
     return { id: tab.id, kind: tab.kind, title: tab.title, activity: tab.activity ?? 'idle', activityRevision: tab.activityRevision ?? 0, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
   }
 
+  private info(tab: SavedTab): TerminalInfo {
+    const { output, sequence, ...info } = this.snapshot(tab)
+    return info
+  }
+
   private setActivity(tab: SavedTab, activity: TerminalActivity): void {
     if (this.stopped || (tab.activity ?? 'idle') === activity) return
     tab.activity = activity
     tab.activityRevision = (tab.activityRevision ?? 0) + 1
     this.save()
-    this.events.onChange?.(this.snapshot(tab))
+    this.events.onChange?.(this.info(tab))
   }
 
   private finishActivity(tab: SavedTab): void {
@@ -329,10 +346,7 @@ export class TerminalWorkspace {
   /** 그룹 전환에는 탭 정보만 보낸다. 터미널 출력은 다시 전송하거나 재생하지 않는다. */
   layout(): TerminalLayout {
     return {
-      tabs: [...this.tabs.values()].map((tab) => {
-        const { output, sequence, ...info } = this.snapshot(tab)
-        return info
-      }),
+      tabs: [...this.tabs.values()].map((tab) => this.info(tab)),
       groups: this.groups.map((g) => ({ ...g })), active: this.active, activeGroup: this.activeGroup
     }
   }
@@ -468,18 +482,30 @@ export class TerminalWorkspace {
     this.save()
   }
   suspend(persist = true): void {
+    if (this.stopped) return
     this.stopped = true
     clearInterval(this.monitor)
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     try {
       if (persist) {
-        for (const tab of this.tabs.values()) { this.syncLaunch(tab); freezeTerminalIntegration(this.integrationDir(tab.id)) }
-        this.save()
+        if (this.restoring) {
+          // 중단된 재접속의 새 generation/종료 훅이 원래 CLI 세션을 셸로 바꾸지 않게 한다.
+          for (const [id, launch] of this.restoreLaunches) {
+            const state = path.join(this.integrationDir(id), 'state.json')
+            if (launch) writeFileSync(state, JSON.stringify({ ...launch, frozen: true }))
+            else rmSync(state, { force: true })
+          }
+        } else {
+          for (const tab of this.tabs.values()) { this.syncLaunch(tab); freezeTerminalIntegration(this.integrationDir(tab.id)) }
+          this.save()
+        }
       }
     } finally { this.manager.killAll() }
   }
   private save(): void {
+    // 복원 중 탭마다 전체 출력 파일을 다시 쓰지 않는다. 중단돼도 원본은 보존한다.
+    if (this.restoring) return
     mkdirSync(path.dirname(this.file), { recursive: true })
     const pending = `${this.file}.tmp`
     writeFileSync(pending, JSON.stringify({ tabs: [...this.tabs.values()], groups: this.groups, active: this.active, activeGroup: this.activeGroup }))

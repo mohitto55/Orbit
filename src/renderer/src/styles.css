@@ -429,7 +429,7 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 .term-group-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 6px 2px; }
 .term-group-tools label { display: inline-flex; align-items: center; gap: 8px; }
 .term-group-tools select { width: 170px; }
-.term-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 6px; }
+.term-tabs { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 2px; padding: 0 6px; max-height: 112px; overflow-y: auto; }
 .term-tab { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 5px 8px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 13px; }
 .term-tab[draggable='true'] { cursor: grab; }
 .term-tab .term-tab-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 4px; color: inherit; font: inherit; border: 0; background: none; }

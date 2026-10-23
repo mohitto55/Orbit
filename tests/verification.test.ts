@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import path from 'path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { acStatuses, invalidLinks, loadLastRun, parseJUnit, saveRun, scanTestLinks, summarize } from '../src/core/verification'
 import type { Feature } from '../src/core/spec'
 import { listMd, readMd } from '../src/core/md'
@@ -47,6 +47,25 @@ describe('Verification', () => {
   it('[VR-F01-AC3] 존재하지 않는 AC ID를 가리키는 테스트는 잘못된 연결이다', () => {
     const bad = invalidLinks([{ acId: 'PAY-F02-AC9', file: 'a', line: 1, text: '' }], features)
     expect(bad).toHaveLength(1)
+  })
+
+  it('[WS-F02-AC7] 빌드 산출물·캐시에 복사된 테스트를 탐색하지 않고 취소 요청을 처리한다', async () => {
+    const dir = await tempDir()
+    await fs.mkdir(path.join(dir, 'tests'))
+    await fs.writeFile(path.join(dir, 'tests', 'actual.test.ts'), tag('PAY-F02-AC1'))
+    for (const ignored of ['cdk.out', '__pycache__', 'coverage']) {
+      const asset = path.join(dir, ignored, 'nested')
+      await fs.mkdir(asset, { recursive: true })
+      await fs.writeFile(path.join(asset, 'copied.test.ts'), tag('PAY-F02-AC9'))
+    }
+    const readdir = vi.spyOn(fs, 'readdir')
+    try {
+      expect((await scanTestLinks(dir)).map((link) => link.acId)).toEqual(['PAY-F02-AC1'])
+      expect(readdir.mock.calls.map(([directory]) => String(directory))).toEqual([dir, path.join(dir, 'tests')])
+      const controller = new AbortController()
+      controller.abort()
+      await expect(scanTestLinks(dir, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    } finally { readdir.mockRestore() }
   })
 
   it('[VR-F03-AC1] JUnit XML을 읽어 테스트별 통과/실패/건너뜀을 기록한다', () => {
