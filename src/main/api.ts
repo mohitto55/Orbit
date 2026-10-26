@@ -22,6 +22,7 @@ import { exists, writeMd } from '../core/md'
 import type { TerminalKind } from '../core/terminal'
 import { TerminalWorkspace, type TerminalOrderPosition } from '../core/terminalWorkspace'
 import { readSessionTitle } from '../core/sessionTitles'
+import { agentModels } from '../core/agentModels'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
 import { PipelineRunner, expandPipeline, pipelineProblems, type PipeEdge, type PipeNode } from '../core/pipeline'
@@ -76,13 +77,13 @@ export function createApi(deps: ApiDeps) {
 
   /** IN-F11: 터미널 작업 그래프를 실행한다. 노드가 끝나면 이어진 다음 노드를 연다. */
   const pipes = new PipelineRunner({
-    createTerminal: async (kind, label, session) => {
+    createTerminal: async (kind, label, session, model) => {
       const c = need()
       const settings = await ws.readSettings(c)
       const workspace = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       const title = `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`.slice(0, 100)
-      const { reused, ...info } = await workspace.open(kind, settings, { title, resume: session })
+      const { reused, ...info } = await workspace.open(kind, settings, { title, resume: session, model })
       deps.send('term-created', info)
       return { ...info, reused }
     },
@@ -90,7 +91,12 @@ export function createApi(deps: ApiDeps) {
     getTerminal: (id) => terminals?.get(id),
     whenReady: async (id) => (await terms()).whenReady(id),
     submit: (id, text) => terminals?.submit(id, text),
-    beginOutputCapture: (id) => terminals?.beginOutputCapture(id),
+    setModel: async (id, model) => {
+      const c = need(), settings = await ws.readSettings(c), workspace = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      await workspace.setModel(id, model, settings)
+    },
+    beginOutputCapture: (id, prompt) => terminals?.beginOutputCapture(id, prompt),
     readAgentOutput: (id) => terminals?.readAgentOutput(id),
     endOutputCapture: (id) => terminals?.endOutputCapture(id),
     runCommand: (id, command) => terminals?.runCommand(id, command),
@@ -507,6 +513,7 @@ export function createApi(deps: ApiDeps) {
     listPipelines: () => pl.listPipelines(need()),
     savePipeline: (input: { id?: string; title: string; template?: boolean; nodes: PipeNode[]; edges: PipeEdge[] }) => pl.savePipeline(need(), input),
     deletePipeline: (id: string) => pl.deletePipeline(need(), id),
+    agentModels,
     /** DM-F02-AC4: 이 프로젝트에서 로컬에 저장된 Claude Code·Codex 세션 (최근 것부터). id는 --resume에 넘기는 세션 id */
     async agentSessions(kind: 'claude' | 'codex') {
       const dir = need().projectDir

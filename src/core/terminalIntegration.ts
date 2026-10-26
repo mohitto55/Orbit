@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import type { TerminalKind } from './terminal'
 
 export interface CliLaunch {
@@ -28,13 +28,35 @@ function save(state) {
   fs.writeFileSync(pending, JSON.stringify(state));
   fs.renameSync(pending, file);
 }
-function complete(event) {
-  if (!read()) return;
-  const dir = path.dirname(file);
+function promptHash(text) {
+  return require('node:crypto').createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex');
+}
+function captureRequest() {
   try {
-    const capture = JSON.parse(fs.readFileSync(path.join(dir, 'capture.json'), 'utf8'));
+    const capture = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'capture.json'), 'utf8'));
+    return capture.generation === generation ? capture : null;
+  } catch { return null; }
+}
+function complete(event) {
+  const state = read();
+  if (!state || !state.running) return;
+  const dir = path.dirname(file);
+  const codex = state.kind === 'codex';
+  if (codex ? event.type !== 'agent-turn-complete' : event.hook_event_name !== 'Stop' || event.agent_id) return;
+  const sessionId = codex ? event['thread-id'] : event.session_id;
+  const capture = captureRequest();
+  const expectedSession = capture?.sessionId || state.sessionId;
+  if (expectedSession && sessionId !== expectedSession) return;
+  if (capture?.sessionPrefix && (typeof sessionId !== 'string' || !sessionId.startsWith(capture.sessionPrefix))) return;
+  // 같은 notify를 물려받은 제목 생성·하위 에이전트·이전 요청의 응답은 수집하지 않는다.
+  if (capture) {
+    if (codex) {
+      if (!Array.isArray(event['input-messages']) || !event['input-messages'].some(text => typeof text === 'string' && promptHash(text) === capture.promptHash)) return;
+    } else if (!capture.submitted || sessionId !== capture.submitted) return;
+  }
+  try {
     const output = event.last_assistant_message ?? event['last-assistant-message'];
-    if (capture.generation === generation && typeof output === 'string' && output.length <= 4 * 1024 * 1024) {
+    if (capture && typeof output === 'string' && output.length <= 4 * 1024 * 1024) {
       const target = path.join(dir, 'agent-output.json');
       const pending = target + '.' + process.pid + '.tmp';
       fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, output }));
@@ -55,7 +77,7 @@ if (action === 'start') {
 } else if (action === 'stop') {
   const state = read();
   if (state) save({ ...state, running: false });
-} else if (action === 'hook' || action === 'done' || action === 'notify') {
+} else if (action === 'hook' || action === 'prompt' || action === 'done' || action === 'notify') {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { if (input.length < 8 * 1024 * 1024) input += chunk; });
@@ -63,6 +85,14 @@ if (action === 'start') {
     try {
       const event = JSON.parse(input.replace(/^\uFEFF/, ''));
       if (action === 'done' || (action === 'notify' && event.type === 'agent-turn-complete')) { complete(event); return; }
+      if (action === 'prompt') {
+        const state = read(), capture = captureRequest();
+        if (state?.kind !== 'claude' || !state.running || event.hook_event_name !== 'UserPromptSubmit' || event.agent_id) return;
+        if (capture && typeof event.prompt === 'string' && promptHash(event.prompt) === capture.promptHash && (!capture.sessionId || capture.sessionId === event.session_id)) {
+          fs.writeFileSync(path.join(path.dirname(file), 'capture.json'), JSON.stringify({ ...capture, submitted: event.session_id }));
+        }
+        return;
+      }
       if (action !== 'hook') return;
       const state = read();
       if (state?.kind === 'claude' && state.running && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(event.session_id)) {
@@ -75,6 +105,12 @@ if (action === 'start') {
 
 export function shellQuote(value: string, platform = process.platform): string {
   return platform === 'win32' ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`
+}
+
+/** 노드에 지정한 모델은 사용자 실행 명령의 --model/-m보다 우선한다. */
+export function withTerminalModel(command: string, model: string): string {
+  const withoutModel = command.replace(/(^|\s)(?:--model|-m)(?:\s+|=)(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s]+)/g, '$1').trimEnd()
+  return `${withoutModel} --model ${shellQuote(model)}`
 }
 
 const powershellInit = String.raw`
@@ -216,11 +252,12 @@ export type AgentSignal = 'ready' | 'working' | 'done' | 'idle'
 const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle']
 
 /** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
-export function beginOutputCapture(dir: string): void {
+export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string): void {
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
   endOutputCapture(dir)
   rmSync(signalFile(dir, 'done'), { force: true })
-  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId: randomUUID() }))
+  const promptHash = createHash('sha256').update(prompt.replace(/\r\n?/g, '\n').trim()).digest('hex')
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId: randomUUID(), promptHash, sessionId, sessionPrefix }))
 }
 export function readAgentOutput(dir: string): string | undefined {
   try {
@@ -274,7 +311,7 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   endOutputCapture(dir)
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
-  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working')] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
   const notify = path.join(dir, `notify.${win ? 'ps1' : 'sh'}`)
@@ -322,7 +359,8 @@ export function resumeOptions(args: string[], command = ''): string[] {
   for (let i = 0; i < args.length; i++) {
     const [name] = args[i].split('=')
     if (!booleans.has(name) && !valued.has(name)) continue
-    if (new RegExp(`(?:^|\\s|['"])${name}(?:[=\\s'"]|$)`).test(command)) {
+    const aliases = name === '--model' || name === '-m' ? '(?:--model|-m)' : name
+    if (new RegExp(`(?:^|\\s|['"])${aliases}(?:[=\\s'"]|$)`).test(command)) {
       if (valued.has(name) && !args[i].includes('=')) i++
       continue
     }

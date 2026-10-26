@@ -211,7 +211,7 @@ describe('구조화된 에이전트 실행', () => {
     await vi.waitFor(() => expect(s.sent).toHaveLength(1))
     expect(s.sent[0].text).toContain('참여자를 정리하세요')
     expect(s.sent[0].text).toContain(fields[0].description)
-    expect(s.begin).toHaveBeenCalledWith('t1')
+    expect(s.begin).toHaveBeenCalledWith('t1', s.sent[0].text)
     s.respond(JSON.stringify(result))
     s.runner.agentDone('t1') // 응답이 1.5초 안에 끝나도 완료 신호를 놓치지 않는다.
     await vi.waitFor(() => expect(s.sent).toHaveLength(2))

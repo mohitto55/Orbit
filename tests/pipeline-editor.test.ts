@@ -39,6 +39,7 @@ beforeEach(() => {
       if (name === 'listPipelines') return saved
       if (name === 'pipelineRuns') return runs
       if (['listTasks', 'listSkills', 'listSpecs', 'agentSessions'].includes(name)) return []
+      if (name === 'agentModels') return [{ id: 'model-a', name: 'Model A' }]
       if (name === 'savePipeline') {
         const input = args[0] as Omit<Pipeline, 'file' | 'id'> & { id?: string }
         const result: Pipeline = { ...structuredClone(input), id: input.id ?? 'new-function', file: '' }
@@ -73,6 +74,23 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC22] %s 터미널 액션의 모델을 고르거나 직접 입력하고 다시 열어도 유지한다', async (kind) => {
+    saved[0].nodes = [node('tab', 'terminal', { ref: 'live' }), node('ai', kind, { text: '작업' })]
+    saved[0].edges = [{ from: 'tab', to: 'ai', toPort: A.terminal }]
+    await mount([{ id: 'live', kind, title: '내 세션', pid: 1 }]); await select('ai')
+    expect(host.querySelector('[aria-label="터미널 실행 방식"]')?.getAttribute('disabled')).not.toBeNull()
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Model"]')?.disabled).toBe(false)
+    expect(host.querySelector('datalist option')?.getAttribute('value')).toBe('model-a')
+    await change(host.querySelector<HTMLInputElement>('[aria-label="Model"]')!, 'custom-model')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550); root.unmount() })
+    root = createRoot(host); await mount(); await select('ai')
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Model"]')?.value).toBe('custom-model')
+    expect(saved[0].nodes.find((n) => n.id === 'ai')?.model).toBe('custom-model')
+    await change(host.querySelector<HTMLInputElement>('[aria-label="Model"]')!, '')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes.find((n) => n.id === 'ai')?.model).toBeUndefined()
+  })
+
   it('[DM-F02-AC18] Object Properties가 비면 자유형 안내를 보이고, 추가·삭제에 따라 실제 출력 계약을 바꾼다', async () => {
     saved[0].nodes = [node('ai', 'codex', { text: '현재 작업중인 내용', fields: [{ name: 'works', type: 'array', description: '클라이언트가 하는 일들 나열하기', items: { type: 'object', description: '', fields: [] } }] })]
     await mount(); await select('ai')

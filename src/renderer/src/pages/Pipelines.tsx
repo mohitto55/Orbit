@@ -1037,6 +1037,22 @@ function NameField({ name, kind, disabled, onRename }: { name: string; kind: str
 
 type AgentSession = Awaited<ReturnType<typeof api.agentSessions>>[number]
 
+function ModelField({ kind, value, disabled, onChange }: { kind: 'claude' | 'codex'; value?: string; disabled: boolean; onChange: (model?: string) => void }) {
+  const [models, setModels] = useState<Awaited<ReturnType<typeof api.agentModels>>>([])
+  useEffect(() => {
+    let live = true
+    setModels([])
+    api.agentModels(kind).then((list) => { if (live) setModels(list) }).catch(() => {})
+    return () => { live = false }
+  }, [kind])
+  return <div className="field">
+    <label htmlFor="pipe-agent-model">Model</label>
+    <input id="pipe-agent-model" aria-label="Model" list="pipe-agent-models" value={value ?? ''} disabled={disabled} placeholder="기존 세션 / CLI 기본값" onChange={(e) => onChange(e.target.value || undefined)} />
+    <datalist id="pipe-agent-models">{models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</datalist>
+    <div className="small muted">목록에서 고르거나 Model ID를 입력하세요. 비우면 기존 설정을 유지합니다. 열린 세션의 모델을 바꾸면 같은 탭에서 대화를 이어서 적용합니다.</div>
+  </div>
+}
+
 /** DM-F02-AC4: 세션 불러오기. 로컬 세션의 열린 터미널을 재사용하고, 없으면 새 탭에서 이어 쓴다 */
 function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'codex'; value?: string; disabled: boolean; onChange: (session?: string) => void }) {
   const [list, setList] = useState<AgentSession[] | null>(null)
@@ -1304,7 +1320,7 @@ function NodePanel({
           <div className="grid2">
             <div className="field">
               <label>종류</label>
-              <select value={node.kind} disabled={locked} onChange={(e) => onPatch({ kind: e.target.value as NodeKind, session: undefined })}>
+              <select value={node.kind} disabled={locked} onChange={(e) => onPatch({ kind: e.target.value as NodeKind, session: undefined, model: undefined })}>
                 {AGENT_KINDS.map((k) => (
                   <option key={k} value={k}>
                     {KIND_LABEL[k]}
@@ -1325,6 +1341,7 @@ function NodePanel({
           {(node.kind === 'claude' || node.kind === 'codex') && node.terminal === 'new' && !linkedTerminal && (
             <SessionField kind={node.kind} value={node.session} disabled={locked} onChange={(session) => onPatch({ session })} />
           )}
+          {(node.kind === 'claude' || node.kind === 'codex') && <ModelField kind={node.kind} value={node.model} disabled={locked} onChange={(model) => onPatch({ model })} />}
           <div className="field">
             <label>{node.kind === 'shell' ? '명령 (여러 줄이면 차례로 실행)' : '프롬프트'}</label>
             <textarea

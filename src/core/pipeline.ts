@@ -1,4 +1,5 @@
 import type { TerminalInfo, TerminalKind } from './terminal'
+import { modelProblem } from './agentModel'
 import { boolValue, calculate, calculationInputs, fillCalculations, type CompareOp, type CompareType } from './pipelineLogic'
 export { COMPARE_OPS } from './pipelineLogic'
 import { fillSelections, fromPointer, isObject, parseJson, readOutputSchema, schemaFromFields, selectJson, selectionInputs, structuredPrompt, toPointer, validateOutput, type JsonObject, type OutputField } from './structuredData'
@@ -90,6 +91,8 @@ export interface PipeNode {
    * 비우면 새 세션으로 연다. "이어서"(continue) 노드는 앞 노드의 터미널을 쓰므로 쓰지 않는다.
    */
   session?: string
+  /** 이 작업을 실행할 모델. 비우면 기존 세션/CLI 설정을 유지한다. */
+  model?: string
   /**
    * 템플릿 노드: 작업 그래프 id (실행할 때마다 지금 내용을 읽는다). 할 일·할 일 완료 노드: Task id.
    * 명세 노드: 명세 id, 기능 노드: "명세 id#기능 ID", 수용 기준 노드: "명세 id#AC ID" (예: spec-x#DM-F02-AC1)
@@ -988,6 +991,7 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
   for (const n of p.nodes) {
     if (!live.has(n.id) || n.kind === 'start' || isFunctionBoundary(n)) continue
     const who = nodeName(n)
+    if (isAgent(n) && n.model && modelProblem(n.model.trim())) out.push(`${who}: ${modelProblem(n.model.trim())}`)
     if (n.kind === 'template' && !n.ref) out.push(`${who}: 호출할 함수를 고르세요`)
     if (n.kind === 'foreach') { out.push(...loopProblems(p, n)); continue }
     if (n.kind === 'task' && !n.ref) out.push(`${who}: 가져올 할 일을 고르세요`)
@@ -1015,6 +1019,7 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
     return [e instanceof Error ? e.message : String(e)]
   }
   for (const n of flat.nodes) {
+    if (isAgent(n) && n.model && modelProblem(n.model.trim())) out.push(`${nodeName(n)}: ${modelProblem(n.model.trim())}`)
     if (n.kind !== 'complete' && n.kind !== 'if' && n.kind !== 'print' && !n.text.trim()) out.push(`${nodeName(n)}: 내용이 비어 있습니다`)
     const input = n.terminalInput
     if (!input) continue
@@ -1090,13 +1095,14 @@ export interface RunState {
 
 export interface RunnerDeps {
   /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
-  createTerminal: (kind: TerminalKind, label: string, session?: string) => Promise<TerminalInfo & { reused?: boolean }>
+  createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string) => Promise<TerminalInfo & { reused?: boolean }>
   hasTerminal: (termId: string) => boolean
   getTerminal: (termId: string) => TerminalInfo | undefined
   whenReady: (termId: string) => Promise<void>
   submit: (termId: string, text: string) => void
   runCommand: (termId: string, command: string) => void
-  beginOutputCapture?: (termId: string) => void
+  setModel?: (termId: string, model: string) => Promise<void>
+  beginOutputCapture?: (termId: string, prompt: string) => void
   readAgentOutput?: (termId: string) => string | undefined
   endOutputCapture?: (termId: string) => void
   /** "할 일 완료" 노드: Task를 완료 상태로 바꾼다 */
@@ -1233,24 +1239,31 @@ export class PipelineRunner {
         if (!termId || !this.deps.hasTerminal(termId)) throw new Error(`${nodeName(from)}의 터미널이 닫혀 이어서 실행할 수 없습니다`)
       } else {
         const session = node.kind === 'claude' || node.kind === 'codex' ? node.session : undefined
-        const terminal = await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
+        const model = isAgent(node) ? node.model?.trim() || undefined : undefined
+        const terminal = model
+          ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model)
+          : await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
         termId = terminal.id
         needsReady = !terminal.reused
       }
       if (run.status !== 'running') return
       if (this.owner.has(termId)) throw new Error('이 세션의 터미널에서 다른 작업 노드가 실행 중입니다. 해당 작업이 끝난 뒤 다시 실행하세요')
+      const terminal = this.deps.getTerminal(termId)
       if (node.terminalInput) {
-        const terminal = this.deps.getTerminal(termId)
         if (!terminal || terminal.exited !== undefined) throw new Error('연결한 터미널이 닫혔습니다. 사용할 터미널을 다시 고르세요')
         if (terminal.kind !== node.kind) throw new Error(`${KIND_NAME[node.kind]} 노드에는 같은 종류의 터미널을 연결하세요`)
-        // 완료 알림이 상태 제목(Ready)보다 먼저 올 수 있다. 방금 완료한 탭은 즉시 이어 쓴다.
-        if (terminal.activity === 'working' && termId !== readyTerminal) throw new Error('연결한 터미널에서 작업이 진행 중입니다. 작업이 끝난 뒤 다시 실행하세요')
       }
+      // 완료 알림이 상태 제목(Ready)보다 먼저 올 수 있다. 방금 완료한 탭은 즉시 이어 쓴다.
+      if (!needsReady && terminal?.activity === 'working' && termId !== readyTerminal) throw new Error('연결한 터미널에서 작업이 진행 중입니다. 작업이 끝난 뒤 다시 실행하세요')
       st.termId = termId
       // 새 탭의 준비를 기다리는 동안에도 다른 노드가 같은 터미널에 먼저 입력하지 못하게 한다.
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
       if (needsReady) await this.deps.whenReady(termId)
       if (run.status !== 'running') return
+      if (isAgent(node) && node.model?.trim() && this.deps.setModel) await this.deps.setModel(termId, node.model.trim())
+      if (run.status !== 'running') return
+      const ready = this.deps.getTerminal(termId)
+      if (ready && ready.kind !== node.kind) throw new Error('에이전트가 종료되었습니다. 모델과 CLI 실행 설정을 확인하세요')
       st.status = 'running'
       run.sentAt[node.id] = this.now()
       // 앞에서 끝난 노드의 결과를 이제 넣는다
@@ -1261,8 +1274,9 @@ export class PipelineRunner {
       })
       if (node.kind === 'shell') this.deps.runCommand(termId, text)
       else {
-        this.deps.beginOutputCapture?.(termId)
-        this.deps.submit(termId, node.outputSchema ? structuredPrompt(text, node.outputSchema) : text)
+        const prompt = node.outputSchema ? structuredPrompt(text, node.outputSchema) : text
+        this.deps.beginOutputCapture?.(termId, prompt)
+        this.deps.submit(termId, prompt)
       }
     } catch (e) {
       if (st.termId && this.owner.get(st.termId)?.runId === run.runId && this.owner.get(st.termId)?.nodeId === node.id) {
@@ -1303,6 +1317,8 @@ export class PipelineRunner {
     const node = this.runs.get(o.runId)?.pipe.nodes.find((n) => n.id === o.nodeId)
     if (!node || node.kind === 'shell') return null
     const output = this.deps.readAgentOutput?.(termId)
+    // 출처가 확인된 최종 응답이 없는 완료 신호로 작업을 끝내거나 스키마를 검사하지 않는다.
+    if (!manual && this.deps.readAgentOutput && output === undefined) return null
     // 요청 직전에 지난 출력을 지웠으므로 실제 응답을 받았다면 빠른 완료도 놓치지 않는다.
     // 본문 없는 예전 완료 신호에는 기존 유예 시간을 적용한다.
     const received = manual || output !== undefined

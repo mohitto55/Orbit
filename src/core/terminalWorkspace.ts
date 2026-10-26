@@ -5,7 +5,8 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { beginOutputCapture, endOutputCapture, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, type CliLaunch } from './terminalIntegration'
+import { beginOutputCapture, endOutputCapture, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, type CliLaunch } from './terminalIntegration'
+import { modelProblem } from './agentModel'
 import type { Ctx, ProjectSettings } from './workspace'
 
 interface SavedTab {
@@ -14,6 +15,7 @@ interface SavedTab {
   /** Orbit의 고정 표시 이름. CLI 세션 제목과 동기화하지 않는다. */
   title: string
   sessionId?: string
+  model?: string
   cols: number
   rows: number
   output: string
@@ -165,7 +167,7 @@ export class TerminalWorkspace {
             if (signal === 'idle') this.setActivity(tab, 'idle')
             if (signal === 'done') {
               // Codex 상태 제목과 notify가 같은 완료를 두 번 알리지 않게 한다.
-              if (tab.kind !== 'codex' || !this.codexStatusTabs.has(tab.id)) this.finishActivity(tab)
+              if (this.readAgentOutput(tab.id) !== undefined || tab.kind !== 'codex' || !this.codexStatusTabs.has(tab.id)) this.finishActivity(tab)
               this.events.onAgentDone?.(tab.id)
             }
           }
@@ -217,7 +219,7 @@ export class TerminalWorkspace {
   }
 
   /** 작업 그래프에서 지정한 세션이 이미 실행 중이면 그 탭을 그대로 쓴다. */
-  async open(kind: TerminalKind, settings: ProjectSettings, options: { title?: string; resume?: string } = {}): Promise<TerminalSnapshot & { reused: boolean }> {
+  async open(kind: TerminalKind, settings: ProjectSettings, options: { title?: string; resume?: string; model?: string } = {}): Promise<TerminalSnapshot & { reused: boolean }> {
     if (options.resume && kind !== 'shell') {
       validateSessionId(options.resume)
       for (const tab of this.tabs.values()) this.syncLaunch(tab)
@@ -234,11 +236,13 @@ export class TerminalWorkspace {
   }
 
   /** 새 탭을 연다. resume을 주면 로컬에 저장된 그 대화를 이어서 연다. */
-  create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30, options: { title?: string; resume?: string } = {}): TerminalSnapshot {
+  create(kind: TerminalKind, settings: ProjectSettings, cols = 100, rows = 30, options: { title?: string; resume?: string; model?: string } = {}): TerminalSnapshot {
     if (!['shell', 'claude', 'codex'].includes(kind)) throw new Error('지원하지 않는 터미널 종류입니다')
     if (options.resume) validateSessionId(options.resume)
+    const model = kind !== 'shell' ? options.model?.trim() || undefined : undefined
+    if (model && modelProblem(model)) throw new Error(modelProblem(model))
     const resume = kind === 'shell' ? undefined : options.resume
-    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: options.title ?? { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(resume ? { sessionId: resume } : kind === 'claude' ? { sessionId: randomUUID() } : {}), ...(this.groups.some((g) => g.id === this.activeGroup) ? { groupId: this.activeGroup } : {}) }
+    const tab: SavedTab = { id: `term-${randomUUID()}`, kind, title: options.title ?? { shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind], cols, rows, output: '', createdAt: Date.now(), ...(model ? { model } : {}), ...(resume ? { sessionId: resume } : kind === 'claude' ? { sessionId: randomUUID() } : {}), ...(this.groups.some((g) => g.id === this.activeGroup) ? { groupId: this.activeGroup } : {}) }
     this.tabs.set(tab.id, tab)
     try { this.launch(tab, settings, !!resume) } catch (e) { this.tabs.delete(tab.id); throw e }
     this.active = tab.id
@@ -246,7 +250,7 @@ export class TerminalWorkspace {
     return this.snapshot(tab)
   }
 
-  private launch(tab: SavedTab, settings: ProjectSettings, restoring: boolean): void {
+  private launch(tab: SavedTab, settings: ProjectSettings, restoring: boolean, sequence = 0): void {
     this.codexStatusTabs.delete(tab.id)
     this.shellPastes.delete(tab.id)
     this.commands.delete(tab.id)
@@ -261,6 +265,10 @@ export class TerminalWorkspace {
     let command = tab.kind === 'claude' && !resume
       ? `${terminalCommand('claude', settings)} --session-id ${tab.sessionId}`
       : terminalCommand(tab.kind, settings, resume)
+    if (command && tab.model) {
+      if (modelProblem(tab.model)) throw new Error(modelProblem(tab.model))
+      command = withTerminalModel(command, tab.model)
+    }
     if (command && tab.launch) command += resumeOptions(tab.launch.args, command).map((arg) => ` ${shellQuote(arg)}`).join('')
     // 공유 데몬의 환경·저장 위치가 다른 탭에 섞이지 않도록 각 TUI를 독립 실행한다.
     if (tab.kind === 'codex' && command && !/(^|\s)--no-daemon(?:\s|$)/.test(command)) command += ' --no-daemon'
@@ -271,16 +279,19 @@ export class TerminalWorkspace {
     tab.launch = readCliLaunch(this.integrationDir(tab.id))
     if (tab.launch && previousLaunch) tab.launch = { ...tab.launch, args: previousLaunch.args, home: previousLaunch.home }
     this.manager.create(tab.kind, cwd, tab.cols, tab.rows, settings, tab.sessionId, tab.title, {
-      id: tab.id, command: command ?? undefined, output: tab.output, init: integration.init, signals: tab.kind === 'claude' && !!command,
+      id: tab.id, command: command ?? undefined, output: tab.output, sequence, init: integration.init, signals: tab.kind === 'claude' && !!command,
       env: { ...integration.env, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: `orbit-${tab.id}`, ...(tab.launch?.home ? { [tab.kind === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: tab.launch.home } : {}) }
     })
   }
 
   private integrationDir(id: string): string { return path.join(`${this.file}.sessions`, id) }
 
-  beginOutputCapture(id: string): void {
+  beginOutputCapture(id: string, prompt: string): void {
     if (!this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
-    beginOutputCapture(this.integrationDir(id))
+    const tab = this.tabs.get(id)!
+    this.syncLaunch(tab)
+    const sessionId = !tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix) ? tab.sessionId : undefined
+    beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix)
   }
   readAgentOutput(id: string): string | undefined { return readAgentOutput(this.integrationDir(id)) }
   endOutputCapture(id: string): void { endOutputCapture(this.integrationDir(id)) }
@@ -302,7 +313,9 @@ export class TerminalWorkspace {
       tab.kind = 'shell'
       delete tab.sessionId
       delete tab.codexPrefix
+      delete tab.model
     } else {
+      if (tab.kind !== launch.kind) delete tab.model
       tab.kind = launch.kind
       if (launch.sessionId) { validateSessionId(launch.sessionId); tab.sessionId = launch.sessionId }
     }
@@ -332,7 +345,7 @@ export class TerminalWorkspace {
 
   private snapshot(tab: SavedTab): TerminalSnapshot {
     const live = this.manager.snapshot(tab.id)
-    return { id: tab.id, kind: tab.kind, title: tab.title, activity: tab.activity ?? 'idle', activityRevision: tab.activityRevision ?? 0, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
+    return { id: tab.id, kind: tab.kind, title: tab.title, ...(tab.model ? { model: tab.model } : {}), activity: tab.activity ?? 'idle', activityRevision: tab.activityRevision ?? 0, pid: live?.pid ?? 0, sessionId: tab.sessionId, groupId: tab.groupId, output: live?.output ?? tab.output, sequence: live?.sequence ?? 0, ...(tab.exited === undefined ? {} : { exited: tab.exited }) }
   }
 
   private info(tab: SavedTab): TerminalInfo {
@@ -455,6 +468,35 @@ export class TerminalWorkspace {
     this.launch(tab, settings, true)
     this.activate(id)
     return this.snapshot(tab)
+  }
+
+  /** 전역 CLI 설정을 바꾸지 않고 같은 탭·대화를 지정한 모델로 재개한다. */
+  async setModel(id: string, model: string, settings: ProjectSettings): Promise<void> {
+    if (modelProblem(model) || !model) throw new Error(modelProblem(model) ?? '모델을 입력하세요')
+    const tab = this.tabs.get(id)
+    if (!tab || !this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
+    this.syncLaunch(tab)
+    if (tab.kind === 'shell') throw new Error('Claude Code·Codex 터미널에서 모델을 지정할 수 있습니다')
+    if (tab.model === model) return
+    if (tab.activity === 'working') throw new Error('작업 중인 터미널의 모델은 바꿀 수 없습니다')
+    if (tab.kind === 'codex') await this.bindCodex(true)
+    if (this.stopped || !this.manager.has(id) || this.tabs.get(id) !== tab) throw new Error('터미널이 닫혔습니다')
+    if (this.get(id)?.activity === 'working') throw new Error('작업 중인 터미널의 모델은 바꿀 수 없습니다')
+    if (!tab.sessionId || (tab.codexPrefix && !tab.sessionId.startsWith(tab.codexPrefix))) throw new Error('대화 ID를 확인한 뒤 모델을 바꿀 수 있습니다. 터미널 준비가 끝난 뒤 다시 실행하세요')
+    if (tab.kind === 'claude') {
+      const home = tab.launch?.home || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+      const transcript = path.join(home, 'projects', encodeClaudeProjectDir(tab.launch?.cwd ?? this.ctx.projectDir), `${tab.sessionId}.jsonl`)
+      if (!existsSync(transcript) && (tab.activityRevision ?? 0) > 0) throw new Error('기존 대화가 아직 저장되지 않았습니다. 대화가 저장된 뒤 모델을 바꿔 주세요')
+    }
+    terminalCommand(tab.kind, settings, tab.sessionId) // 재개 명령이 잘못됐으면 기존 프로세스를 유지한다.
+    const sequence = this.manager.snapshot(id)?.sequence ?? 0
+    tab.model = model
+    this.manager.kill(id)
+    try { this.launch(tab, settings, true, sequence) }
+    catch (error) { tab.exited = -1; this.save(); this.events.onChange?.(this.info(tab)); throw error }
+    this.save()
+    this.events.onChange?.(this.info(tab))
+    await this.whenReady(id)
   }
 
   write(id: string, data: string): void {

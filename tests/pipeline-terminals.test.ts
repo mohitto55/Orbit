@@ -30,13 +30,52 @@ function runnerHarness(initial: TerminalInfo[] = [tab('codex')]) {
     tabs.set(info.id, info)
     return info
   })
-  const submit = vi.fn(), whenReady = vi.fn(async () => {})
-  const runner = new PipelineRunner({ createTerminal, hasTerminal: (id) => tabs.has(id), getTerminal: (id) => tabs.get(id), whenReady, submit, runCommand: vi.fn(), completeTasks: async () => {}, emit: () => {} })
+  const submit = vi.fn(), whenReady = vi.fn(async () => {}), setModel = vi.fn(async (_id: string, _model: string) => {})
+  const runner = new PipelineRunner({ createTerminal, hasTerminal: (id) => tabs.has(id), getTerminal: (id) => tabs.get(id), whenReady, setModel, submit, runCommand: vi.fn(), completeTasks: async () => {}, emit: () => {} })
   const start = (p: Pipeline, env: Env = {}) => runner.start({ ...p, ...expandPipeline(p, env) })
-  return { tabs, createTerminal, submit, whenReady, runner, start }
+  return { tabs, createTerminal, submit, whenReady, setModel, runner, start }
 }
 
 describe('작업 그래프 터미널 입출력', () => {
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC22] %s 노드의 모델을 먼저 적용하고 같은 터미널의 다음 노드 모델도 적용한다', async (kind) => {
+    const p = graph(kind), h = runnerHarness([tab(kind)])
+    p.nodes.find((n) => n.id === 'work')!.model = 'model-a'
+    p.nodes.push(node('next', kind, { text: '다음 작업', terminal: 'continue', model: 'model-b' }))
+    p.edges.push(wire('work', 'next'))
+    let ready!: () => void
+    h.setModel.mockImplementationOnce(() => new Promise<void>((resolve) => { ready = resolve }))
+    const run = h.start(p)
+    expect(h.setModel).toHaveBeenCalledWith(tab(kind).id, 'model-a')
+    expect(h.submit).not.toHaveBeenCalled()
+    expect(h.runner.list()[0].nodes.work.status).toBe('starting')
+    ready(); await vi.waitFor(() => expect(h.submit).toHaveBeenCalledTimes(1))
+    h.runner.markDone(run.runId, 'work')
+    await vi.waitFor(() => expect(h.submit).toHaveBeenCalledTimes(2))
+    expect(h.setModel.mock.calls).toEqual([[tab(kind).id, 'model-a'], [tab(kind).id, 'model-b']])
+    expect(h.createTerminal).not.toHaveBeenCalled()
+  })
+
+  it('[DM-F02-AC22] 새 탭에 모델을 전달하고 모델 적용 실패 시 프롬프트를 보내지 않는다', async () => {
+    const p: Pipeline = { ...graph(), nodes: [node('ai', 'codex', { text: '작업', model: 'model-a' })], edges: [] }, h = runnerHarness([])
+    h.setModel.mockRejectedValue(new Error('모델을 적용할 수 없습니다'))
+    h.start(p)
+    await vi.waitFor(() => expect(h.runner.list()[0].status).toBe('failed'))
+    expect(h.createTerminal).toHaveBeenCalledWith('codex', 'ai', undefined, 'model-a')
+    expect(h.submit).not.toHaveBeenCalled()
+    expect(h.runner.list()[0].nodes.ai.message).toContain('모델을 적용')
+  })
+
+  it('[DM-F02-AC22] 모델을 저장·복원하고 함수 안의 노드에도 유지하며 잘못된 값은 실행 전에 알린다', async () => {
+    const ctx = await newProject(), definition = fn()
+    definition.nodes[1].model = ' custom/model:v2 '
+    const saved = await savePipeline(ctx, definition)
+    expect(saved.nodes[1].model).toBe('custom/model:v2')
+    const caller: Pipeline = { ...graph(), nodes: [node('call', 'template', { ref: 'fn', values: { tab: tab('codex').id } })], edges: [] }
+    expect(expandPipeline(caller, { library: [saved] }).nodes[0].model).toBe('custom/model:v2')
+    saved.nodes[1].model = 'model\ncommand'
+    expect(pipelineProblems(caller, { library: [saved] }).join('\n')).toContain('Model ID')
+  })
+
   it.each(['claude', 'codex'] as const)('[DM-F02-AC15] %s의 터미널 입력은 새 탭·세션·이어서 설정보다 우선하며 프롬프트에 섞이지 않는다', (kind) => {
     const p = graph(kind), h = runnerHarness([tab(kind)])
     expect(pipelineProblems(p, { terminals: [tab(kind)] })).toEqual([])

@@ -31,6 +31,7 @@ function readNodes(v: unknown): PipeNode[] {
       ...(n.values && typeof n.values === 'object' && !Array.isArray(n.values) ? { values: Object.fromEntries(Object.entries(n.values).filter(([, value]) => typeof value === 'string')) } : {}),
       terminal: n.terminal === 'continue' ? 'continue' : 'new',
       ...(typeof n.session === 'string' && n.session && (n.kind === 'claude' || n.kind === 'codex') ? { session: n.session } : {}),
+      ...(typeof n.model === 'string' && n.model.trim() && (n.kind === 'claude' || n.kind === 'codex') ? { model: n.model.trim() } : {}),
       ...(typeof n.ref === 'string' && n.ref ? { ref: n.ref } : {}),
       ...(typeof n.x === 'number' ? { x: n.x } : {}),
       ...(typeof n.y === 'number' ? { y: n.y } : {})
