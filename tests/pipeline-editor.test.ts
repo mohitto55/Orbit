@@ -25,6 +25,7 @@ let runs: RunState[]
 const graph = () => (window as unknown as { __orbitPipe: Core }).__orbitPipe
 
 beforeEach(() => {
+  localStorage.removeItem('orbit:pipeline-layout')
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   saved = [{ id: 'g', title: '그래프', file: '', nodes: [node('list', 'list', { items: ['하나', '둘'], x: 0, y: 0 })], edges: [] }]
@@ -72,6 +73,107 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it('[DM-F02-AC19] 세 경계를 드래그하고 크기를 다시 열 때 복원하며 그래프 좌표는 유지한다', async () => {
+    await mount()
+    const positions = saved[0].nodes.map(({ id, x, y }) => ({ id, x, y }))
+    const drag = async (label: string, dx: number, dy: number) => {
+      const divider = host.querySelector<HTMLElement>(`[role="separator"][aria-label="${label}"]`)!
+      await act(async () => {
+        divider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 500, clientY: 500 }))
+        window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 500 + dx, clientY: 500 + dy }))
+        window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1 }))
+      })
+    }
+    await drag('그래프 목록 너비', 80, 0)
+    await drag('속성 패널 너비', -120, 0)
+    await drag('출력 로그 높이', 0, -90)
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!)).toEqual({ list: 270, panel: 460, output: 310 })
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    expect(saved[0].nodes.map(({ id, x, y }) => ({ id, x, y }))).toEqual(positions)
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    await mount()
+    expect(host.querySelector('.pipe-layout')?.getAttribute('style')).toContain('--pipe-list-width: 270px')
+    expect(host.querySelector<HTMLElement>('.pipe-console')?.style.height).toBe('310px')
+    await drag('그래프 목록 너비', -10000, 0)
+    await drag('속성 패널 너비', -10000, 0)
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!)).toMatchObject({ list: 140, panel: 760 })
+    await act(async () => host.querySelector('[aria-label="속성 패널 너비"]')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!).panel).toBe(340)
+    await click('레이아웃 초기화')
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!)).toEqual({ list: 190, panel: 340, output: 220 })
+  })
+
+  it('드래그 중 창을 벗어나거나 편집기를 닫으면 크기 조절을 끝내고 커서를 복원한다', async () => {
+    localStorage.setItem('orbit:pipeline-layout', '{invalid')
+    await mount()
+    const divider = host.querySelector('[aria-label="그래프 목록 너비"]')!
+    await act(async () => {
+      divider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 190 }))
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 400 }))
+    })
+    expect(document.body.style.cursor).toBe('')
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!).list).toBe(190)
+    await act(async () => divider.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight', shiftKey: true })))
+    expect(JSON.parse(localStorage.getItem('orbit:pipeline-layout')!).list).toBe(240)
+    await act(async () => divider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 2, button: 0 })))
+    await act(async () => root.render(null))
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  it('[DM-F02-AC18] 기본 result를 Array<Object>와 중첩 Number Array로 편집하고 다시 연다', async () => {
+    saved[0].nodes = [node('ai', 'codex', { text: '결과' })]
+    await mount()
+    await select('ai')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="출력 형식"]')!, 'json')
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Field name"]')?.value).toBe('result')
+    const types = host.querySelector<HTMLSelectElement>('[aria-label="result Type"]')!
+    expect([...types.options].map((o) => o.textContent)).toEqual(['String', 'Number', 'Boolean', 'Object', 'Array', 'Null'])
+    await change(types, 'array')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="result[] Type"]')!, 'object')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Add property to result[]"]')!.click())
+    await change(host.querySelector<HTMLInputElement>('[aria-label="result[] Field name"]')!, 'scores')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="result[].scores Type"]')!, 'array')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="result[].scores[] Type"]')!, 'number')
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="result[].scores[] Description"]')!, '각 평가 점수')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes[0].fields).toEqual([{ name: 'result', type: 'array', description: '', items: { type: 'object', description: '', fields: [
+      { name: 'scores', type: 'array', description: '', items: { type: 'number', description: '각 평가 점수' } }
+    ] } }])
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    await mount(); await select('ai')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="result[].scores[] Type"]')?.value).toBe('number')
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="result[].scores[] Description"]')?.value).toBe('각 평가 점수')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('각 평가 점수')
+  })
+
+  it('[DM-F02-AC17] Print를 추가하고 출력 로그에서 발생 순서·빈 문자열·원본 노드 선택을 확인한다', async () => {
+    saved[0].nodes = [node('ai', 'codex'), node('p', 'print', { text: '값' })]
+    runs = [{ runId: 'r', pipelineId: 'g', title: '그래프', status: 'done', started: new Date().toISOString(), nodes: {
+      p: { kind: 'print', name: 'Print 결과', status: 'done', output: '', outputOrder: 2 },
+      ai: { kind: 'codex', name: 'AI 결과', status: 'done', output: '<img src=x onerror=alert(1)>', outputOrder: 1 }
+    } }]
+    await mount()
+    const entries = () => [...host.querySelectorAll('.pipe-console-entry pre')].map((el) => el.textContent)
+    expect(entries()).toEqual(['<img src=x onerror=alert(1)>', '(빈 문자열)'])
+    expect(host.querySelector('.pipe-console img')).toBeNull()
+    await click('Print 결과')
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Print 출력할 값"]')?.value).toBe('값')
+    await act(async () => host.querySelector<HTMLInputElement>('.pipe-console input[type="checkbox"]')!.click())
+    expect(entries()).toEqual(['(빈 문자열)'])
+    await click('Print')
+    const added = graph().nodes('[kind = "print"]').filter((n) => n.id() !== 'p').first()
+    expect(added.data('pins')).toMatchObject([{ side: 'in', type: 'exec' }, { side: 'out', type: 'exec' }, { side: 'in', type: 'data' }])
+    expect(host.querySelector('[aria-label="터미널 실행 방식"]')).toBeNull()
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="Print 출력할 값"]')!, '직접 출력')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes.find((n) => n.id === added.id())?.text).toBe('직접 출력')
+  })
+
   it.each([1, 0.25])('[DM-F02-AC16] 줌 %s에서 비교 Bool→If, True·False 핀을 구분해 연결한다', async (zoom) => {
     saved[0].nodes = [node('s', 'start', { x: 0, y: 0 }), node('if', 'if', { x: 500, y: 0 }), node('yes', 'shell', { text: 'yes', x: 900, y: -120 }), node('no', 'shell', { text: 'no', x: 900, y: 120 })]
     saved[0].edges = [{ from: 's', to: 'if' }]
@@ -203,22 +305,22 @@ describe('함수와 리스트 항목 편집 화면', () => {
   })
 
   it('구조화 출력 필드·규칙을 편집하고 결과 Dictionary와 필드를 원본에 연결한다', async () => {
-    saved[0].nodes.push(node('ai', 'codex', { text: '사람을 정리하세요' }))
+    saved[0].nodes.push(node('ai', 'codex', { text: '결과를 정리하세요' }))
     await mount()
     await select('ai')
     await change(host.querySelector<HTMLSelectElement>('[aria-label="출력 형식"]')!, 'json')
-    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="people 작성 규칙"]')!, '이름이 없으면 빈 문자열')
-    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('이름이 없으면 빈 문자열')
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="result Description"]')!, '결과가 없으면 빈 문자열')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('결과가 없으면 빈 문자열')
     await click('+ 결과 Dictionary')
     const dict = graph().nodes('[kind = "dictionary"]').first()
     expect(graph().edges().some((e) => e.data('source') === 'ai' && e.data('target') === dict.id() && e.data('fromPort') === A.output)).toBe(true)
-    await click('+ people')
+    await click('+ result')
     const field = graph().nodes('[kind = "property"]').first()
-    expect(host.querySelector<HTMLInputElement>('[aria-label="JSON 필드 경로"]')?.value).toBe('/people')
+    expect(host.querySelector<HTMLInputElement>('[aria-label="JSON 필드 경로"]')?.value).toBe('/result')
     expect(graph().edges().some((e) => e.data('source') === dict.id() && e.data('target') === field.id())).toBe(true)
     await act(async () => { await vi.advanceTimersByTimeAsync(550) })
-    expect(saved[0].nodes.find((n) => n.id === 'ai')?.fields).toEqual([{ name: 'people', type: 'string', description: '이름이 없으면 빈 문자열' }])
-    expect(saved[0].nodes.find((n) => n.id === field.id())?.pointer).toBe('/people')
+    expect(saved[0].nodes.find((n) => n.id === 'ai')?.fields).toEqual([{ name: 'result', type: 'string', description: '결과가 없으면 빈 문자열' }])
+    expect(saved[0].nodes.find((n) => n.id === field.id())?.pointer).toBe('/result')
   })
 
   it('실행한 JSON 응답을 UI에서 펼치고 중첩 필드를 꺼내며 다시 저장해도 연결을 유지한다', async () => {
@@ -250,7 +352,7 @@ describe('함수와 리스트 항목 편집 화면', () => {
     expect(host.querySelector<HTMLSelectElement>('[aria-label="출력 형식"]')?.disabled).toBe(true)
     expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('요약 규칙')
     await select('s')
-    await change(host.querySelector<HTMLInputElement>('[aria-label="출력 필드 이름"]')!, 'person')
+    await change(host.querySelector<HTMLInputElement>('[aria-label="Field name"]')!, 'person')
     await select('a')
     expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('person')
   })

@@ -3,7 +3,7 @@ import path from 'path'
 import type { Ctx } from './workspace'
 import { listMd, readMd, writeMd, nowIso, stamp } from './md'
 import { COMPARE_OPS, NODE_KINDS, PARAM_TYPE_NAME, withFunctionBoundary, withNames, type NodeKind, type PipeEdge, type PipeNode, type Pipeline, type FunctionParam } from './pipeline'
-import { FIELD_TYPES, isObject, type FieldType } from './structuredData'
+import { readOutputFields } from './structuredData'
 
 /** 연동: 작업 그래프를 데이터 폴더의 pipelines/<id>.md 로 저장한다. */
 
@@ -25,7 +25,7 @@ function readNodes(v: unknown): PipeNode[] {
       ...(['single', 'number', 'boolean'].includes(n.compareType) ? { compareType: n.compareType } : {}),
       ...(Array.isArray(n.items) ? { items: n.items.map((x: unknown) => String(x ?? '')) } : {}),
       ...(typeof n.pointer === 'string' ? { pointer: n.pointer } : {}),
-      ...(Array.isArray(n.fields) ? { fields: n.fields.filter(isObject).map((f: Record<string, unknown>) => ({ name: String(f.name ?? ''), type: FIELD_TYPES.includes(f.type as FieldType) ? f.type as FieldType : 'string', description: String(f.description ?? '') })) } : {}),
+      ...(Array.isArray(n.fields) ? { fields: readOutputFields(n.fields) } : {}),
       ...(Number.isInteger(n.index) && n.index >= 0 ? { index: n.index } : {}),
       ...(Array.isArray(n.params) ? { params: n.params.filter((p: Partial<FunctionParam> | null) => p && typeof p.id === 'string' && typeof p.name === 'string').map((p: FunctionParam) => ({ id: p.id, name: p.name, type: Object.hasOwn(PARAM_TYPE_NAME, p.type) ? p.type : 'single' })) } : {}),
       ...(n.values && typeof n.values === 'object' && !Array.isArray(n.values) ? { values: Object.fromEntries(Object.entries(n.values).filter(([, value]) => typeof value === 'string')) } : {}),

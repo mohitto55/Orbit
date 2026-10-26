@@ -707,14 +707,24 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .rollup-meta { margin-top: 6px; }
 
 /* 터미널 작업 그래프 (IN-F11) */
-.pipe-layout { flex: 1; display: grid; grid-template-columns: 190px 1fr; gap: 14px; min-height: 0; }
+.pipe-layout { flex: 1; display: grid; grid-template-columns: min(var(--pipe-list-width, 190px), 28%) 8px minmax(0, 1fr); gap: 4px; min-height: 0; }
 .pipe-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
 .pipe-list .tree-item { cursor: pointer; }
 .pipe-list > button { margin-bottom: 6px; }
 .pipe-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
 .pipe-title { font-size: 15px; font-weight: 600; min-width: 220px; flex: 1; max-width: 420px; }
-.pipe-body { flex: 1; display: grid; grid-template-columns: 1fr 340px; gap: 12px; min-height: 460px; }
+.pipe-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 8px min(var(--pipe-panel-width, 340px), 50%); gap: 4px; min-height: 460px; }
 .pipe-canvas { min-height: 460px; }
+.pipe-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.pipe-workspace .pipe-canvas, .pipe-workspace .graph { flex: 1; min-width: 0; min-height: 180px; }
+.pipe-workspace .graph { overflow: hidden; }
+.pipe-console { display: flex; flex-direction: column; flex-shrink: 0; max-height: calc(100% - 188px); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+.pipe-console-toolbar { margin: 0; padding: 4px 10px; }
+.pipe-console-entries { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 8px; }
+.pipe-console-entry { border-top: 1px solid var(--line); padding: 6px 0; }
+.pipe-console-entry .row { margin: 0; gap: 6px; }
+.pipe-console-source { overflow-wrap: anywhere; text-align: left; margin-right: auto; }
+.pipe-console-entry pre { margin: 4px 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .pipe-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; overflow-y: auto; }
 .pipe-panel h4 { margin: 0 0 8px; }
 .pipe-panel p { margin: 0 0 8px; }
@@ -722,7 +732,14 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .pipe-parameter { display: grid; grid-template-columns: minmax(0, 1fr) 110px 28px; gap: 6px; margin: 8px 0; align-items: center; }
 .pipe-parameter input, .pipe-parameter select { min-width: 0; width: 100%; }
 .pipe-panel textarea[rows="2"] { min-height: 60px; }
-@media (max-width: 1100px) { .pipe-body { grid-template-columns: 1fr; } }
+.pipe-divider { touch-action: none; user-select: none; position: relative; border-radius: 4px; }
+.pipe-divider.vertical { cursor: col-resize; width: 8px; }
+.pipe-divider.horizontal { cursor: row-resize; height: 8px; flex: 0 0 8px; }
+.pipe-divider::after { content: ''; position: absolute; border-radius: 2px; background: var(--line); }
+.pipe-divider.vertical::after { width: 2px; top: 12px; bottom: 12px; left: 3px; }
+.pipe-divider.horizontal::after { height: 2px; left: 12px; right: 12px; top: 3px; }
+.pipe-divider:hover::after, .pipe-divider:focus-visible::after { background: var(--accent); }
+@media (max-width: 900px) { .pipe-body { grid-template-columns: minmax(0, 1fr); } .pipe-panel-divider { display: none; } .pipe-panel { max-height: 420px; } }
 .pipe-list-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; color: var(--muted); margin: 10px 4px 2px; }
 .pipe-list-head:first-child { margin-top: 0; }
 .pipe-list-head button { padding: 0 8px; font-size: 15px; line-height: 1.4; }
@@ -755,6 +772,8 @@ ol.pipe-list-items { padding-left: 20px; display: block; }
 .pipe-output-field input { flex: 1; min-width: 0; }
 .pipe-output-field select { max-width: 120px; }
 .pipe-output-field textarea { width: 100%; min-height: 48px; resize: vertical; }
+.pipe-output-nested { min-width: 0; border: 0; border-left: 2px solid var(--line); padding: 0 0 0 8px; margin: 8px 0 0; }
+.pipe-output-nested legend { padding: 0 4px; font-size: 12px; font-weight: 600; }
 .pipe-json-result { max-height: 360px; overflow: auto; background: var(--sunken); border-radius: 6px; padding: 8px; }
 .pipe-json-tree { display: flex; flex-direction: column; gap: 4px; }
 .pipe-json-entry { border-left: 2px solid var(--line); padding-left: 8px; }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AGENT_PORT as P, PipelineRunner, agentSchema, dataValue, edgeProblem, expandPipeline, fillOutputs, innerValues, outputRefs, pipelineProblems, withInputPort, type Graph, type PipeNode, type Pipeline, type RunnerDeps } from '../src/core/pipeline'
-import { fromPointer, parseJson, schemaFromFields, toPointer, validateOutput, type OutputField } from '../src/core/structuredData'
+import { fromPointer, parseJson, readOutputSchema, schemaFromFields, toPointer, validateOutput, type OutputField } from '../src/core/structuredData'
 import { listPipelines, savePipeline } from '../src/core/pipelineStore'
 import { newProject } from './helpers'
 
@@ -20,11 +20,52 @@ function graph(kind: 'claude' | 'codex' = 'codex'): Pipeline {
 const result = { people: '민수', detail: { name: '민수', score: 0, approved: false, nickname: '', tags: ['한글', { name: '안녕' }] } }
 
 describe('구조화 출력 계약과 Dictionary', () => {
+  const nested: OutputField[] = [{ name: 'items', type: 'array', description: '검토 결과', items: {
+    type: 'object', description: '항목', fields: [
+      { name: 'value', type: 'string', description: '결과' },
+      { name: 'scores', type: 'array', description: '', items: { type: 'array', description: '', items: { type: 'number', description: '점수' } } },
+      { name: 'active', type: 'boolean', description: '' }, { name: 'empty', type: 'null', description: '' }
+    ]
+  } }]
+  const item = { value: '', scores: [[0, 1]], active: false, empty: null }
+
+  it('[DM-F02-AC18] Array의 Items·Object Properties·중첩 Array 계약을 저장하고 응답의 모든 항목을 검증한다', async () => {
+    const schema = schemaFromFields(nested), text = JSON.stringify(schema)
+    expect(readOutputSchema(text)).toEqual(schema)
+    expect(validateOutput(JSON.stringify({ items: [item, item] }), text)).toEqual({ items: [item, item] })
+    expect(validateOutput('{"items":[]}', text)).toEqual({ items: [] })
+    const ctx = await newProject(), g = graph()
+    g.nodes.find((n) => n.id === 'schema')!.fields = nested
+    await savePipeline(ctx, g)
+    const stored = (await listPipelines(ctx))[0]
+    expect(stored.nodes.find((n) => n.id === 'schema')?.fields).toEqual(nested)
+    expect(JSON.parse(agentSchema(stored, 'agent')!)).toEqual(schema)
+  })
+
+  it.each([
+    [{ ...item, value: 1 }, 'items[1].value'], [{ ...item, scores: [[0, '1']] }, 'items[1].scores[0][1]'],
+    [{ ...item, active: 'false' }, 'items[1].active'], [{ ...item, empty: '' }, 'items[1].empty'],
+    [{ ...item, extra: true }, 'items[1].extra'], [{ scores: [], active: false, empty: null }, 'items[1].value']
+  ])('중첩 응답 %j의 잘못된 항목 경로 %s를 알린다', (bad, path) => {
+    expect(() => validateOutput(JSON.stringify({ items: [item, bad] }), JSON.stringify(schemaFromFields(nested)))).toThrow(path)
+  })
+
+  it('직접 연결한 계약도 중첩 필수 필드 오류를 거부하고 기존 unconstrained Object·Array를 보존한다', () => {
+    const malformed = schemaFromFields(nested)
+    malformed.properties.items.items!.required = ['missing']
+    expect(() => readOutputSchema(JSON.stringify(malformed))).toThrow('output.items[]')
+    const old = JSON.stringify(schemaFromFields([{ name: 'items', type: 'array', description: '' }, { name: 'value', type: 'object', description: '' }]))
+    expect(validateOutput('{"items":[0,false,null,"",{}],"value":{"custom":[]}}', old)).toEqual({ items: [0, false, null, '', {}], value: { custom: [] } })
+    const empty = JSON.stringify(schemaFromFields([{ name: 'value', type: 'object', description: '', fields: [] }]))
+    expect(validateOutput('{"value":{}}', empty)).toEqual({ value: {} })
+    expect(() => validateOutput('{"value":{"unexpected":1}}', empty)).toThrow('value.unexpected')
+  })
+
   it('필드 작성 규칙을 계약에 담고 키·타입·추가 필드와 JSON 형식을 검사한다', () => {
     const schema = JSON.stringify(schemaFromFields(fields))
     expect(schema).toContain(fields[0].description)
     expect(validateOutput('```json\n' + JSON.stringify(result) + '\n```', schema)).toEqual(result)
-    expect(() => validateOutput('{"people":null,"detail":{}}', schema)).toThrow('텍스트')
+    expect(() => validateOutput('{"people":null,"detail":{}}', schema)).toThrow('String')
     expect(() => validateOutput('{"detail":{}}', schema)).toThrow('people')
     expect(() => validateOutput(JSON.stringify({ ...result, extra: true }), schema)).toThrow('extra')
     expect(() => validateOutput('설명\n' + JSON.stringify(result), schema)).toThrow('JSON')

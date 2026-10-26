@@ -3,30 +3,79 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type JsonObject = { [key: string]: JsonValue }
 export const FIELD_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'null'] as const
 export type FieldType = (typeof FIELD_TYPES)[number]
-export interface OutputField { name: string; type: FieldType; description: string }
+export interface OutputType { type: FieldType; description: string; fields?: OutputField[]; items?: OutputType }
+export interface OutputField extends OutputType { name: string }
 export const FIELD_TYPE_NAME: Record<FieldType, string> = {
-  string: '텍스트', number: '숫자', boolean: '참 / 거짓', object: 'Dictionary', array: '배열', null: 'null'
+  string: 'String', number: 'Number', boolean: 'Boolean', object: 'Object', array: 'Array', null: 'Null'
 }
-export interface OutputSchema {
+export interface OutputValueSchema {
+  type?: FieldType
+  description?: string
+  properties?: Record<string, OutputValueSchema>
+  required?: string[]
+  additionalProperties?: false
+  items?: OutputValueSchema
+}
+export interface OutputSchema extends OutputValueSchema {
   type: 'object'
-  properties: Record<string, { type: FieldType; description: string; items?: Record<string, never> }>
+  properties: Record<string, OutputValueSchema>
   required: string[]
   additionalProperties: false
 }
 export const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
+/** 저장된 필드 정의를 재귀적으로 읽는다. 기존에 Items·Properties가 없던 정의는 유지한다. */
+export function readOutputFields(value: unknown): OutputField[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isObject).map((field) => ({ name: String(field.name ?? ''), ...readOutputType(field) }))
+}
+function readOutputType(value: Record<string, unknown>): OutputType {
+  const type = FIELD_TYPES.includes(value.type as FieldType) ? value.type as FieldType : 'string'
+  return { type, description: String(value.description ?? ''),
+    ...(type === 'object' && Array.isArray(value.fields) ? { fields: readOutputFields(value.fields) } : {}),
+    ...(type === 'array' && isObject(value.items) ? { items: readOutputType(value.items) } : {}) }
+}
+
 export function schemaFromFields(fields: OutputField[]): OutputSchema {
+  if (!fields.length) throw new Error('출력 필드를 하나 이상 추가하세요')
+  return objectSchema(fields)
+}
+
+function objectSchema(fields: OutputField[]): OutputSchema {
   const names = fields.map((f) => f.name.trim())
-  if (!names.length) throw new Error('출력 필드를 하나 이상 추가하세요')
   if (names.some((name) => !name)) throw new Error('출력 필드 이름을 입력하세요')
   if (new Set(names).size !== names.length) throw new Error('출력 필드 이름은 겹칠 수 없습니다')
   if (fields.some((f) => !FIELD_TYPES.includes(f.type))) throw new Error('지원하지 않는 출력 필드 타입입니다')
   return {
     type: 'object',
-    properties: Object.fromEntries(fields.map((f, i) => [names[i], { type: f.type, description: f.description, ...(f.type === 'array' ? { items: {} } : {}) }])),
+    properties: Object.fromEntries(fields.map((field, i) => [names[i], valueSchema(field)])),
     required: names,
     additionalProperties: false
   }
+}
+
+function valueSchema(value: OutputType): OutputValueSchema {
+  if (!FIELD_TYPES.includes(value.type)) throw new Error('지원하지 않는 출력 필드 타입입니다')
+  return { type: value.type, description: value.description,
+    ...(value.type === 'object' && value.fields ? objectSchema(value.fields) : {}),
+    ...(value.type === 'array' ? { items: value.items ? valueSchema(value.items) : {} } : {}) }
+}
+
+function fieldsFromSchema(value: Record<string, unknown>, path: string): OutputField[] {
+  if (!isObject(value.properties) || value.additionalProperties !== false || !Array.isArray(value.required)) throw new Error(`${path}: Properties와 Required를 지정한 Object 구조가 필요합니다`)
+  const names = Object.keys(value.properties), required = value.required
+  if (required.length !== names.length || names.some((name) => !required.includes(name))) throw new Error(`${path}: 출력 구조의 필수 필드가 맞지 않습니다`)
+  return Object.entries(value.properties).map(([name, field]) => ({ name, ...typeFromSchema(field, `${path}.${name}`) }))
+}
+function typeFromSchema(value: unknown, path: string): OutputType {
+  if (!isObject(value) || !FIELD_TYPES.includes(value.type as FieldType)) throw new Error(`${path}: 지원하지 않는 출력 필드 타입입니다`)
+  const result: OutputType = { type: value.type as FieldType, description: typeof value.description === 'string' ? value.description : '' }
+  if (result.type === 'object' && (value.properties !== undefined || value.required !== undefined || value.additionalProperties !== undefined)) result.fields = fieldsFromSchema(value, path)
+  if (result.type === 'array' && value.items !== undefined) {
+    // 예전의 빈 Items({})는 내부 타입을 제한하지 않았다.
+    if (!isObject(value.items) || Object.keys(value.items).length) result.items = typeFromSchema(value.items, `${path}[]`)
+  }
+  return result
 }
 
 /** 저장된 데이터나 함수에서 온 계약도 같은 제한된 형식으로 검사한다. */
@@ -34,13 +83,7 @@ export function readOutputSchema(text: string): OutputSchema {
   let value: unknown
   try { value = JSON.parse(text) } catch { throw new Error('출력 구조가 올바른 JSON이 아닙니다') }
   if (!isObject(value) || value.type !== 'object' || !isObject(value.properties) || value.additionalProperties !== false || !Array.isArray(value.required)) throw new Error('출력 구조 노드의 Dictionary 형식을 연결하세요')
-  const fields = Object.entries(value.properties).map(([name, field]): OutputField => {
-    if (!isObject(field) || !FIELD_TYPES.includes(field.type as FieldType)) throw new Error(`${name}: 지원하지 않는 출력 필드 타입입니다`)
-    return { name, type: field.type as FieldType, description: typeof field.description === 'string' ? field.description : '' }
-  })
-  const schema = schemaFromFields(fields)
-  if (value.required.length !== schema.required.length || schema.required.some((key) => !(value.required as unknown[]).includes(key))) throw new Error('출력 구조의 필수 필드가 맞지 않습니다')
-  return schema
+  return schemaFromFields(fieldsFromSchema(value, 'output'))
 }
 
 export function parseJson(text: string): JsonValue {
@@ -61,13 +104,25 @@ export function validateOutput(text: string, schemaText: string): JsonObject {
   const schema = readOutputSchema(schemaText)
   const value = parseJson(text)
   if (!isObject(value)) throw new Error('출력은 Dictionary (JSON 객체)여야 합니다')
-  for (const key of schema.required) {
-    if (!Object.hasOwn(value, key)) throw new Error(`출력 필드 "${key}"가 없습니다`)
-    const actual = jsonType(value[key] as JsonValue), expected = schema.properties[key].type
-    if (actual !== expected) throw new Error(`출력 필드 "${key}": ${FIELD_TYPE_NAME[expected]}이 필요하지만 ${FIELD_TYPE_NAME[actual]}입니다`)
-  }
-  for (const key of Object.keys(value)) if (!Object.hasOwn(schema.properties, key)) throw new Error(`정의하지 않은 출력 필드 "${key}"가 있습니다`)
+  validateValue(value as JsonObject, schema, '')
   return value as JsonObject
+}
+
+function validateValue(value: JsonValue, schema: OutputValueSchema, path: string): void {
+  if (!schema.type) return
+  const actual = jsonType(value)
+  if (actual !== schema.type) throw new Error(`출력 필드 "${path}": ${FIELD_TYPE_NAME[schema.type]}이 필요하지만 ${FIELD_TYPE_NAME[actual]}입니다`)
+  if (schema.type === 'array' && Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => validateValue(item, schema.items!, `${path}[${index}]`))
+  }
+  if (schema.type === 'object' && isObject(value) && schema.properties) {
+    const childPath = (key: string) => path ? `${path}.${key}` : key
+    for (const key of schema.required ?? []) {
+      if (!Object.hasOwn(value, key)) throw new Error(`출력 필드 "${childPath(key)}"가 없습니다`)
+      validateValue(value[key] as JsonValue, schema.properties[key], childPath(key))
+    }
+    for (const key of Object.keys(value)) if (!Object.hasOwn(schema.properties, key)) throw new Error(`정의하지 않은 출력 필드 "${childPath(key)}"가 있습니다`)
+  }
 }
 
 export function structuredPrompt(prompt: string, schema: string): string {
@@ -110,6 +165,6 @@ export function fillSelections(text: string, resolve: (input: string) => string,
 export const toPointer = (path: string[]) => path.map((key) => '/' + key.replace(/~/g, '~0').replace(/\//g, '~1')).join('')
 export function fromPointer(pointer: string): string[] {
   if (!pointer) return []
-  if (!pointer.startsWith('/') || /~(?![01])/g.test(pointer)) throw new Error('필드 경로는 /people 또는 /people/0/name 형식으로 입력하세요')
+  if (!pointer.startsWith('/') || /~(?![01])/g.test(pointer)) throw new Error('필드 경로는 /result 또는 /items/0/value 형식으로 입력하세요')
   return pointer.slice(1).split('/').map((key) => key.replace(/~1/g, '/').replace(/~0/g, '~'))
 }

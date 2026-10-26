@@ -41,6 +41,8 @@ import {
 import { Badge, Empty, errorToast, toast, useDark } from '../ui'
 import { useWheelZoom } from '../cyZoom'
 import { defaultOutputFields, JsonTree, OutputFields } from '../StructuredData'
+import { PipelineOutput } from '../PipelineOutput'
+import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 
 cytoscape.use(edgehandles)
@@ -52,7 +54,7 @@ type OutPin = string | undefined
 const sameEdge = (a: PipeEdge, b: PipeEdge) => a.from === b.from && a.to === b.to && a.pin === b.pin && a.fromPort === b.fromPort && a.toPort === b.toPort
 const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort, e.toPort])
 const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
-const isPortNode = (n: PipeNode) => isAgent(n) || n.kind === 'template' || n.kind === 'foreach' || n.kind === 'add' || n.kind === 'if' || isLogic(n) || isFunctionBoundary(n)
+const isPortNode = (n: PipeNode) => isAgent(n) || n.kind === 'template' || n.kind === 'foreach' || n.kind === 'add' || n.kind === 'if' || n.kind === 'print' || isLogic(n) || isFunctionBoundary(n)
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
 type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[]; terminals: TerminalInfo[] }
 
@@ -71,6 +73,7 @@ const KIND_COLOR: Record<NodeKind, string> = {
   'function-output': '#a353b9',
   foreach: '#aa782b',
   if: '#aa782b', compare: '#bd475a', and: '#bd475a', or: '#bd475a', not: '#bd475a', boolean: '#bd475a', number: '#359878',
+  print: '#427eaa',
   complete: '#5a8f2e',
   terminal: '#2c8ba3',
   text: '#8a63d2',
@@ -130,6 +133,10 @@ function pinsOf(kind: NodeKind): Pin[] {
 }
 
 function functionGeometry(n: PipeNode, env: Env) {
+  if (n.kind === 'print') return { width: 260, height: 112, pins: [
+    { side: 'in', type: 'exec', dy: -10, label: '실행' }, { side: 'out', type: 'exec', dy: -10, label: '다음' },
+    { side: 'in', type: 'data', dy: 22, label: '출력할 값' }
+  ] as Pin[] }
   if (n.kind === 'if') return { width: 280, height: 128, pins: [
     { side: 'in', type: 'exec', dy: -18, label: '실행' },
     { side: 'in', type: 'data', dy: 20, id: IF_PORT.condition, shape: 'boolean', label: '조건 · Bool' },
@@ -255,7 +262,7 @@ function functionStyle(n: PipeNode, env: Env, color: string, bg: string) {
   const { pins, width, height } = functionGeometry(n, env)
   const style = pinStyle(pins, color, bg)
   const xml = (text: string) => text.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]!)
-  const heading = n.kind === 'compare' ? `${nodeName(n)} · ${COMPARE_OPS[n.operation ?? 'eq']}` : n.kind === 'template' ? `${nodeName(n)} · ${env.library.find((p) => p.id === n.ref)?.title ?? '함수 선택'}` : isAgent(n) || n.kind === 'add' || n.kind === 'if' || isLogic(n) ? `${nodeName(n)}${nodeName(n).startsWith(KIND_LABEL[n.kind]) ? '' : ` · ${KIND_LABEL[n.kind]}`}` : KIND_LABEL[n.kind]
+  const heading = n.kind === 'compare' ? `${nodeName(n)} · ${COMPARE_OPS[n.operation ?? 'eq']}` : n.kind === 'template' ? `${nodeName(n)} · ${env.library.find((p) => p.id === n.ref)?.title ?? '함수 선택'}` : isAgent(n) || n.kind === 'add' || n.kind === 'if' || n.kind === 'print' || isLogic(n) ? `${nodeName(n)}${nodeName(n).startsWith(KIND_LABEL[n.kind]) ? '' : ` · ${KIND_LABEL[n.kind]}`}` : KIND_LABEL[n.kind]
   const labels = pins.map((p) => `<text x="${p.side === 'in' ? 14 : width - 14}" y="${height / 2 + p.dy + 4}" text-anchor="${p.side === 'in' ? 'start' : 'end'}" font-size="12" fill="${pinColor(p, color)}">${xml(short(p.label ?? '', n.kind === 'template' ? 16 : 26))}</text>`).join('')
   const svg = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><text x="${width / 2}" y="21" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="12" fill="${color}">${xml(short(heading, 36))}</text><path d="M12 30H${width - 12}" stroke="${color}" opacity=".2"/>${labels}</svg>`)}`
   return {
@@ -306,6 +313,7 @@ function useRuns(): Map<string, RunState> {
 
 /** IN-F11~F13: 터미널 작업을 노드로 잇는 작업 그래프 (블루프린트처럼 실행 선과 데이터 선). */
 export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: TerminalInfo[]; onShowTerminal: (termId: string) => void }) {
+  const layout = usePipelineLayout()
   const [list, setList] = useState<Pipeline[] | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [skills, setSkills] = useState<SkillItem[]>([])
@@ -541,7 +549,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const templates = list.filter((p) => p.template)
   const usableTemplates = templates.filter((t) => t.id !== draft?.id)
   return (
-    <div className="pipe-layout">
+    <div className="pipe-layout" style={layout.style}>
       <div className="pipe-list">
         <div className="pipe-list-head">
           작업 그래프
@@ -569,6 +577,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
         ))}
       </div>
 
+      <PaneDivider side="before" value={layout.sizes.list} min={140} max={480} initial={190} label="그래프 목록 너비" onChange={(size) => layout.resize('list', size)} />
       {!draft && <Empty>작업 그래프가 없습니다. 왼쪽 "+"로 만드세요.</Empty>}
       {draft && (
         <div className="pipe-main">
@@ -580,6 +589,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               </label>
             </div>
             <div className="row" style={{ margin: 0 }}>
+              <button className="ghost" title="패널 크기 초기화" onClick={layout.reset}>레이아웃 초기화</button>
               {running ? (
                 <button className="danger" onClick={() => run && void api.stopPipeline(run.runId)}>
                   ■ 중지
@@ -616,6 +626,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               할 일 완료
             </button>
             <span className="small muted">유틸리티</span>
+            <button disabled={running} onClick={() => addNode('print')} title="실행 시 입력값을 출력 로그에 표시합니다">Print</button>
             <button disabled={running} onClick={() => addNode('foreach')} title="리스트를 한 항목씩 순서대로 처리합니다">For Each</button>
             <button disabled={running} onClick={() => addNode('if')} title="Bool 조건에 따라 True 또는 False 경로를 실행합니다">If</button>
             <select aria-label="비교 노드 추가" value="" disabled={running} onChange={(e) => e.target.value && addNode('compare', { operation: e.target.value as PipeNode['operation'] })}>
@@ -696,6 +707,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
           )}
           {unused.length > 0 && <div className="small muted">시작에서 이어지지 않아 실행되지 않는 노드: {unused.join(', ')}</div>}
           <div className="pipe-body">
+            <div className="pipe-workspace">
             <Canvas
               draft={draft}
               env={env}
@@ -734,6 +746,9 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                 />
               )}
             </Canvas>
+            <PipelineOutput key={draft.id} run={run} nodes={draft.nodes} onSelect={(node) => setSel({ node })} height={layout.sizes.output} onResize={(size) => layout.resize('output', size)} />
+            </div>
+            <PaneDivider className="pipe-panel-divider" side="after" value={layout.sizes.panel} min={240} max={760} initial={340} label="속성 패널 너비" onChange={(size) => layout.resize('panel', size)} />
             <div className="pipe-panel">
               {connectFrom && <div className="banner warn small">{nm(connectFrom)}에서 이을 노드를 누르세요 (빈 곳을 누르면 취소)</div>}
               {!selNode && !selEdge && <Help empty={!draft.nodes.length} />}
@@ -802,6 +817,7 @@ const KIND_WORDS: Record<NodeKind, string> = {
   'function-output': '함수 출력 output',
   foreach: 'for foreach for each loop 반복 순회 유틸 리스트 배열 항목 인덱스',
   if: 'if branch 조건 분기 참 거짓 true false bool',
+  print: 'print log debug 출력 로그 응답 중간값 디버그 프린트 표시',
   compare: 'compare 비교 계산 같음 다름 크다 작다 == != > >= < <=',
   and: 'and 논리 모두 참 &&', or: 'or 논리 하나라도 참 ||', not: 'not 논리 부정 반전 !',
   boolean: 'bool boolean 불리언 참 거짓 true false 변환', number: 'number 숫자 수 변환',
@@ -831,6 +847,7 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
     ...AGENT_KINDS.map((k) => base(k, '실행')),
     base('complete', '실행'),
     base('foreach', '유틸리티'),
+    base('print', '유틸리티'),
     base('if', '유틸리티'),
     ...Object.entries(COMPARE_OPS).map(([op, label]): MenuItem => ({ ...base('compare', '비교'), key: `compare:${op}`, label, extra: { operation: op as PipeNode['operation'] } })),
     ...(['and', 'or', 'not'] as const).map((kind) => base(kind, '논리')),
@@ -975,6 +992,7 @@ function Help({ empty }: { empty: boolean }) {
       <p>
         <b>구조화된 출력</b>: Claude·Codex에서 출력 형식을 고르거나 출력 구조 노드를 연결해 필드 이름·타입·작성 규칙을 지정하세요. 응답을 Dictionary로 연결하면 결과를 펼쳐 보고 원하는 키·배열 인덱스를 JSON 필드 노드로 꺼낼 수 있습니다. 응답이 구조와 다르면 뒤 작업을 멈춥니다.
       </p>
+      <p><b>Print</b>: 확인할 값을 데이터 핀에 연결하고 실행 선도 이으세요. 실행할 때의 값이 아래 출력 로그에 남고 다음 작업으로 이어집니다. 로그에서 노드를 선택하거나 내용을 복사할 수 있습니다.</p>
       <p>
         <b>잇기</b>: 오른쪽 출력 핀을 눌러 다른 노드까지 끌어 놓으세요. 빈 곳에 놓으면 이어 붙일 노드를 검색합니다. 선을 누르고 Delete로 끊습니다.
       </p>
@@ -1180,6 +1198,13 @@ function NodePanel({
   return (
     <>
       <NameField key={node.id} name={nodeName(node)} kind={KIND_LABEL[node.kind]} disabled={locked || isFunctionBoundary(node)} onRename={onRename} />
+      {node.kind === 'print' && <div className="field">
+        <label>출력할 값</label>
+        {draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e))
+          ? <div className="small muted">연결된 값을 실행 시 출력 로그에 표시합니다.</div>
+          : <textarea aria-label="Print 출력할 값" rows={3} value={node.text} disabled={locked} placeholder="직접 입력하거나 데이터 핀에 값을 연결하세요" onChange={(e) => onPatch({ text: e.target.value })} />}
+        <div className="small muted">텍스트·리스트·JSON·Bool·숫자를 확인할 수 있습니다. 실행 핀을 연결하면 출력한 뒤 다음 작업으로 이어집니다.</div>
+      </div>}
       {node.kind === 'if' && <>
         <div className="small muted">Bool 조건이 참이면 True, 거짓이면 False 경로로 실행합니다. 비교·논리 노드의 빨간 출력 핀을 조건에 연결하세요.</div>
         <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
@@ -1214,7 +1239,7 @@ function NodePanel({
       </div>}
       {node.kind === 'property' && <div className="field">
         <label>필드 경로</label>
-        <input aria-label="JSON 필드 경로" value={node.pointer ?? ''} disabled={locked} placeholder="/people 또는 /people/0/name" onChange={(e) => onPatch({ pointer: e.target.value })} />
+        <input aria-label="JSON 필드 경로" value={node.pointer ?? ''} disabled={locked} placeholder="/result 또는 /items/0/value" onChange={(e) => onPatch({ pointer: e.target.value })} />
         <div className="small muted">연결된 원본에서 해당 키나 배열 인덱스를 읽습니다. 빈 경로는 전체 값입니다. 키의 /는 ~1, ~는 ~0으로 적으세요.</div>
       </div>}
       {jsonResult && <div className="field pipe-json-result">
@@ -1253,8 +1278,8 @@ function NodePanel({
               {st.message && <span className="small muted">{st.message}</span>}
               {st.termId && tabs.some((t) => t.id === st.termId) && <button onClick={() => onShowTerminal(st.termId!)}>터미널 보기</button>}
               {st.output !== undefined && (
-                <details className="pipe-preview" style={{ width: '100%' }}>
-                  <summary className="small">{isAgent(node) ? '최종 응답' : '명령 출력 (데이터 출력으로 넘긴 글)'}</summary>
+                <details className="pipe-preview" open={node.kind === 'print'} style={{ width: '100%' }}>
+                  <summary className="small">{node.kind === 'print' ? 'Print 출력' : isAgent(node) ? '최종 응답' : '명령 출력 (데이터 출력으로 넘긴 글)'}</summary>
                   <pre>{st.output || '(출력 없음)'}</pre>
                 </details>
               )}
@@ -1529,6 +1554,7 @@ function NodePanel({
               </option>
             ))}
             <option value="complete">{KIND_LABEL.complete}</option>
+            <option value="print">Print</option>
           </select>
         )}
         <button className="danger" disabled={locked || isFunctionBoundary(node)} onClick={onRemove}>
@@ -1760,7 +1786,10 @@ function Canvas({
     // 확인용: 개발 도구나 스모크 확인에서 그래프 상태를 볼 수 있게 노출
     ;(window as unknown as { __orbitPipe?: Core }).__orbitPipe = instance
     fitted.current = null
+    const resize = new ResizeObserver(() => instance.resize())
+    resize.observe(ref.current)
     return () => {
+      resize.disconnect()
       instance.destroy()
       cy.current = null
     }

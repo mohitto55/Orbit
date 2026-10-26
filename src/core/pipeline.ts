@@ -22,7 +22,7 @@ import { fillSelections, fromPointer, isObject, parseJson, readOutputSchema, sch
  * spec·feature·ac: 도메인의 기능 명세 / 그 안의 기능 하나 / 기능의 수용 기준 하나 (실행할 때마다 명세의 지금 내용을 읽는다).
  *   명세 노드에서 기능 노드를, 기능 노드에서 수용 기준 노드를, 리스트 노드에서 항목을 텍스트 노드로 꺼낼 수 있다 (innerValues).
  */
-export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'foreach', 'if', 'compare', 'and', 'or', 'not', 'boolean', 'number', 'complete', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
+export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'foreach', 'if', 'print', 'compare', 'and', 'or', 'not', 'boolean', 'number', 'complete', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
 
 export const DATA_KINDS: NodeKind[] = ['compare', 'and', 'or', 'not', 'boolean', 'number', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac']
@@ -532,6 +532,10 @@ export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['
     if ((a.kind === 'template' || a.kind === 'function-input' || a.kind === 'foreach') && !source) return '출력 변수를 고르세요'
     if (ports.fromPort && !source) return '존재하지 않는 출력 변수입니다'
     const shape = source?.type ?? dataShape(a)
+    if (b.kind === 'print') {
+      if (shape === 'terminal' || shape === 'schema') return 'Print에는 텍스트·리스트·JSON·Bool·숫자 값을 연결하세요'
+      if (incomingData(p, to).some((e) => e.from !== from || e.fromPort !== ports.fromPort)) return '출력할 값은 하나만 연결할 수 있습니다'
+    }
     if (b.kind === 'item' && shape !== 'list') return '리스트 항목에는 리스트를 연결하세요'
     if (b.kind === 'feature' && a.kind !== 'spec') return '기능에는 원본 기능 명세를 연결하세요'
     if (b.kind === 'ac' && a.kind !== 'feature') return '수용 기준에는 원본 기능을 연결하세요'
@@ -595,6 +599,7 @@ export const KIND_NAME: Record<NodeKind, string> = {
   'function-output': '함수 Output',
   foreach: 'For Each',
   if: 'If', compare: '비교', and: 'AND', or: 'OR', not: 'NOT', boolean: 'Bool', number: '숫자',
+  print: 'Print',
   complete: '할 일 완료',
   terminal: '터미널',
   schema: '출력 구조',
@@ -617,6 +622,11 @@ export function nodeInput(p: Graph, id: string, env: Env = {}): string {
   const n = byId(p, id)
   if (!n) return ''
   if (n.kind === 'if') return n.condition ?? calculate('boolean', 'boolean', [inputValue(p, n, functionParams(n, env).inputs[0], env, [id])])
+  if (n.kind === 'print') {
+    const edges = incomingData(p, id)
+    if (edges.length > 1) throw new Error(`${nodeName(n)}: 출력할 값은 하나만 연결할 수 있습니다`)
+    return edges.length ? edgeItems(p, edges[0], env).join('\n\n') : resolveInputs(n.text, p, env)
+  }
   return [resolveInputs(n.text, p, env), ...incomingData(p, id).filter((e) => !['terminal', 'schema'].includes(edgeShape(p, e, env)) && e.toPort !== AGENT_PORT.terminal && e.toPort !== AGENT_PORT.schema).map((e) => edgeItems(p, e, env).join('\n\n'))]
     .map((t) => t.trim())
     .filter(Boolean)
@@ -973,7 +983,7 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
     if (n.kind === 'complete' && !completeTargets(p, n.id).length) out.push(`${who}: 완료할 할 일을 고르거나 할 일 노드를 이으세요`)
     if (isData(n) || n.kind === 'complete') continue
     try {
-      if (n.kind !== 'template' && !nodeInput(p, n.id, env)) out.push(`${who}: 내용이 비어 있습니다`)
+      if (n.kind !== 'template' && n.kind !== 'print' && !nodeInput(p, n.id, env)) out.push(`${who}: 내용이 비어 있습니다`)
     } catch (e) {
       out.push(e instanceof Error ? e.message : String(e))
     }
@@ -986,7 +996,7 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
     return [e instanceof Error ? e.message : String(e)]
   }
   for (const n of flat.nodes) {
-    if (n.kind !== 'complete' && n.kind !== 'if' && !n.text.trim()) out.push(`${nodeName(n)}: 내용이 비어 있습니다`)
+    if (n.kind !== 'complete' && n.kind !== 'if' && n.kind !== 'print' && !n.text.trim()) out.push(`${nodeName(n)}: 내용이 비어 있습니다`)
     const input = n.terminalInput
     if (!input) continue
     const terminal = 'tabId' in input ? env.terminals?.find((t) => t.id === input.tabId) : byId(flat, input.nodeId)
@@ -1015,7 +1025,7 @@ function continueProblems(p: Graph): string[] {
   const out: string[] = []
   const taken = new Map<string, string>()
   for (const n of p.nodes) {
-    if (n.terminal !== 'continue' || n.terminalInput || n.kind === 'complete' || n.kind === 'if') continue
+    if (n.terminal !== 'continue' || n.terminalInput || n.kind === 'complete' || n.kind === 'if' || n.kind === 'print') continue
     const from = continueFrom(p, n)
     if (!from) {
       out.push(`${nodeName(n)}: 이어서 실행하려면 같은 종류(${n.kind})의 앞 노드가 있어야 합니다`)
@@ -1033,13 +1043,16 @@ export type NodeStatus = 'waiting' | 'starting' | 'running' | 'done' | 'failed' 
 
 export interface NodeRun {
   name?: string
+  kind?: NodeKind
   sourceIds?: string[]
   status: NodeStatus
   termId?: string
   /** 셸 명령의 종료 코드 */
   code?: number
-  /** 셸 명령의 출력 (데이터 출력 핀으로 뒤 노드에 넘긴다) */
+  /** 에이전트 응답·셸 출력·Print 값. 출력 로그와 뒤 노드에서 읽는다. */
   output?: string
+  outputAt?: string
+  outputOrder?: number
   /** 출력 계약을 통과한 Dictionary. */
   structuredOutput?: JsonObject
   message?: string
@@ -1086,6 +1099,7 @@ export class PipelineRunner {
   /** 터미널 → 지금 그 터미널에서 실행 중인 노드 */
   private owner = new Map<string, { runId: string; nodeId: string }>()
   private seq = 0
+  private outputSeq = 0
 
   constructor(private deps: RunnerDeps) {}
 
@@ -1115,7 +1129,7 @@ export class PipelineRunner {
       pipelineId: pipe.id,
       title: pipe.title,
       status: 'running',
-      nodes: Object.fromEntries(pipe.nodes.map((n) => [n.id, { status: 'waiting' as NodeStatus, name: nodeName(n), sourceIds: n.sourceIds ?? [n.id] }])),
+      nodes: Object.fromEntries(pipe.nodes.map((n) => [n.id, { status: 'waiting' as NodeStatus, name: nodeName(n), kind: n.kind, sourceIds: n.sourceIds ?? [n.id] }])),
       started: new Date(this.now()).toISOString(),
       pipe: JSON.parse(JSON.stringify(pipe)),
       sentAt: {}
@@ -1160,6 +1174,15 @@ export class PipelineRunner {
     const st = run.nodes[node.id]
     st.status = 'starting'
     try {
+      if (node.kind === 'print') {
+        this.recordOutput(st, fillOutputs(node.text, (id) => {
+          const output = run.nodes[id]?.output
+          if (output === undefined) throw new Error(`${id}: 앞 작업의 응답을 받지 못했습니다`)
+          return output
+        }))
+        st.status = 'done'
+        return
+      }
       if (node.kind === 'if') {
         st.conditionResult = boolValue(fillOutputs(node.condition ?? nodeInput(run.pipe, node.id), (id) => {
           const output = run.nodes[id]?.output
@@ -1234,6 +1257,10 @@ export class PipelineRunner {
     this.publish(run)
   }
 
+  private recordOutput(node: NodeRun, output: string): void {
+    Object.assign(node, { output, outputAt: new Date(this.now()).toISOString(), outputOrder: ++this.outputSeq })
+  }
+
   private finish(termId: string, ok: boolean, patch: Partial<NodeRun> = {}, manual = false): RunState | null {
     const o = this.owner.get(termId)
     if (!o) return null
@@ -1245,6 +1272,7 @@ export class PipelineRunner {
     this.deps.endOutputCapture?.(termId)
     this.owner.delete(termId)
     Object.assign(st, patch, { status: ok ? 'done' : 'failed' })
+    if (patch.output !== undefined) this.recordOutput(st, patch.output)
     this.tick(run, ok ? termId : undefined)
     return this.publish(run)
   }
