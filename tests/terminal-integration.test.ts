@@ -41,10 +41,11 @@ it.skipIf(process.platform !== 'win32').each(['plain', "한글 폴더's"])('[DM-
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
   const env = { ...process.env, ...integration.env, [pathKey]: `${bin}${path.delimiter}${process.env[pathKey] ?? ''}`, ORBIT_ARG_CAPTURE: capture, ORBIT_ARG_RESULT: result }
   const script = `${integration.init}\ncodex --no-daemon -c ${shellQuote(integration.codexNotify)}`
-  execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: root, stdio: 'pipe' })
+  // Windows CI에서 첫 PowerShell 기동은 기본 테스트 제한(5초)보다 오래 걸릴 수 있다.
+  execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: root, stdio: 'pipe', timeout: 15000 })
   const args = JSON.parse(await fs.readFile(result, 'utf8')) as string[]
   expect(args.filter((arg) => arg.startsWith('notify='))).toEqual([integration.codexNotify, integration.codexNotify])
-})
+}, 20000)
 
 it('[TE-F03-AC1] 한 번의 폴링 사이에 끝난 작업과 다음 작업의 시작 신호를 시간순으로 받는다', async () => {
   const dir = await tempDir('orbit-activity-signals-')
