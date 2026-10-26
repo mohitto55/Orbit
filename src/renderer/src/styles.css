@@ -421,6 +421,13 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 .terminals > .row:first-child { margin-bottom: 12px; }
 .term-group-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .term-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.term-group-wrap { position: relative; display: inline-flex; align-items: center; gap: 2px; border-radius: 6px; }
+.term-group-wrap[draggable='true'], .term-group-wrap[draggable='true'] > .term-group { cursor: grab; }
+.term-group-wrap.drop-inside { outline: 2px solid var(--accent); outline-offset: 2px; }
+.term-tab.drop-before::before, .term-group-wrap.drop-before::before,
+.term-tab.drop-after::after, .term-group-wrap.drop-after::after { content: ''; position: absolute; top: 3px; bottom: 3px; width: 3px; border-radius: 2px; background: var(--accent); pointer-events: none; z-index: 2; }
+.term-tab.drop-before::before, .term-group-wrap.drop-before::before { left: -2px; }
+.term-tab.drop-after::after, .term-group-wrap.drop-after::after { right: -2px; }
 .term-group { display: inline-flex; align-items: center; gap: 8px; max-width: 240px; }
 .term-group > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .term-group.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
@@ -430,7 +437,7 @@ button, .tree-item, .seg button, .tabs button, input, select, textarea, .side na
 .term-group-tools label { display: inline-flex; align-items: center; gap: 8px; }
 .term-group-tools select { width: 170px; }
 .term-tabs { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 2px; padding: 0 6px; max-height: 112px; overflow-y: auto; }
-.term-tab { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 5px 8px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 13px; }
+.term-tab { position: relative; display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 5px 8px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 13px; }
 .term-tab[draggable='true'] { cursor: grab; }
 .term-tab .term-tab-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 4px; color: inherit; font: inherit; border: 0; background: none; }
 .term-tab-select > span:nth-child(2) { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

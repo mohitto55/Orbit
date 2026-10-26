@@ -61,6 +61,27 @@ async function saveName(value: string) {
   })
   await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
 }
+
+function dragEvent(type: string, transfer: DataTransfer, clientX = 110) {
+  const event = new DragEvent(type, { bubbles: true, cancelable: true })
+  // happy-dom의 DragEvent는 생성자에 전달한 포인터 좌표·DataTransfer를 보존하지 않는다.
+  Object.defineProperties(event, { dataTransfer: { value: transfer }, clientX: { value: clientX } })
+  return event
+}
+
+async function reorderByDrag(source: Element, target: Element, position: 'before' | 'after') {
+  vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 100, 30))
+  const transfer = new DataTransfer()
+  const x = position === 'before' ? 110 : 190
+  await act(async () => source.dispatchEvent(dragEvent('dragstart', transfer, x)))
+  const over = dragEvent('dragover', transfer, x)
+  await act(async () => target.dispatchEvent(over))
+  expect(over.defaultPrevented).toBe(true)
+  expect(target.classList.contains(`drop-${position}`)).toBe(true)
+  await act(async () => target.dispatchEvent(dragEvent('drop', transfer, x)))
+  await act(async () => source.dispatchEvent(dragEvent('dragend', transfer, x)))
+  expect(host.querySelector('.drop-before, .drop-after, .drop-inside')).toBeNull()
+}
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -95,6 +116,15 @@ beforeEach(() => {
       if (name === 'termCreateGroup') { const group = { id: `group-${groups.length + 1}`, title: String(args[0]) }; groups.push(group); activeGroup = group.id; reconcile(); return layout() }
       if (name === 'termRenameGroup') { groups.find((g) => g.id === args[0])!.title = String(args[1]); return layout() }
       if (name === 'termMoveToGroup') { saved.find((tab) => tab.id === args[0])!.groupId = args[1] === null ? undefined : String(args[1]); reconcile(); return layout() }
+      if (name === 'termReorderTab' || name === 'termReorderGroup') {
+        const move = <T extends { id: string }>(items: T[]) => {
+          const [item] = items.splice(items.findIndex((entry) => entry.id === args[0]), 1)
+          items.splice(items.findIndex((entry) => entry.id === args[1]) + (args[2] === 'after' ? 1 : 0), 0, item)
+        }
+        if (name === 'termReorderTab') move(saved)
+        else move(groups)
+        return layout()
+      }
       if (name === 'termDeleteGroup') {
         groups = groups.filter((g) => g.id !== args[0]); saved.forEach((tab) => { if (tab.groupId === args[0]) delete tab.groupId })
         if (activeGroup === args[0]) activeGroup = 'ungrouped'
@@ -259,7 +289,7 @@ it('[TE-F02-AC1] [TE-F02-AC2] [TE-F02-AC5] 그룹 생성·선택 이동·이름 
   expect(host.querySelector('.term-tab.on')!.textContent).toContain('결제 작업')
   await act(async () => listeners.get('term-data')?.({ id: second.id, data: '숨긴 셸의 새 출력', sequence: 1 }))
   expect(writes).toContain('숨긴 셸의 새 출력')
-  await click('그룹 이름 변경')
+  await click('서버 작업 그룹 이름 변경')
   await saveName('백엔드')
   expect(host.querySelector('.term-group.on')!.textContent).toContain('백엔드')
   expect(saved[0].title).toBe(first.title)
@@ -312,6 +342,85 @@ it('[TE-F02-AC2] [TE-F02-AC3] [TE-F02-AC4] 선택한 그룹에서 새 탭을 열
   expect(host.querySelectorAll('.term-tab')).toHaveLength(2)
   expect(host.querySelector('.term-tab.on')!.textContent).toContain('확인용 셸')
   expect(calls).not.toContain('termKill')
+})
+
+it('[TE-F02-AC7] 드래그 위치 앞뒤에 탭을 넣으며 선택·소속·터미널 화면을 유지한다', async () => {
+  groups = [{ id: 'group-server', title: '서버' }, { id: 'group-client', title: '클라이언트' }]
+  saved[0].groupId = groups[0].id; saved[1].groupId = groups[1].id
+  await mount()
+  const terminal = host.querySelector('.term-host')
+  const outputBefore = [...writes]
+  const firstTab = host.querySelectorAll('.term-tab')[0]
+  const secondTab = host.querySelectorAll('.term-tab')[1]
+  await reorderByDrag(secondTab, firstTab, 'before')
+  expect([...host.querySelectorAll('.term-tab-select')].map((button) => button.textContent)).toEqual(['확인용 셸클라이언트', '결제 작업서버'])
+  await reorderByDrag(secondTab, firstTab, 'after')
+  expect(saved.map((tab) => tab.id)).toEqual([first.id, second.id])
+  expect(saved.map((tab) => tab.groupId)).toEqual(['group-server', 'group-client'])
+  expect(active).toBe(first.id)
+  expect(host.querySelector('.term-host')).toBe(terminal)
+  expect(writes).toEqual(outputBefore)
+  expect(disposals).not.toHaveBeenCalled()
+  expect(calls.filter((name) => name === 'termReorderTab')).toHaveLength(2)
+  expect(calls).not.toContain('termMoveToGroup')
+  await reorderByDrag(secondTab, firstTab, 'before')
+  await act(async () => root.unmount())
+  await mount()
+  expect(host.querySelector('.term-tab-select')?.textContent).toContain('확인용 셸')
+  expect(host.querySelector('.term-tab.on')?.textContent).toContain('결제 작업')
+})
+
+it('[TE-F02-AC1] [TE-F02-AC8] 그룹을 앞뒤로 정렬하고 선택하지 않은 그룹도 연필 버튼으로 이름을 바꾼다', async () => {
+  groups = [{ id: 'group-server', title: '서버' }, { id: 'group-client', title: '클라이언트' }, { id: 'group-docs', title: '문서' }]
+  saved[0].groupId = groups[0].id; saved[1].groupId = groups[1].id; activeGroup = groups[0].id
+  await mount()
+  const terminal = host.querySelector('.term-host')
+  const outputBefore = [...writes]
+  const wrappers = [...host.querySelectorAll('.term-group-wrap')]
+  expect(wrappers.slice(0, 2).every((group) => group.getAttribute('draggable') === 'false')).toBe(true)
+  await reorderByDrag(wrappers[4], wrappers[2], 'before')
+  expect([...host.querySelectorAll('.term-group')].map((button) => button.textContent)).toEqual(['전체2', '미분류0', '문서0', '서버1', '클라이언트1'])
+  await reorderByDrag(wrappers[4], wrappers[3], 'after')
+  await click('클라이언트 그룹 이름 변경')
+  await saveName('프런트엔드')
+  expect(groups.map((group) => group.title)).toEqual(['서버', '프런트엔드', '문서'])
+  expect(activeGroup).toBe('group-server')
+  expect(active).toBe(first.id)
+  expect(host.querySelector('.term-host')).toBe(terminal)
+  expect(writes).toEqual(outputBefore)
+  expect(disposals).not.toHaveBeenCalled()
+  expect(calls).not.toContain('termSelectGroup')
+  expect(calls.filter((name) => name === 'termReorderGroup')).toHaveLength(2)
+  await act(async () => root.unmount())
+  await mount()
+  expect([...host.querySelectorAll('.term-group')].map((button) => button.textContent)).toEqual(['전체2', '미분류0', '서버1', '프런트엔드1', '문서0'])
+})
+
+it('[TE-F02-AC7] [TE-F02-AC8] 취소·자기 자신·기본 그룹·다른 종류에 놓으면 순서를 바꾸지 않는다', async () => {
+  groups = [{ id: 'group-server', title: '서버' }, { id: 'group-client', title: '클라이언트' }]
+  await mount()
+  const wrappers = [...host.querySelectorAll('.term-group-wrap')]
+  const tab = host.querySelector('.term-tab')!
+  const transfer = new DataTransfer()
+  await act(async () => wrappers[3].dispatchEvent(dragEvent('dragstart', transfer)))
+  await act(async () => wrappers[2].dispatchEvent(dragEvent('dragover', transfer)))
+  expect(host.querySelector('.drop-after')).not.toBeNull()
+  await act(async () => wrappers[3].dispatchEvent(dragEvent('dragend', transfer)))
+  expect(host.querySelector('.drop-after')).toBeNull()
+  for (const target of [wrappers[0], wrappers[1], wrappers[3], tab]) {
+    await act(async () => wrappers[3].dispatchEvent(dragEvent('dragstart', transfer)))
+    const over = dragEvent('dragover', transfer)
+    await act(async () => target.dispatchEvent(over))
+    expect(over.defaultPrevented).toBe(false)
+    await act(async () => target.dispatchEvent(dragEvent('drop', transfer)))
+  }
+  await act(async () => tab.dispatchEvent(dragEvent('dragstart', transfer)))
+  await act(async () => tab.dispatchEvent(dragEvent('drop', transfer)))
+  expect(groups.map((group) => group.id)).toEqual(['group-server', 'group-client'])
+  expect(saved.map((item) => item.id)).toEqual([first.id, second.id])
+  expect(calls).not.toContain('termReorderTab')
+  expect(calls).not.toContain('termReorderGroup')
+  expect(calls).not.toContain('termMoveToGroup')
 })
 
 it.each(['codex', 'claude'] as const)('%s에서 Ctrl/Shift+Enter는 한 번만 줄바꿈하고 일반 Enter·붙여넣기·한글 조합은 가로채지 않는다', async (kind) => {

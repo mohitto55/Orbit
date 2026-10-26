@@ -20,7 +20,7 @@ import { ensureModelSection } from '../core/model'
 import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import type { TerminalKind } from '../core/terminal'
-import { TerminalWorkspace } from '../core/terminalWorkspace'
+import { TerminalWorkspace, type TerminalOrderPosition } from '../core/terminalWorkspace'
 import { readSessionTitle } from '../core/sessionTitles'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
@@ -475,6 +475,8 @@ export function createApi(deps: ApiDeps) {
     async termRenameGroup(id: string, title: string) { return (await terms()).renameGroup(id, title) },
     async termDeleteGroup(id: string) { return (await terms()).deleteGroup(id) },
     async termMoveToGroup(id: string, groupId: string | null) { return (await terms()).moveToGroup(id, groupId) },
+    async termReorderTab(id: string, targetId: string, position: TerminalOrderPosition) { return (await terms()).reorderTab(id, targetId, position) },
+    async termReorderGroup(id: string, targetId: string, position: TerminalOrderPosition) { return (await terms()).reorderGroup(id, targetId, position) },
     async termRename(id: string, title: string) {
       return (await terms()).rename(id, title)
     },

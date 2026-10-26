@@ -5,12 +5,15 @@ import '@xterm/xterm/css/xterm.css'
 import { api, on } from '../api'
 import { Empty, Modal, errorToast } from '../ui'
 import type { TerminalActivity, TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
-import type { TerminalGroup, TerminalLayout } from '../../../core/terminalWorkspace'
+import type { TerminalGroup, TerminalLayout, TerminalOrderPosition } from '../../../core/terminalWorkspace'
 import PipelineEditor from './Pipelines'
 
 interface Output { id: string; data: string; sequence: number }
 type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
 const TAB_DRAG_TYPE = 'application/x-orbit-terminal'
+const GROUP_DRAG_TYPE = 'application/x-orbit-terminal-group'
+type DragItem = { kind: 'tab' | 'group'; id: string }
+type DropTarget = DragItem & { position: TerminalOrderPosition | 'inside' }
 const ACTIVITY_LABEL: Record<TerminalActivity, string> = { idle: '기본 상태', working: '작업 중', completed: '작업 완료 · 미확인' }
 
 function mergeActivity<T extends TerminalInfo>(info: T, previous?: TerminalInfo): T {
@@ -40,6 +43,8 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [foreground, setForeground] = useState(() => document.visibilityState !== 'hidden' && document.hasFocus())
   const area = useRef<HTMLDivElement>(null)
   const tabList = useRef<HTMLDivElement>(null)
+  const dragged = useRef<DragItem | null>(null)
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
   const pending = useRef(new Map<string, Output[]>()).current
@@ -69,11 +74,54 @@ export default function Terminals({ visible }: { visible: boolean }) {
     finally { if (mounted.current) setUpdating(false) }
   }
 
-  function dropTab(event: DragEvent<HTMLButtonElement>, groupId: string | null) {
-    event.preventDefault()
-    const id = event.dataTransfer.getData(TAB_DRAG_TYPE)
-    if (tabs.some((tab) => tab.id === id)) void changeLayout(() => api.termMoveToGroup(id, groupId))
+  function startDrag(event: DragEvent<HTMLElement>, kind: DragItem['kind'], id: string) {
+    if (busy || (event.target instanceof Element && event.target.closest('.icon'))) { event.preventDefault(); return }
+    dragged.current = { kind, id }
+    setDropTarget(null)
+    event.dataTransfer.setData(kind === 'tab' ? TAB_DRAG_TYPE : GROUP_DRAG_TYPE, id)
+    event.dataTransfer.effectAllowed = 'move'
   }
+
+  function finishDrag() {
+    dragged.current = null
+    setDropTarget(null)
+  }
+
+  function dropAt(event: DragEvent<HTMLElement>, kind: DragItem['kind'], id: string): DropTarget | null {
+    const source = dragged.current
+    if (busy || !source) return null
+    if (source.kind === 'tab' && kind === 'group') return id === 'all' ? null : { kind, id, position: 'inside' }
+    if (source.kind !== kind || source.id === id || (kind === 'group' && !groups.some((group) => group.id === id))) return null
+    const rect = event.currentTarget.getBoundingClientRect()
+    return { kind, id, position: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }
+  }
+
+  function dragOver(event: DragEvent<HTMLElement>, kind: DragItem['kind'], id: string) {
+    const target = dropAt(event, kind, id)
+    if (!target) { setDropTarget(null); return }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDropTarget((previous) => previous?.kind === target.kind && previous.id === target.id && previous.position === target.position ? previous : target)
+  }
+
+  function dragLeave(event: DragEvent<HTMLElement>) {
+    if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropTarget(null)
+  }
+
+  function drop(event: DragEvent<HTMLElement>, kind: DragItem['kind'], id: string) {
+    const source = dragged.current
+    const target = dropAt(event, kind, id)
+    finishDrag()
+    if (!source || !target || event.dataTransfer.getData(source.kind === 'tab' ? TAB_DRAG_TYPE : GROUP_DRAG_TYPE) !== source.id) return
+    event.preventDefault()
+    if (target.position === 'inside') void changeLayout(() => api.termMoveToGroup(source.id, id === 'ungrouped' ? null : id))
+    else {
+      const position = target.position
+      void changeLayout(() => source.kind === 'tab' ? api.termReorderTab(source.id, id, position) : api.termReorderGroup(source.id, id, position))
+    }
+  }
+
+  const dropClass = (kind: DragItem['kind'], id: string) => dropTarget?.kind === kind && dropTarget.id === id ? ` drop-${dropTarget.position}` : ''
 
   function write(event: Output) {
     const x = xterms.get(event.id)
@@ -312,23 +360,27 @@ export default function Terminals({ visible }: { visible: boolean }) {
         <div className="term-groups">
           {[{ id: 'all', title: '전체' }, { id: 'ungrouped', title: '미분류' }, ...groups].map((group) => {
             const count = tabs.filter((tab) => group.id === 'all' || (group.id === 'ungrouped' ? !tab.groupId : tab.groupId === group.id)).length
-            return <button key={group.id} className={`term-group ${activeGroup === group.id ? 'on' : ''}`} aria-pressed={activeGroup === group.id} aria-label={`${group.title} 그룹, 터미널 ${count}개`} disabled={busy}
-              onClick={() => void changeLayout(() => api.termSelectGroup(group.id))}
-              onDragOver={(event) => { if (!busy && group.id !== 'all' && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }}
-              onDrop={(event) => { if (group.id !== 'all') dropTab(event, group.id === 'ungrouped' ? null : group.id) }}
-              title={group.id === 'all' ? '모든 터미널 보기' : '이 그룹에 탭을 끌어 놓아 이동'}>
-              <span>{group.title}</span><span className="term-group-count">{count}</span>
-            </button>
+            const custom = group.id !== 'all' && group.id !== 'ungrouped'
+            return <div key={group.id} className={`term-group-wrap${dropClass('group', group.id)}`} draggable={custom && !busy}
+              onDragStart={(event) => { if (custom) startDrag(event, 'group', group.id) }} onDragEnd={finishDrag}
+              onDragOver={(event) => dragOver(event, 'group', group.id)} onDragLeave={dragLeave} onDrop={(event) => drop(event, 'group', group.id)}>
+              <button className={`term-group ${activeGroup === group.id ? 'on' : ''}`} aria-pressed={activeGroup === group.id} aria-label={`${group.title} 그룹, 터미널 ${count}개`} disabled={busy}
+                onClick={() => void changeLayout(() => api.termSelectGroup(group.id))}
+                title={custom ? '드래그로 그룹 순서 변경 · 탭을 놓아 이 그룹으로 이동' : group.id === 'all' ? '모든 터미널 보기' : '탭을 놓아 미분류로 이동'}>
+                <span>{group.title}</span><span className="term-group-count">{count}</span>
+              </button>
+              {custom && <button className="icon term-group-rename" disabled={busy} aria-label={`${group.title} 그룹 이름 변경`} title="그룹 이름 변경"
+                onClick={() => { setEditing({ kind: 'group', id: group.id }); setName(group.title) }}>✎</button>}
+            </div>
           })}
           <button className="small ghost" disabled={busy} onClick={() => { setEditing({ kind: 'new-group' }); setName('') }}>+ 그룹</button>
         </div>
         {selectedGroup && <div className="term-group-actions">
-          <button className="small ghost" disabled={busy} onClick={() => { setEditing({ kind: 'group', id: selectedGroup.id }); setName(selectedGroup.title) }}>그룹 이름 변경</button>
           <button className="small ghost" disabled={busy} title="터미널은 종료하지 않고 미분류로 옮깁니다" onClick={() => void changeLayout(() => api.termDeleteGroup(selectedGroup.id))}>그룹 해제</button>
         </div>}
       </div>
       <div className="term-group-tools">
-        <span className="small muted">탭을 그룹 위로 끌어 옮길 수 있습니다.</span>
+        <span className="small muted">탭·그룹을 끌어 순서를 바꾸고, 탭을 그룹에 놓아 분류하세요.</span>
         {activeTab && <label className="small">선택한 터미널의 그룹
           <select aria-label="선택한 터미널의 그룹" value={activeTab.groupId ?? ''} disabled={busy} onChange={(event) => void changeLayout(() => api.termMoveToGroup(activeTab.id, event.target.value || null))}>
             <option value="">미분류</option>
@@ -339,8 +391,9 @@ export default function Terminals({ visible }: { visible: boolean }) {
       {shownTabs.length > 0 && (
         <div ref={tabList} className="term-tabs" role="tablist" aria-label="터미널 탭">
           {shownTabs.map((tab) => (
-            <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}`} draggable={!busy}
-              onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id); event.dataTransfer.effectAllowed = 'move' }}>
+            <div key={tab.id} className={`term-tab ${active === tab.id ? 'on' : ''} ${tab.exited !== undefined ? 'dim' : ''}${dropClass('tab', tab.id)}`} draggable={!busy}
+              onDragStart={(event) => startDrag(event, 'tab', tab.id)} onDragEnd={finishDrag}
+              onDragOver={(event) => dragOver(event, 'tab', tab.id)} onDragLeave={dragLeave} onDrop={(event) => drop(event, 'tab', tab.id)}>
               <button className="term-tab-select" role="tab" aria-selected={active === tab.id} disabled={busy} onClick={() => void changeLayout(() => api.termActivate(tab.id))}>
                 <span className={`dot ${tab.activity ?? 'idle'}`} role="img" aria-label={ACTIVITY_LABEL[tab.activity ?? 'idle']} title={ACTIVITY_LABEL[tab.activity ?? 'idle']} /><span>{tab.title}</span>
                 {activeGroup === 'all' && tab.groupId && <span className="term-tab-group">{groups.find((g) => g.id === tab.groupId)?.title}</span>}

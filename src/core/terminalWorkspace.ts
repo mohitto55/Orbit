@@ -42,6 +42,19 @@ export interface TerminalLayout {
 export interface TerminalState extends TerminalLayout {
   tabs: TerminalSnapshot[]
 }
+
+export type TerminalOrderPosition = 'before' | 'after'
+
+function reorder<T extends { id: string }>(items: T[], id: string, targetId: string, position: TerminalOrderPosition): T[] {
+  if (position !== 'before' && position !== 'after') throw new Error('이동 위치가 올바르지 않습니다')
+  const item = items.find((entry) => entry.id === id)
+  if (!item || !items.some((entry) => entry.id === targetId)) throw new Error('순서를 바꿀 항목을 찾을 수 없습니다')
+  if (id === targetId) return items
+  const ordered = items.filter((entry) => entry.id !== id)
+  const index = ordered.findIndex((entry) => entry.id === targetId) + (position === 'after' ? 1 : 0)
+  ordered.splice(index, 0, item)
+  return ordered
+}
 /** CLI가 알려 준 ID와 일치하는 헤더만 찾는다. 구버전 저장 상태는 탭 고유 originator로 연결한다. */
 export async function findCodexSession(projectDir: string, tabId: string, root = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), since = 0, prefix?: string): Promise<string | undefined> {
   let latest: { id: string; created: number } | undefined
@@ -407,6 +420,20 @@ export class TerminalWorkspace {
     if (groupId !== null && !this.groups.some((g) => g.id === groupId)) throw new Error('터미널 그룹을 찾을 수 없습니다')
     tab.groupId = groupId ?? undefined
     this.reconcileActive()
+    this.save()
+    return this.layout()
+  }
+
+  /** 표시 순서만 바꾼다. 탭의 그룹·활성 상태와 실행 중인 프로세스는 유지한다. */
+  reorderTab(id: string, targetId: string, position: TerminalOrderPosition): TerminalLayout {
+    const ordered = reorder([...this.tabs.values()], id, targetId, position)
+    this.tabs = new Map(ordered.map((tab) => [tab.id, tab]))
+    this.save()
+    return this.layout()
+  }
+
+  reorderGroup(id: string, targetId: string, position: TerminalOrderPosition): TerminalLayout {
+    this.groups = reorder(this.groups, id, targetId, position)
     this.save()
     return this.layout()
   }
