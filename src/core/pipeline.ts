@@ -893,6 +893,25 @@ function resolveTerminalInput(p: Graph, n: PipeNode, env: Env): TerminalInput | 
   return edges.length ? terminalSource(p, edges[0]) : n.terminalInput
 }
 
+/** 값 보기에서도 실행기와 같은 함수·반복 바인딩을 사용한다. 그래프나 실행 상태는 바꾸지 않는다. */
+export function dataPreviews(p: Graph, id: string, env: Env = {}): { id: string; name: string; shape: DataShape; items: string[]; preview: boolean }[] {
+  let graph = p
+  let preview = p.nodes.some(isFunctionBoundary)
+  if (p.nodes.some((n) => n.kind === 'template' || n.kind === 'foreach')) {
+    try { graph = lowerLoops(lowerFunctions(p, env, []), env) }
+    catch { preview = true } // 편집 중인 다른 함수·반복이 불완전해도 현재 설정은 볼 수 있다.
+  }
+  const copies = graph.nodes.filter((n) => isData(n) && n.id !== id && n.sourceIds?.includes(id))
+  const expanded = new Set<string>()
+  for (const copy of copies) {
+    let suffix = copy.id
+    while (suffix.includes('/')) { suffix = suffix.slice(suffix.indexOf('/') + 1); expanded.add(suffix) }
+  }
+  const nodes = copies.length ? copies.filter((n) => !expanded.has(n.id)) : graph.nodes.filter((n) => n.id === id && isData(n))
+  return nodes.map((n) => ({ id: n.id, name: nodeName(n), shape: dataShape(n), preview,
+    items: dataShape(n) === 'list' ? dataItems(graph, n.id, env) : [dataValue(graph, n.id, env)] }))
+}
+
 export function expandPipeline(p: Graph, env: Env = {}, stack: string[] = []): Graph {
   const graph = lowerLoops(lowerFunctions(p, env, stack), env)
   const live = liveNodes(graph)

@@ -17,8 +17,8 @@ function TypeDetails({ value, path, disabled, onChange }: { value: OutputType; p
     <textarea aria-label={`${path} Description`} rows={2} placeholder="Description — expected value and formatting rules" value={value.description} disabled={disabled} onChange={(event) => onChange({ ...value, description: event.target.value })} />
     {value.type === 'object' && <fieldset className="pipe-output-nested">
       <legend>Properties</legend>
-      {value.fields ? <OutputFields fields={value.fields} path={path} disabled={disabled} onChange={(fields) => onChange({ ...value, fields })} />
-        : <><span className="small muted">Any properties</span><button disabled={disabled} onClick={() => onChange({ ...value, fields: [] })}>Define properties</button></>}
+      {!value.fields?.length && <p className="small muted">Any properties are allowed until fields are added.</p>}
+      <OutputFields fields={value.fields ?? []} path={path} disabled={disabled} onChange={(fields) => onChange({ ...value, fields })} />
     </fieldset>}
     {value.type === 'array' && <fieldset className="pipe-output-nested">
       <legend>Items</legend>
@@ -47,7 +47,7 @@ export function OutputFields({ fields, disabled, onChange, path = '' }: { fields
 }
 
 /** 중첩 Dictionary·배열을 펼치고 각 경로를 연결된 데이터 노드로 꺼낸다. */
-export function JsonTree({ value, disabled, onExtract, path = [] }: { value: JsonValue; disabled: boolean; onExtract: (path: string[]) => void; path?: string[] }) {
+export function JsonTree({ value, disabled, onExtract, path = [] }: { value: JsonValue; disabled: boolean; onExtract?: (path: string[]) => void; path?: string[] }) {
   if (value === null || typeof value !== 'object') return <code className="pipe-json-scalar">{JSON.stringify(value)}</code>
   const entries = Object.entries(value)
   if (!entries.length) return <code>{Array.isArray(value) ? '[]' : '{}'}</code>
@@ -59,7 +59,7 @@ export function JsonTree({ value, disabled, onExtract, path = [] }: { value: Jso
       return <div className="pipe-json-entry" key={key}>
         <div className="row">
           {heading}
-          <button className="ghost" title={`${childPath.join(' / ')}을 데이터 노드로 꺼내기`} disabled={disabled} onClick={() => onExtract(childPath)}>꺼내기</button>
+          {onExtract && <button className="ghost" title={`${childPath.join(' / ')}을 데이터 노드로 꺼내기`} disabled={disabled} onClick={() => onExtract(childPath)}>꺼내기</button>}
         </div>
         {composite ? <details open={path.length < 1}>
           <summary className="small muted">{Array.isArray(child) ? `${child.length}개 항목` : `${Object.keys(child).length}개 필드`}</summary>

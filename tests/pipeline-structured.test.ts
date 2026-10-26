@@ -58,7 +58,20 @@ describe('구조화 출력 계약과 Dictionary', () => {
     expect(validateOutput('{"items":[0,false,null,"",{}],"value":{"custom":[]}}', old)).toEqual({ items: [0, false, null, '', {}], value: { custom: [] } })
     const empty = JSON.stringify(schemaFromFields([{ name: 'value', type: 'object', description: '', fields: [] }]))
     expect(validateOutput('{"value":{}}', empty)).toEqual({ value: {} })
-    expect(() => validateOutput('{"value":{"unexpected":1}}', empty)).toThrow('value.unexpected')
+    expect(validateOutput('{"value":{"content":1}}', empty)).toEqual({ value: { content: 1 } })
+  })
+
+  it('[DM-F02-AC18] 필드 없는 Array<Object>는 작업 내용을 허용하고 v0.3.29의 빈 Properties도 복구한다', () => {
+    const schema = schemaFromFields([{ name: 'works', type: 'array', description: '클라이언트가 하는 일들 나열하기', items: { type: 'object', description: '', fields: [] } }])
+    expect(schema.properties.works.items).toEqual({ type: 'object', description: '' })
+    const response = { works: [{ title: '채팅방 목록 페이지네이션', details: ['추가 로딩', '재시도 UI'], active: true }] }
+    expect(validateOutput(JSON.stringify(response), JSON.stringify(schema))).toEqual(response)
+    const old = { ...schema, properties: { works: { ...schema.properties.works, items: { type: 'object', description: '', properties: {}, required: [], additionalProperties: false } } } }
+    expect(readOutputSchema(JSON.stringify(old))).toEqual(schema)
+    expect(validateOutput(JSON.stringify(response), JSON.stringify(old))).toEqual(response)
+    expect(() => validateOutput('{"works":["문자열"]}', JSON.stringify(schema))).toThrow('works[0]')
+    expect(() => validateOutput('{"works":[null]}', JSON.stringify(schema))).toThrow('works[0]')
+    expect(() => validateOutput('{"works":[],"extra":1}', JSON.stringify(schema))).toThrow('extra')
   })
 
   it('필드 작성 규칙을 계약에 담고 키·타입·추가 필드와 JSON 형식을 검사한다', () => {
@@ -176,6 +189,22 @@ function runnerSetup() {
 }
 
 describe('구조화된 에이전트 실행', () => {
+  it.each(['claude', 'codex'] as const)('%s에 필드 없는 Object 목록을 보내도 내용을 검증하고 Print로 전달한다', async (kind) => {
+    const ctx = await newProject()
+    const fields: OutputField[] = [{ name: 'works', type: 'array', description: '클라이언트가 하는 일들 나열하기', items: { type: 'object', description: '', fields: [] } }]
+    const g: Pipeline = { id: 'works', title: '작업 목록', file: '', nodes: [node('s', 'start'), node('ai', kind, { text: '현재 작업중인 내용 출력', fields }), node('print', 'print')],
+      edges: [{ from: 's', to: 'ai' }, { from: 'ai', to: 'print' }, { from: 'ai', to: 'print', pin: 'data', fromPort: P.output }] }
+    await savePipeline(ctx, g)
+    const stored = (await listPipelines(ctx))[0], s = runnerSetup()
+    s.runner.start({ ...stored, ...expandPipeline(stored) })
+    await vi.waitFor(() => expect(s.sent).toHaveLength(1))
+    const sentSchema = JSON.parse(s.sent[0].text.slice(s.sent[0].text.indexOf('{')))
+    expect(sentSchema.properties.works.items).toEqual({ type: 'object', description: '' })
+    const response = { works: [{ title: '채팅방 목록 페이지네이션', status: 'in progress' }] }
+    s.respond(JSON.stringify(response)); s.runner.agentDone('t1')
+    expect(s.runner.list()[0]).toMatchObject({ status: 'done', nodes: { ai: { structuredOutput: response }, print: { status: 'done', output: JSON.stringify(response, null, 2) } } })
+  })
+
   it.each(['claude', 'codex'] as const)('%s는 계약을 전달하고 검증한 응답을 Dictionary·중첩 필드·다음 노드로 넘긴다', async (kind) => {
     const g = graph(kind), s = runnerSetup()
     s.runner.start({ ...g, ...expandPipeline(g) })

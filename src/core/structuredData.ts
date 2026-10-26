@@ -56,8 +56,9 @@ function objectSchema(fields: OutputField[]): OutputSchema {
 
 function valueSchema(value: OutputType): OutputValueSchema {
   if (!FIELD_TYPES.includes(value.type)) throw new Error('지원하지 않는 출력 필드 타입입니다')
+  // Properties를 아직 정의하지 않은 Object는 자유형이다. 빈 편집 목록을 {}만 허용하는 계약으로 만들지 않는다.
   return { type: value.type, description: value.description,
-    ...(value.type === 'object' && value.fields ? objectSchema(value.fields) : {}),
+    ...(value.type === 'object' && value.fields?.length ? objectSchema(value.fields) : {}),
     ...(value.type === 'array' ? { items: value.items ? valueSchema(value.items) : {} } : {}) }
 }
 

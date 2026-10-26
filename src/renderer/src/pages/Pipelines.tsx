@@ -42,6 +42,7 @@ import { Badge, Empty, errorToast, toast, useDark } from '../ui'
 import { useWheelZoom } from '../cyZoom'
 import { defaultOutputFields, JsonTree, OutputFields } from '../StructuredData'
 import { PipelineOutput } from '../PipelineOutput'
+import { PipelineValue } from '../PipelineValue'
 import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 
@@ -1198,6 +1199,7 @@ function NodePanel({
   return (
     <>
       <NameField key={node.id} name={nodeName(node)} kind={KIND_LABEL[node.kind]} disabled={locked || isFunctionBoundary(node)} onRename={onRename} />
+      <PipelineValue key={`${node.id}:${run?.runId ?? ''}`} node={node} graph={draft} env={env} run={run} states={runs} />
       {node.kind === 'print' && <div className="field">
         <label>출력할 값</label>
         {draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e))
@@ -1235,17 +1237,17 @@ function NodePanel({
       </div>}
       {node.kind === 'dictionary' && <div className="field">
         <label>Dictionary 값</label>
-        {inputs.length ? <div className="small muted">{inputs.join(', ')}의 JSON 객체를 읽습니다. 다시 실행하면 새 결과를 표시합니다.</div> : <textarea aria-label="Dictionary JSON" rows={6} disabled={locked} value={node.text} placeholder={'{ "people": "민수" }'} onChange={(e) => onPatch({ text: e.target.value })} />}
+        {inputs.length ? <div className="small muted">{inputs.join(', ')}의 JSON 객체를 읽습니다. 다시 실행하면 새 결과를 표시합니다.</div> : <textarea aria-label="Dictionary JSON" rows={6} disabled={locked} value={node.text} placeholder={'{ "result": "" }'} onChange={(e) => onPatch({ text: e.target.value })} />}
       </div>}
       {node.kind === 'property' && <div className="field">
         <label>필드 경로</label>
         <input aria-label="JSON 필드 경로" value={node.pointer ?? ''} disabled={locked} placeholder="/result 또는 /items/0/value" onChange={(e) => onPatch({ pointer: e.target.value })} />
         <div className="small muted">연결된 원본에서 해당 키나 배열 인덱스를 읽습니다. 빈 경로는 전체 값입니다. 키의 /는 ~1, ~는 ~0으로 적으세요.</div>
       </div>}
-      {jsonResult && <div className="field pipe-json-result">
-        <label>현재 데이터</label>
+      {jsonResult && <details className="field pipe-json-result">
+        <summary>필드 꺼내기</summary>
         <JsonTree value={jsonResult.value} disabled={locked} onExtract={(path) => onExtract({ kind: 'property', pointer: toPointer(path), label: path.join(' / ') })} />
-      </div>}
+      </details>}
       {isFunctionBoundary(node) && <>
         <div className="small muted">함수의 고정 {node.kind === 'function-input' ? '입력' : '출력'} 노드입니다.</div>
         <FunctionParameters node={node} locked={locked} onPatch={onPatch} />
@@ -1278,14 +1280,15 @@ function NodePanel({
               {st.message && <span className="small muted">{st.message}</span>}
               {st.termId && tabs.some((t) => t.id === st.termId) && <button onClick={() => onShowTerminal(st.termId!)}>터미널 보기</button>}
               {st.output !== undefined && (
-                <details className="pipe-preview" open={node.kind === 'print'} style={{ width: '100%' }}>
+                <details className="pipe-preview" style={{ width: '100%' }}>
                   <summary className="small">{node.kind === 'print' ? 'Print 출력' : isAgent(node) ? '최종 응답' : '명령 출력 (데이터 출력으로 넘긴 글)'}</summary>
                   <pre>{st.output || '(출력 없음)'}</pre>
                 </details>
               )}
-              {st.structuredOutput && <div className="pipe-json-result" style={{ width: '100%' }}>
+              {st.structuredOutput && <details className="pipe-json-result" style={{ width: '100%' }}>
+                <summary>필드 꺼내기</summary>
                 <JsonTree value={st.structuredOutput} disabled={locked} onExtract={(path) => onExtract({ kind: 'property', pointer: toPointer(path), label: path.join(' / ') })} />
-              </div>}
+              </details>}
               {st.status === 'running' && !st.code && (
                 <button title="응답 끝 신호가 오지 않았을 때 직접 넘깁니다" onClick={() => run && void api.markNodeDone(run.runId, k)}>
                   끝남으로 넘기기
@@ -1532,7 +1535,7 @@ function NodePanel({
       )}
 
       {preview && node.kind !== 'text' && node.kind !== 'foreach' && (
-        <details className="pipe-preview" open={isData(node)}>
+        <details className="pipe-preview">
           <summary className="small">{node.kind === 'if' ? '조건 (Bool)' : isLogic(node) ? '계산 결과 (Bool)' : node.kind === 'terminal' ? '선택한 터미널' : isData(node) ? '내보내는 값' : node.kind === 'template' ? '함수에 넘길 입력' : '실제로 보낼 글'}</summary>
           <pre>{preview}</pre>
         </details>

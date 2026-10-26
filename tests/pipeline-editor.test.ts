@@ -73,6 +73,27 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it('[DM-F02-AC18] Object Properties가 비면 자유형 안내를 보이고, 추가·삭제에 따라 실제 출력 계약을 바꾼다', async () => {
+    saved[0].nodes = [node('ai', 'codex', { text: '현재 작업중인 내용', fields: [{ name: 'works', type: 'array', description: '클라이언트가 하는 일들 나열하기', items: { type: 'object', description: '', fields: [] } }] })]
+    await mount(); await select('ai')
+    const schema = () => {
+      const prompt = host.querySelector('.pipe-preview pre')!.textContent!
+      return JSON.parse(prompt.slice(prompt.indexOf('{')))
+    }
+    expect(host.textContent).toContain('Any properties are allowed until fields are added.')
+    expect(schema().properties.works.items).toEqual({ type: 'object', description: '' })
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Add property to works[]"]')!.click())
+    await change(host.querySelector<HTMLInputElement>('[aria-label="works[] Field name"]')!, 'title')
+    expect(schema().properties.works.items).toMatchObject({ properties: { title: { type: 'string' } }, required: ['title'], additionalProperties: false })
+    await act(async () => host.querySelector<HTMLButtonElement>('[title="Delete works[].title"]')!.click())
+    expect(schema().properties.works.items).toEqual({ type: 'object', description: '' })
+    await act(async () => { await vi.advanceTimersByTimeAsync(550); root.unmount() })
+    root = createRoot(host)
+    await mount(); await select('ai')
+    expect(host.textContent).toContain('Any properties are allowed until fields are added.')
+    expect(schema().properties.works.items).toEqual({ type: 'object', description: '' })
+  })
+
   it('[DM-F02-AC19] 세 경계를 드래그하고 크기를 다시 열 때 복원하며 그래프 좌표는 유지한다', async () => {
     await mount()
     const positions = saved[0].nodes.map(({ id, x, y }) => ({ id, x, y }))

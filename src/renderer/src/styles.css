@@ -727,6 +727,12 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .pipe-console-entry pre { margin: 4px 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .pipe-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; overflow-y: auto; }
 .pipe-panel h4 { margin: 0 0 8px; }
+.pipe-value { margin: 10px 0 16px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); min-width: 0; }
+.pipe-value .pipe-value-toolbar { margin: 0 0 4px; gap: 6px; }
+.pipe-value > select { width: 100%; min-width: 0; margin-top: 8px; }
+.pipe-value-content { max-height: 360px; overflow: auto; margin-top: 8px; user-select: text; }
+.pipe-value pre, .pipe-value > p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
+.pipe-value-error { color: var(--bad); }
 .pipe-panel p { margin: 0 0 8px; }
 .pipe-panel textarea { min-height: 140px; }
 .pipe-parameter { display: grid; grid-template-columns: minmax(0, 1fr) 110px 28px; gap: 6px; margin: 8px 0; align-items: center; }
