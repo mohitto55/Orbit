@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { Core, CytoscapeOptions, NodeSingular } from 'cytoscape'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PipelineEditor from '../src/renderer/src/pages/Pipelines'
-import { LOOP_PORT as P, type PipeNode, type Pipeline, type RunState } from '../src/core/pipeline'
+import { ADD_PORT, AGENT_PORT as A, IF_PORT as I, LOOP_PORT as P, type PipeNode, type Pipeline, type RunState } from '../src/core/pipeline'
+import type { TerminalInfo } from '../src/core/terminal'
 
 // 캔버스만 끄고 실제 그래프 엔진·React 편집·저장과 포트 선택 이벤트를 검증한다.
 vi.mock('cytoscape-edgehandles', () => ({ default: () => {} }))
@@ -32,6 +33,7 @@ beforeEach(() => {
   document.body.appendChild(host)
   root = createRoot(host)
   window.orbit = {
+    getPathForFile: (file: File) => file.name,
     async invoke(name, ...args) {
       if (name === 'listPipelines') return saved
       if (name === 'pipelineRuns') return runs
@@ -54,7 +56,7 @@ afterEach(async () => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
-const mount = () => act(async () => root.render(createElement(PipelineEditor, { tabs: [], onShowTerminal: () => {} })))
+const mount = (tabs: TerminalInfo[] = []) => act(async () => root.render(createElement(PipelineEditor, { tabs, onShowTerminal: () => {} })))
 const select = (id: string) => act(async () => { graph().getElementById(id).emit('tap') })
 async function click(text: string) {
   const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === text)
@@ -70,6 +72,249 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it.each([1, 0.25])('[DM-F02-AC16] 줌 %s에서 비교 Bool→If, True·False 핀을 구분해 연결한다', async (zoom) => {
+    saved[0].nodes = [node('s', 'start', { x: 0, y: 0 }), node('if', 'if', { x: 500, y: 0 }), node('yes', 'shell', { text: 'yes', x: 900, y: -120 }), node('no', 'shell', { text: 'no', x: 900, y: 120 })]
+    saved[0].edges = [{ from: 's', to: 'if' }]
+    await mount()
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="비교 노드 추가"]')!, 'gt')
+    const c = graph(), cmp = c.nodes('[kind = "compare"]').first()
+    await change(host.querySelector<HTMLInputElement>('[aria-label="A 기본값"]')!, '10')
+    await change(host.querySelector<HTMLInputElement>('[aria-label="B 기본값"]')!, '2')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('true')
+    await act(async () => { cmp.position({ x: 0, y: 160 }); cmp.emit('dragfree') })
+    c.zoom(zoom); c.pan({ x: 0, y: 0 })
+    const emit = c.emit.bind(c) as unknown as (event: { type: string; position?: { x: number; y: number }; renderedPosition?: { x: number; y: number } }, args?: unknown[]) => void
+    type TestPin = { side: string; id?: string; type: string; dy: number; shape?: string }
+    for (const [from, to, fromPort, toPort] of [[cmp.id(), 'if', undefined, I.condition], ['if', 'yes', I.yes, undefined], ['if', 'no', I.no, undefined]] as const) {
+      const source = c.getElementById(from) as NodeSingular, target = c.getElementById(to) as NodeSingular
+      const out = (source.data('pins') as TestPin[]).find((p) => p.side === 'out' && p.id === fromPort)!
+      const input = (target.data('pins') as TestPin[]).find((p) => p.side === 'in' && (toPort ? p.id === toPort : p.type === 'exec'))!
+      await act(async () => {
+        emit({ type: 'tapstart', renderedPosition: { x: source.renderedPosition().x + source.renderedWidth() / 2, y: source.renderedPosition().y + out.dy * zoom } })
+        const temporary = c.add({ group: 'edges', data: { id: 'temporary', source: from, target: to } })
+        emit({ type: 'ehcomplete', position: { x: target.position().x - target.width() / 2, y: target.position().y + input.dy } }, [source, target, temporary])
+        c.emit('tapend')
+      })
+    }
+    await select('if')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="조건 기본값"]')?.disabled).toBe(true)
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('true')
+    expect(host.querySelector('[aria-label="터미널 실행 방식"]')).toBeNull()
+    const boolEdge = c.edges().filter((e) => e.data('toPort') === I.condition)
+    expect(boolEdge.hasClass('boolean')).toBe(true)
+    const trueEdge = c.edges().filter((e) => e.data('fromPort') === I.yes), falseEdge = c.edges().filter((e) => e.data('fromPort') === I.no)
+    expect(trueEdge.hasClass('data')).toBe(false)
+    expect(falseEdge.hasClass('data')).toBe(false)
+    expect(trueEdge.style('source-endpoint')).not.toBe(falseEdge.style('source-endpoint'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].edges).toEqual(expect.arrayContaining([{ from: cmp.id(), to: 'if', toPort: I.condition }, { from: 'if', to: 'yes', fromPort: I.yes }, { from: 'if', to: 'no', fromPort: I.no }]))
+    expect(saved[0].nodes.find((n) => n.id === cmp.id())).toMatchObject({ operation: 'gt', values: { [ADD_PORT.a]: '10', [ADD_PORT.b]: '2' } })
+  })
+
+  it('비교 타입과 논리 기본값을 편집하고 함수 Bool·숫자 타입을 고른다', async () => {
+    saved[0].template = true
+    saved[0].nodes = [node('in', 'function-input', { params: [{ id: 'flag', name: '조건', type: 'boolean' }, { id: 'count', name: '개수', type: 'number' }] }), node('out', 'function-output', { params: [{ id: 'result', name: '결과', type: 'boolean' }] })]
+    saved[0].edges = [{ from: 'in', to: 'out' }]
+    await mount()
+    await select('in')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="조건 타입"]')?.value).toBe('boolean')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="개수 타입"]')?.value).toBe('number')
+    await select('out')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="결과 기본값"]')!, 'true')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="비교 노드 추가"]')!, 'gte')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="비교 타입"]')!, 'boolean')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="비교 연산"]')?.value).toBe('eq')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="비교 연산"]')?.options.length).toBe(2)
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="A 기본값"]')!, 'true')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('false')
+    await click('NOT')
+    expect(host.querySelector('[aria-label="B 기본값"]')).toBeNull()
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('true')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="A 기본값"]')!, 'true')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('false')
+  })
+
+  it.each([1, 0.25])('줌 %s에서 텍스트 Add의 A/B와 결과 핀을 연결하고 저장·재열기 후에도 유지한다', async (zoom) => {
+    saved[0].nodes = [node('a', 'text', { text: '안녕', x: 0, y: 120 }), node('b', 'text', { text: ' Orbit\n', x: 0, y: -120 }),
+      node('result', 'text', { x: 900, y: 0 })]
+    await mount()
+    await click('텍스트 Add')
+    const c = graph(), add = c.nodes('[kind = "add"]').first()
+    await act(async () => { add.position({ x: 450, y: 0 }); add.emit('dragfree') })
+    c.zoom(zoom); c.pan({ x: 0, y: 0 })
+    expect(add.data('pins')).toMatchObject([
+      { side: 'in', type: 'data', id: ADD_PORT.a }, { side: 'in', type: 'data', id: ADD_PORT.b }, { side: 'out', type: 'data' }
+    ])
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="A 기본값"]')!, '기본')
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="B 기본값"]')!, '!')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('기본!')
+    const emit = c.emit.bind(c) as unknown as (event: { type: string; position?: { x: number; y: number }; renderedPosition?: { x: number; y: number } }, args?: unknown[]) => void
+    for (const [from, to, port] of [['b', add.id(), ADD_PORT.b], ['a', add.id(), ADD_PORT.a], [add.id(), 'result', undefined]] as const) {
+      const source = c.getElementById(from) as NodeSingular, target = c.getElementById(to) as NodeSingular
+      const fromPin = source.data('pins').find((p: { side: string }) => p.side === 'out') as { dy: number }
+      const toPin = target.data('pins').find((p: { side: string; id?: string }) => p.side === 'in' && p.id === port) as { dy: number }
+      const drop = { x: target.position().x - target.width() / 2, y: target.position().y + toPin.dy }
+      await act(async () => {
+        emit({ type: 'tapstart', renderedPosition: { x: source.renderedPosition().x + source.renderedWidth() / 2, y: source.renderedPosition().y + fromPin.dy * c.zoom() } })
+        const temporary = c.add({ group: 'edges', data: { id: 'temporary', source: from, target: to } })
+        emit({ type: 'ehcomplete', position: drop }, [source, target, temporary])
+        c.emit('tapend')
+      })
+    }
+    await select(add.id())
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="A 기본값"]')?.disabled).toBe(true)
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="B 기본값"]')?.disabled).toBe(true)
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('안녕 Orbit\n')
+    await act(async () => { c.getElementById('a').position({ x: 0, y: -250 }).emit('dragfree') })
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('안녕 Orbit\n')
+    await select('result')
+    expect(host.querySelector<HTMLTextAreaElement>('textarea.task-body')?.value).toBe('안녕 Orbit\n')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].edges).toEqual([{ from: 'b', to: add.id(), toPort: ADD_PORT.b }, { from: 'a', to: add.id(), toPort: ADD_PORT.a }, { from: add.id(), to: 'result' }])
+    const id = add.id()
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    await mount()
+    await select(id)
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('안녕 Orbit\n')
+    expect(saved[0].nodes.find((n) => n.id === id)?.values).toEqual({ [ADD_PORT.a]: '기본', [ADD_PORT.b]: '!' })
+  })
+
+  it('텍스트 출력에서 add를 검색해 만들면 A 입력에 자동 연결한다', async () => {
+    saved[0].nodes = [node('text', 'text', { text: '연결된 글', x: 0, y: 0 })]
+    await mount()
+    const c = graph(), source = c.getElementById('text') as NodeSingular
+    c.zoom(1); c.pan({ x: 0, y: 0 })
+    const emit = c.emit.bind(c) as unknown as (event: { type: string; position?: { x: number; y: number }; renderedPosition?: { x: number; y: number } }, args?: unknown[]) => void
+    await act(async () => {
+      emit({ type: 'tapstart', renderedPosition: { x: source.renderedPosition().x + source.renderedWidth() / 2, y: source.renderedPosition().y } })
+      emit({ type: 'ehcancel', position: { x: 450, y: 0 } }, [source])
+      c.emit('tapend')
+    })
+    await change(host.querySelector<HTMLInputElement>('.pipe-menu input')!, 'add')
+    const option = host.querySelector('.pipe-menu-item')!
+    expect(option.textContent).toContain('텍스트 Add')
+    await act(async () => option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    const add = c.nodes('[kind = "add"]').first()
+    expect(c.edges().map((e) => [e.data('source'), e.data('target'), e.data('toPort')])).toEqual([['text', add.id(), ADD_PORT.a]])
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="A 기본값"]')?.disabled).toBe(true)
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="B 기본값"]')?.disabled).toBe(false)
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('연결된 글')
+  })
+
+  it('구조화 출력 필드·규칙을 편집하고 결과 Dictionary와 필드를 원본에 연결한다', async () => {
+    saved[0].nodes.push(node('ai', 'codex', { text: '사람을 정리하세요' }))
+    await mount()
+    await select('ai')
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="출력 형식"]')!, 'json')
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="people 작성 규칙"]')!, '이름이 없으면 빈 문자열')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('이름이 없으면 빈 문자열')
+    await click('+ 결과 Dictionary')
+    const dict = graph().nodes('[kind = "dictionary"]').first()
+    expect(graph().edges().some((e) => e.data('source') === 'ai' && e.data('target') === dict.id() && e.data('fromPort') === A.output)).toBe(true)
+    await click('+ people')
+    const field = graph().nodes('[kind = "property"]').first()
+    expect(host.querySelector<HTMLInputElement>('[aria-label="JSON 필드 경로"]')?.value).toBe('/people')
+    expect(graph().edges().some((e) => e.data('source') === dict.id() && e.data('target') === field.id())).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes.find((n) => n.id === 'ai')?.fields).toEqual([{ name: 'people', type: 'string', description: '이름이 없으면 빈 문자열' }])
+    expect(saved[0].nodes.find((n) => n.id === field.id())?.pointer).toBe('/people')
+  })
+
+  it('실행한 JSON 응답을 UI에서 펼치고 중첩 필드를 꺼내며 다시 저장해도 연결을 유지한다', async () => {
+    const result = { people: { name: '민수', active: false, count: 0 } }
+    saved[0].nodes = [node('ai', 'claude', { fields: [{ name: 'people', type: 'object', description: '' }] }), node('d', 'dictionary')]
+    saved[0].edges = [{ from: 'ai', to: 'd', pin: 'data', fromPort: A.output }]
+    runs = [{ runId: 'r', pipelineId: 'g', title: '그래프', started: new Date().toISOString(), status: 'done', nodes: { ai: { status: 'done', output: JSON.stringify(result), structuredOutput: result } } }]
+    await mount()
+    await select('d')
+    expect(host.querySelector('.pipe-json-result')?.textContent).toContain('민수')
+    expect(host.querySelector('.pipe-json-result')?.textContent).toContain('false')
+    const extract = host.querySelector<HTMLButtonElement>('button[title="people / name을 데이터 노드로 꺼내기"]')!
+    await act(async () => extract.click())
+    expect(host.querySelector<HTMLInputElement>('[aria-label="JSON 필드 경로"]')?.value).toBe('/people/name')
+    expect(host.querySelector('.pipe-json-result')?.textContent).toContain('민수')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes.find((n) => n.kind === 'property')?.pointer).toBe('/people/name')
+  })
+
+  it('출력 구조 핀은 프롬프트와 분리되어 있고 연결한 구조의 편집은 원본에서 한다', async () => {
+    saved[0].nodes = [node('s', 'schema', { fields: [{ name: 'people', type: 'string', description: '요약 규칙' }] }), node('a', 'codex', { text: '참여자' })]
+    saved[0].edges = [{ from: 's', to: 'a', toPort: A.schema }]
+    await mount()
+    await select('a')
+    expect(graph().getElementById('a').data('pins')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ side: 'in', id: A.schema, label: '출력 구조' }),
+      expect.objectContaining({ side: 'out', id: A.output, label: '응답' })
+    ]))
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="출력 형식"]')?.disabled).toBe(true)
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('요약 규칙')
+    await select('s')
+    await change(host.querySelector<HTMLInputElement>('[aria-label="출력 필드 이름"]')!, 'person')
+    await select('a')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toContain('person')
+  })
+
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC15] %s 노드의 터미널 입력 핀에 선택한 탭을 연결하고 프롬프트와 구분한다', async (kind) => {
+    saved[0].nodes = [node('start', 'start'), node('work', kind, { x: 500, y: 0, text: '처리할 프롬프트' })]
+    saved[0].edges = [{ from: 'start', to: 'work' }]
+    await mount([{ id: 'tab', kind, title: '유저가 정한 작업 이름', pid: 1 }, { id: 'shell', kind: 'shell', title: '일반 셸', pid: 2 }])
+    await click('터미널')
+    const c = graph(), source = c.nodes('[kind = "terminal"]').first(), target = c.getElementById('work') as NodeSingular
+    const field = host.querySelector<HTMLSelectElement>('[aria-label="사용할 터미널"]')!
+    expect(field.textContent).toContain('유저가 정한 작업 이름')
+    expect(field.textContent).not.toContain('일반 셸')
+    await change(field, 'tab')
+    expect(source.data('label')).toContain('유저가 정한 작업 이름')
+    source.position({ x: 0, y: 0 }); c.zoom(0.25); c.pan({ x: 0, y: 0 })
+    const pin = target.data('pins').find((p: { side: string; id?: string }) => p.side === 'in' && p.id === A.terminal) as { dy: number }
+    const drop = { x: target.position().x - target.width() / 2, y: target.position().y + pin.dy }
+    const emit = c.emit.bind(c) as unknown as (event: { type: string; position?: { x: number; y: number }; renderedPosition?: { x: number; y: number } }, args?: unknown[]) => void
+    await act(async () => {
+      emit({ type: 'tapstart', renderedPosition: { x: source.renderedPosition().x + source.renderedWidth() / 2, y: source.renderedPosition().y } })
+      const temporary = c.add({ group: 'edges', data: { id: 'temporary', source: source.id(), target: target.id() } })
+      emit({ type: 'ehcomplete', position: drop }, [source, target, temporary]); c.emit('tapend')
+    })
+    const edge = c.edges().filter((e) => e.data('toPort') === A.terminal).first()
+    expect(edge.hasClass('terminal')).toBe(true)
+    expect(edge.style('target-endpoint')).toContain(`${pin.dy}px`)
+    await select('work')
+    const mode = host.querySelector<HTMLSelectElement>('[aria-label="터미널 실행 방식"]')!
+    expect(mode.disabled).toBe(true)
+    expect(mode.value).toBe('input')
+    expect(host.querySelector('.pipe-preview pre')?.textContent).toBe('처리할 프롬프트')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].edges).toContainEqual({ from: source.id(), to: 'work', toPort: A.terminal })
+    expect(saved[0].nodes.find((n) => n.id === source.id())?.ref).toBe('tab')
+    expect(target.data('pins').filter((p: { terminal?: boolean }) => p.terminal)).toMatchObject([{ side: 'in', id: A.terminal }, { side: 'out', id: A.terminal }])
+    // 탭이 닫힌 갱신을 받으면 실행을 막고 선택한 참조를 임의로 바꾸지 않는다.
+    await mount([])
+    expect(host.querySelector('.pipe-problems')?.textContent).toContain('닫혔습니다')
+  })
+
+  it('[DM-F02-AC15] 함수 변수에 터미널 타입을 지정하고 호출 기본값을 탭 이름으로 선택한다', async () => {
+    const tabs: TerminalInfo[] = [{ id: 'existing', kind: 'codex', title: '기존 코덱스 작업', pid: 1 }]
+    await mount(tabs)
+    await act(async () => host.querySelector<HTMLButtonElement>('button[title="새 함수"]')!.click())
+    const input = graph().nodes('[kind = "function-input"]').first()
+    await select(input.id())
+    await change(host.querySelector<HTMLSelectElement>('[aria-label="입력 타입"]')!, 'terminal')
+    const port = input.data('pins').find((p: { type: string }) => p.type === 'data') as { id: string; terminal: boolean }
+    expect(port.terminal).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved.find((p) => p.id === 'new-function')?.nodes[0].params?.[0].type).toBe('terminal')
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    saved[0].nodes.push(node('call', 'template', { ref: 'new-function' }))
+    await mount(tabs)
+    await select('call')
+    const field = host.querySelector<HTMLSelectElement>('[aria-label="입력 기본값"]')!
+    expect(field.textContent).toContain('기존 코덱스 작업')
+    await change(field, 'existing')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved.find((p) => p.id === 'g')?.nodes.find((n) => n.id === 'call')?.values).toEqual({ [port.id]: 'existing' })
+  })
+
   it('[DM-F02-AC12] 꺼내기 버튼은 원본 출력과 새 항목 입력을 연결하고 변경된 값을 보여 준다', async () => {
     await mount()
     await select('list')

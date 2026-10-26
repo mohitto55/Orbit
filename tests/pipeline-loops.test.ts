@@ -157,7 +157,7 @@ describe('For Each 유틸리티', () => {
   it('[DM-F02-AC14] 실행기는 항목 완료 후 다음을 보내고 실패하면 나머지 반복·완료 경로를 건너뛴다', async () => {
     const sent: string[] = []
     let count = 0
-    const runner = new PipelineRunner({ createTerminal: async (kind) => ({ id: `t${++count}`, kind, title: '', pid: 1 }), hasTerminal: () => true, whenReady: async () => {}, submit: () => {}, runCommand: (_id, text) => { sent.push(text) }, completeTasks: async () => {}, emit: () => {} })
+    const runner = new PipelineRunner({ createTerminal: async (kind) => ({ id: `t${++count}`, kind, title: '', pid: 1 }), hasTerminal: () => true, getTerminal: () => undefined, whenReady: async () => {}, submit: () => {}, runCommand: (_id, text) => { sent.push(text) }, completeTasks: async () => {}, emit: () => {} })
     const g = graph()
     runner.start({ ...g, ...expandPipeline(g) })
     await vi.waitFor(() => expect(sent).toHaveLength(1))

@@ -6,6 +6,7 @@ import { api, on } from '../api'
 import { Empty, Modal, errorToast } from '../ui'
 import type { TerminalActivity, TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
 import type { TerminalGroup, TerminalLayout, TerminalOrderPosition } from '../../../core/terminalWorkspace'
+import { terminalFilePastes } from '../../../core/terminalFiles'
 import PipelineEditor from './Pipelines'
 
 interface Output { id: string; data: string; sequence: number }
@@ -45,6 +46,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const tabList = useRef<HTMLDivElement>(null)
   const dragged = useRef<DragItem | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
+  const [fileDragging, setFileDragging] = useState(false)
   const mounted = useRef(false)
   const xterms = useRef(new Map<string, { term: Terminal; fit: FitAddon; host: HTMLDivElement; sequence: number; kind: TerminalKind }>()).current
   const pending = useRef(new Map<string, Output[]>()).current
@@ -53,6 +55,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const shownTabs = tabs.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
   const selectedGroup = groups.find((g) => g.id === activeGroup)
   const activeTab = tabs.find((tab) => tab.id === active)
+  const canDropFiles = visible && view === 'terms' && !busy && !editing && !!activeTab && activeTab.exited === undefined
 
   function applyLayout(layout: TerminalLayout) {
     if (!mounted.current) return
@@ -122,6 +125,35 @@ export default function Terminals({ visible }: { visible: boolean }) {
   }
 
   const dropClass = (kind: DragItem['kind'], id: string) => dropTarget?.kind === kind && dropTarget.id === id ? ` drop-${dropTarget.position}` : ''
+
+  function dragFiles(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = canDropFiles ? 'copy' : 'none'
+    setFileDragging(canDropFiles)
+  }
+
+  function dropFiles(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    setFileDragging(false)
+    if (!canDropFiles || !active) return
+    const terminal = xterms.get(active)
+    if (!terminal) return
+    try {
+      const paths = Array.from(event.dataTransfer.files, (file) => window.orbit.getPathForFile(file))
+      const windows = navigator.platform.startsWith('Win')
+      const pastes = terminalFilePastes(paths, terminal.kind, windows)
+      for (const text of pastes) {
+        terminal.term.paste(text)
+        // ConPTY가 붙여넣기를 키 입력으로 전달하므로 이미지마다 버퍼를 확정한다. Enter는 보내지 않는다.
+        if (terminal.kind === 'codex' && windows) void api.termWrite(active, '\x05').catch(errorToast)
+      }
+      terminal.term.focus()
+    } catch (error) { errorToast(error) }
+  }
 
   function write(event: Output) {
     const x = xterms.get(event.id)
@@ -242,6 +274,24 @@ export default function Terminals({ visible }: { visible: boolean }) {
       document.removeEventListener('visibilitychange', update)
     }
   }, [])
+
+  useEffect(() => {
+    // 파일을 화면 밖에 놓아도 Electron이 해당 파일로 이동해 작업 화면을 잃지 않게 한다.
+    const preventFileNavigation = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) return
+      event.preventDefault()
+      if (event.type === 'drop') setFileDragging(false)
+      else event.dataTransfer.dropEffect = 'none'
+    }
+    document.addEventListener('dragover', preventFileNavigation)
+    document.addEventListener('drop', preventFileNavigation)
+    return () => {
+      document.removeEventListener('dragover', preventFileNavigation)
+      document.removeEventListener('drop', preventFileNavigation)
+    }
+  }, [])
+
+  useEffect(() => { setFileDragging(false) }, [active, visible, view, editing])
 
   useEffect(() => {
     if (!visible || view !== 'terms' || !foreground || editing || activeTab?.activity !== 'completed') return
@@ -380,7 +430,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
         </div>}
       </div>
       <div className="term-group-tools">
-        <span className="small muted">탭·그룹을 끌어 순서를 바꾸고, 탭을 그룹에 놓아 분류하세요.</span>
+        <span className="small muted">탭·그룹을 끌어 정리하세요. 사진·파일은 아래 터미널에 놓아 추가할 수 있습니다.</span>
         {activeTab && <label className="small">선택한 터미널의 그룹
           <select aria-label="선택한 터미널의 그룹" value={activeTab.groupId ?? ''} disabled={busy} onChange={(event) => void changeLayout(() => api.termMoveToGroup(activeTab.id, event.target.value || null))}>
             <option value="">미분류</option>
@@ -407,7 +457,10 @@ export default function Terminals({ visible }: { visible: boolean }) {
       )}
       </>}
       {/* 그래프를 보는 동안에도 터미널은 살아 있어야 하므로 지우지 않고 숨긴다 */}
-      <div ref={area} className="term-area" style={{ display: view === 'terms' ? undefined : 'none' }}>
+      <div ref={area} className={`term-area${fileDragging && canDropFiles ? ' file-dragging' : ''}`} style={{ display: view === 'terms' ? undefined : 'none' }}
+        onDragOver={dragFiles} onDragEnter={dragFiles} onDrop={dropFiles}
+        onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setFileDragging(false) }}>
+        {fileDragging && canDropFiles && <div className="term-file-drop" role="status"><strong>사진·파일을 놓아 추가</strong><span>{activeTab?.title} 입력창에 추가됩니다</span></div>}
         {loading ? <Empty>터미널 세션을 복원하는 중…</Empty> : shownTabs.length === 0 && <Empty>{activeGroup === 'all'
           ? '프로젝트 폴더에서 Claude Code·Codex·셸을 실행합니다. 앱을 다시 열면 그룹과 탭, 세션이 자동으로 복원됩니다. 여러 작업을 이어서 자동으로 돌리려면 위의 "작업 그래프"를 쓰세요.'
           : '이 그룹에는 터미널이 없습니다. 위에서 새 터미널을 열거나, 전체 보기에서 기존 탭을 이 그룹으로 옮기세요.'}</Empty>}

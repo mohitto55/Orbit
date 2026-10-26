@@ -97,6 +97,7 @@ beforeEach(() => {
   document.body.appendChild(host)
   root = null
   window.orbit = {
+    getPathForFile: (file: File) => file.name,
     async invoke(name, ...args) {
       if (name === 'listDomains') return domains
       if (name === 'listRequests' || name === 'listSpecs') return []

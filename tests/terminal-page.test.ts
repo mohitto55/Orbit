@@ -5,13 +5,18 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Terminals from '../src/renderer/src/pages/Terminals'
 import type { TerminalSnapshot } from '../src/core/terminal'
 import type { TerminalGroup } from '../src/core/terminalWorkspace'
+import * as ui from '../src/renderer/src/ui'
 
 const writes = vi.hoisted(() => [] as string[])
+const pastes = vi.hoisted(() => [] as string[])
 const keyHandlers = vi.hoisted(() => [] as ((event: KeyboardEvent) => boolean)[])
 const disposals = vi.hoisted(() => vi.fn())
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   cols = 100; rows = 30; options = {}
-  loadAddon() {} open() {} dispose() { disposals() } focus() {} onData() {}
+  input = (_data: string) => {}
+  loadAddon() {} open() {} dispose() { disposals() } focus() {}
+  onData(handler: (data: string) => void) { this.input = handler }
+  paste(data: string) { pastes.push(data); this.input(data) }
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { keyHandlers.push(handler) }
   write(data: string) { writes.push(data) }
 } }))
@@ -26,6 +31,7 @@ let active: string | null
 let groups: TerminalGroup[]
 let activeGroup: string
 let listeners: Map<string, (data: unknown) => void>
+let filePaths: WeakMap<File, string>
 const first: TerminalSnapshot = { id: 'term-one', kind: 'codex', title: '결제 작업', pid: 1, sessionId: 'saved-id', output: '이전 출력', sequence: 1 }
 const second: TerminalSnapshot = { id: 'term-two', kind: 'shell', title: '확인용 셸', pid: 2, output: '셸 출력', sequence: 0 }
 
@@ -69,6 +75,18 @@ function dragEvent(type: string, transfer: DataTransfer, clientX = 110) {
   return event
 }
 
+function droppedFiles(paths: string[]) {
+  const transfer = new DataTransfer()
+  const files = paths.map((path) => {
+    const file = new File(['fixture'], path.split(/[\\/]/).at(-1) || 'unknown.png')
+    filePaths.set(file, path)
+    return file
+  })
+  // happy-dom은 files와 types를 DataTransferItemList에서 구성하지 않는다.
+  Object.defineProperties(transfer, { types: { value: ['Files'] }, files: { value: files } })
+  return transfer
+}
+
 async function reorderByDrag(source: Element, target: Element, position: 'before' | 'after') {
   vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 100, 30))
   const transfer = new DataTransfer()
@@ -88,10 +106,13 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
   host = document.createElement('div'); document.body.appendChild(host)
   saved = [{ ...first }, { ...second }]; active = first.id; calls = []; inputWrites = []; listeners = new Map(); writes.length = 0; keyHandlers.length = 0
   groups = []; activeGroup = 'all'; disposals.mockClear()
+  pastes.length = 0; filePaths = new WeakMap()
   window.orbit = {
+    getPathForFile: (file: File) => filePaths.get(file) ?? '',
     async invoke(name: string, ...args: unknown[]) {
       calls.push(name)
       if (name === 'termState') {
@@ -421,6 +442,80 @@ it('[TE-F02-AC7] [TE-F02-AC8] 취소·자기 자신·기본 그룹·다른 종�
   expect(calls).not.toContain('termReorderTab')
   expect(calls).not.toContain('termReorderGroup')
   expect(calls).not.toContain('termMoveToGroup')
+})
+
+it.each(['codex', 'claude'] as const)('[TE-F01-AC12] %s 터미널에 사진·파일을 함께 놓으면 활성 입력창에 추가하고 전송하지 않는다', async (kind) => {
+  saved[0].kind = kind
+  await mount()
+  const area = host.querySelector('.term-area')!
+  const transfer = droppedFiles(['C:\\사진 폴더\\첫 사진.png', "C:\\사진 폴더\\second's.png", 'C:\\설계 문서.md'])
+  const over = dragEvent('dragover', transfer)
+  await act(async () => area.dispatchEvent(over))
+  expect(over.defaultPrevented).toBe(true)
+  expect(transfer.dropEffect).toBe('copy')
+  expect(host.querySelector('.term-file-drop')?.textContent).toContain('결제 작업')
+  const drop = dragEvent('drop', transfer)
+  await act(async () => area.dispatchEvent(drop))
+  expect(drop.defaultPrevented).toBe(true)
+  expect(host.querySelector('.term-file-drop')).toBeNull()
+  expect(pastes).toEqual(['"C:/사진 폴더/첫 사진.png" ', '"C:/사진 폴더/second\'s.png" ', '"C:/설계 문서.md" '])
+  expect(inputWrites.every((input) => input.id === first.id && !/[\r\n]/.test(input.data))).toBe(true)
+  expect(inputWrites.filter((input) => input.data === '\x05')).toHaveLength(kind === 'codex' ? 3 : 0)
+  expect(calls).not.toContain('termCreate')
+  expect(calls).not.toContain('termReorderTab')
+  expect(active).toBe(first.id)
+})
+
+it('[TE-F01-AC12] 선택한 셸에만 인용한 파일 경로를 넣고 드래그를 취소하면 표시를 지운다', async () => {
+  await mount()
+  await click('확인용 셸')
+  const area = host.querySelector('.term-area')!
+  const transfer = droppedFiles(["C:\\a'b\\한 글.png", 'C:\\$(echo oops);file.txt'])
+  await act(async () => area.dispatchEvent(dragEvent('dragenter', transfer)))
+  expect(host.querySelector('.term-file-drop')).not.toBeNull()
+  await act(async () => area.dispatchEvent(dragEvent('dragleave', transfer)))
+  expect(host.querySelector('.term-file-drop')).toBeNull()
+  expect(inputWrites).toEqual([])
+  await act(async () => area.dispatchEvent(dragEvent('drop', transfer)))
+  expect(inputWrites).toEqual([{ id: second.id, data: "'C:\\a''b\\한 글.png' 'C:\\$(echo oops);file.txt' " }])
+})
+
+it('[TE-F01-AC12] 탭이나 화면 밖에 파일을 놓아도 탐색·정렬·입력이 발생하지 않는다', async () => {
+  await mount()
+  const transfer = droppedFiles(['C:\\photo.png'])
+  for (const target of [host.querySelector('.term-tab')!, document.body]) {
+    const drop = dragEvent('drop', transfer)
+    await act(async () => target.dispatchEvent(drop))
+    expect(drop.defaultPrevented).toBe(true)
+  }
+  const tabDrag = new DataTransfer()
+  tabDrag.setData('application/x-orbit-terminal', first.id)
+  await act(async () => host.querySelector('.term-area')!.dispatchEvent(dragEvent('drop', tabDrag)))
+  expect(inputWrites).toEqual([])
+  expect(calls).not.toContain('termReorderTab')
+  expect(calls).not.toContain('termMoveToGroup')
+})
+
+it.each(['종료', '빈 목록', '숨김', '이름 편집'] as const)('[TE-F01-AC12] %s 상태에서는 파일을 입력하지 않는다', async (state) => {
+  if (state === '종료') saved[0].exited = 0
+  if (state === '빈 목록') { saved = []; active = null }
+  await mount(state !== '숨김')
+  if (state === '이름 편집') await click('결제 작업 이름 변경')
+  const area = host.querySelector('.term-area')!
+  const transfer = droppedFiles(['C:\\photo.png'])
+  await act(async () => area.dispatchEvent(dragEvent('dragover', transfer)))
+  expect(transfer.dropEffect).toBe('none')
+  expect(host.querySelector('.term-file-drop')).toBeNull()
+  await act(async () => area.dispatchEvent(dragEvent('drop', transfer)))
+  expect(inputWrites).toEqual([])
+})
+
+it('[TE-F01-AC12] 읽을 수 없는 파일은 알림을 보이고 일부만 입력하지 않는다', async () => {
+  const error = vi.spyOn(ui, 'errorToast').mockImplementation(() => {})
+  await mount()
+  await act(async () => host.querySelector('.term-area')!.dispatchEvent(dragEvent('drop', droppedFiles(['C:\\ok.png', '']))))
+  expect(error).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('파일 경로') }))
+  expect(inputWrites).toEqual([])
 })
 
 it.each(['codex', 'claude'] as const)('%s에서 Ctrl/Shift+Enter는 한 번만 줄바꿈하고 일반 Enter·붙여넣기·한글 조합은 가로채지 않는다', async (kind) => {

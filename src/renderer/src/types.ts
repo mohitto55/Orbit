@@ -8,6 +8,7 @@ export type { TestLink, RunSummary, AcStatus, TestRunState, TestRunEvent } from 
 export type { SessionInfo, SessionMessage, Mark, DomainRequest } from '../../core/drift'
 export type { Knowledge, KnowledgeType } from '../../core/knowledge'
 export type { ProjectSettings } from '../../core/workspace'
+export type { TerminalInfo } from '../../core/terminal'
 export type { Graph, GNode, GEdge } from '../../core/graph'
 
 export const TASK_TYPES = ['feature', 'bug', 'refactor', 'tech-debt', 'research', 'docs', 'test', 'spec-sync', 'design-sync', 'domain-sync'] as const
@@ -23,7 +24,12 @@ export type { NodeKind, PipeNode, PipeEdge, Pipeline, RunState, NodeRun } from '
 export type { InnerValue } from '../../core/pipeline'
 export type { FunctionParam, DataShape } from '../../core/pipeline'
 export {
+  IF_PORT, COMPARE_OPS, isLogic, isExecPort, defaultValue,
   PARAM_TYPE_NAME,
+  AGENT_PORT,
+  isAgent,
+  edgeShape,
+  hasTerminalInput,
   LOOP_PORT,
   isLoopExecPort,
   withInputPort,
@@ -37,6 +43,8 @@ export {
   dataItems,
   dataShape,
   dataValue,
+  agentSchema,
+  outputRefs,
   edgeProblem,
   fillOutputs,
   hasDataOut,

@@ -30,6 +30,7 @@ beforeEach(() => {
   host = document.createElement('div'); document.body.appendChild(host)
   root = createRoot(host)
   window.orbit = {
+    getPathForFile: (file: File) => file.name,
     async invoke(name: string, ...args: unknown[]) {
       calls.push({ name, args })
       if (name === 'listTasks') return saved ? [saved] : []
@@ -38,6 +39,7 @@ beforeEach(() => {
         saved = { id: 'task-0001', title: '', body: '', type: 'feature', horizon: '지금', priority: '보통', status: '대기', links: [], created: '', file: '/tasks/task-0001.md', ...args[0] as Partial<Task> }
         return saved
       }
+      if (name === 'updateTask') { saved = { ...saved!, ...args[1] as Partial<Task> }; return saved }
       throw new Error(`지원하지 않는 API: ${name}`)
     },
     on() { return () => {} }
@@ -49,7 +51,7 @@ afterEach(async () => {
   host.remove(); vi.unstubAllGlobals()
 })
 
-it('새 Task의 세부 내용을 Markdown으로 작성하고 편집·원문 전환과 저장·재열기에서 보존한다', async () => {
+it('[TK-F11-AC5] Task를 Markdown 원문으로 작성하고 미리보기·체크·저장·재열기에서 보존한다', async () => {
   await act(async () => root.render(createElement(Tasks, { refreshKey: 0, reloadBadges() {}, go() {} })))
   await click('Task 추가')
   const modal = host.querySelector('.modal')!
@@ -58,27 +60,31 @@ it('새 Task의 세부 내용을 Markdown으로 작성하고 편집·원문 전�
   const selects = modal.querySelectorAll('select')
   await input(selects[0], 'feature')
   await input(selects[1], '지금')
-  await click('원문')
-  const markdown = '## 검증 계획\n\n**결제**를 확인한다.\n\n- [ ] 서버 확인\n\n```ts\nconst ok = true\n```'
-  await input(modal.querySelector<HTMLTextAreaElement>('.task-body')!, markdown)
-  await click('편집')
+  const area = modal.querySelector<HTMLTextAreaElement>('.md-source')!
+  expect(area.style.display).toBe('')
+  expect(modal.querySelector('[contenteditable="true"]')).toBeNull()
+  const markdown = '## 검증 계획\n\n**결제**를 확인한다.\n줄바꿈 한 번\n\n\n- [ ] 서버 확인\n\n```ts\nconst ok = true\n```'
+  await input(area, markdown)
+  await click('미리보기')
   expect(modal.querySelector('.md-editor h2')!.textContent).toBe('검증 계획')
   expect(modal.querySelector('.md-editor strong')!.textContent).toBe('결제')
   expect(modal.querySelector('.md-editor pre code')!.textContent).toContain('const ok = true')
-  const block = modal.querySelector<HTMLDivElement>('.md-editor h2')!.closest('.md-block')!
-  await act(async () => {
-    block.querySelector('h2')!.textContent = '최종 검증 계획'
-    block.dispatchEvent(new Event('input', { bubbles: true }))
-  })
+  await click('편집')
+  await input(area, markdown.replace('## 검증 계획', '## 최종 검증 계획'))
   const checkbox = modal.querySelector<HTMLInputElement>('.task-checklist input')!
   await act(async () => checkbox.click())
-  await click('원문')
   const expected = markdown.replace('## 검증 계획', '## 최종 검증 계획').replace('- [ ]', '- [x]')
-  expect(modal.querySelector<HTMLTextAreaElement>('.task-body')!.value).toBe(expected)
+  expect(area.value).toBe(expected)
   await click('Task 만들기')
   expect(calls.find((call) => call.name === 'createTask')!.args[0]).toMatchObject({ title: '결제 검증', body: expected })
   await click('결제 검증')
-  expect(host.querySelector('.modal .md-editor h2')!.textContent).toBe('최종 검증 계획')
-  await click('원문')
-  expect(host.querySelector<HTMLTextAreaElement>('.task-body')!.value).toBe(expected)
+  const reopened = host.querySelector<HTMLTextAreaElement>('.modal .md-source')!
+  expect(reopened.value).toBe(expected)
+  expect(reopened.style.display).toBe('')
+  const updated = expected + '\n\n추가 메모\n마지막 줄'
+  await input(reopened, updated)
+  await click('저장')
+  expect(calls.find((call) => call.name === 'updateTask')!.args[1]).toMatchObject({ body: updated })
+  await click('결제 검증')
+  expect(host.querySelector<HTMLTextAreaElement>('.modal .md-source')!.value).toBe(updated)
 })

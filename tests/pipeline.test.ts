@@ -21,7 +21,7 @@ import {
   type RunState
 } from '../src/core/pipeline'
 import { deletePipeline, listPipelines, savePipeline } from '../src/core/pipelineStore'
-import { TerminalManager, terminalCommand } from '../src/core/terminal'
+import { TerminalManager, terminalCommand, type TerminalKind } from '../src/core/terminal'
 import { prepareTerminalIntegration, takeAgentSignal } from '../src/core/terminalIntegration'
 import { listSkills, skillId } from '../src/core/skills'
 
@@ -32,7 +32,7 @@ const pipe = (nodes: PipeNode[], edges: [string, string][]): Pipeline => ({ id: 
 function setup(overrides: Partial<RunnerDeps> = {}) {
   let clock = 0
   let seq = 0
-  const opened: { id: string; kind: string; session?: string }[] = []
+  const opened: { id: string; kind: TerminalKind; session?: string }[] = []
   const sent: { termId: string; text: string; via: 'submit' | 'command' }[] = []
   const live = new Set<string>()
   let last: RunState | null = null
@@ -45,6 +45,10 @@ function setup(overrides: Partial<RunnerDeps> = {}) {
       return { id, kind, title: kind, pid: 0 }
     },
     hasTerminal: (id) => live.has(id),
+    getTerminal: (id) => {
+      const terminal = opened.find((t) => t.id === id)
+      return terminal && live.has(id) ? { id, kind: terminal.kind, title: id, pid: 1 } : undefined
+    },
     whenReady: async () => {},
     submit: (termId, text) => sent.push({ termId, text, via: 'submit' }),
     runCommand: (termId, text) => sent.push({ termId, text, via: 'command' }),
@@ -466,7 +470,7 @@ describe('터미널 그래프 · 노드 이름과 기능 명세 데이터 노드
     }
     expect(edgeProblem(g, 'sh', 't')).toContain('데이터 노드로는 이을 수 없습니다')
     expect(edgeProblem(g, 'sh', 't', 'data')).toBeNull()
-    expect(edgeProblem(g, 'c', 't', 'data')).toContain('데이터 출력이 없습니다')
+    expect(edgeProblem(g, 'c', 't', 'data')).toContain('터미널 타입의 입력 핀')
     expect(pipelineProblems(g, {}, { requireStart: true })).toEqual([])
     // 실행 선 없이 출력만 쓰면 실행 전에 알려준다
     const late = { ...g, edges: [{ from: 's', to: 'c' }, { from: 'sh', to: 'c', pin: 'data' as const }] }
@@ -533,12 +537,13 @@ describe('연동 · 터미널 작업 끝 감지', () => {
     const dir = await tempDir('sig-')
     const integration = prepareTerminalIntegration(dir, 'claude', dir, 'linux')
     const { hooks } = JSON.parse(await fs.readFile(integration.claudeSettings, 'utf8'))
-    expect(hooks.Stop[0].hooks[0].command).toMatch(/^echo done >> ".+\/agent\.done"$/)
+    expect(hooks.Stop[0].hooks[0].command).toContain('bridge.cjs')
+    expect(hooks.Stop[0].hooks[0].command).toMatch(/ done$/)
     // 세션 ID를 기록하는 기존 SessionStart 훅은 그대로 두고 준비 신호를 더한다
     expect(hooks.SessionStart[0].hooks).toHaveLength(2)
     expect(hooks.SessionStart[0].hooks[1].command).toMatch(/agent\.ready"$/)
-    expect(integration.codexNotify).toMatch(/^notify=\['.+\/notify\.sh'\]$/)
-    expect(await fs.readFile(path.join(dir, 'notify.sh'), 'utf8')).toContain('agent.done')
+    expect(JSON.parse(integration.codexNotify.slice('notify='.length))).toEqual([path.join(dir, 'notify.sh').replace(/\\/g, '/')])
+    expect(await fs.readFile(path.join(dir, 'notify.sh'), 'utf8')).toContain('"$ORBIT_BRIDGE" notify')
   })
 
   it('[IN-F10-AC2] 신호 파일이 생기면 그 터미널의 응답 끝으로 알린다', async () => {

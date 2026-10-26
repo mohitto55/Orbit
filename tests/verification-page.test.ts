@@ -67,6 +67,7 @@ beforeEach(() => {
   document.body.appendChild(host)
   root = null
   window.orbit = {
+    getPathForFile: (file: File) => file.name,
     async invoke(name: string) {
       if (name === 'testState') return snapshotResponse ?? structuredClone(state)
       if (name === 'listSpecs') return [spec]

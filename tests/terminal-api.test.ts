@@ -6,6 +6,7 @@ import type { IPty } from 'node-pty'
 import { createApi } from '../src/main/api'
 import { encodeClaudeProjectDir } from '../src/core/drift'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
+import { AGENT_PORT } from '../src/core/pipeline'
 import { tempDir } from './helpers'
 
 const ptys = vi.hoisted(() => [] as (IPty & { emit: (data: string) => void })[])
@@ -48,6 +49,44 @@ describe('작업 그래프 세션 재사용', () => {
       edges: [{ from: 'start', to: 'work' }]
     })
   }
+
+  it.each(['claude', 'codex'] as const)('[DM-F02-AC15] %s 터미널 입력·출력은 이름을 바꿔도 선택한 실제 탭에만 연속 전송한다', async (kind) => {
+    const { api } = await setup()
+    try {
+      const target = await api.termCreate(kind), other = await api.termCreate(kind)
+      const targetPty = ptys.find((pty) => pty.pid === target.pid)!
+      const otherPty = ptys.find((pty) => pty.pid === other.pid)!
+      targetPty.emit('유지할 출력')
+      const graph = await api.savePipeline({ title: '터미널 입력', nodes: [
+        { id: 'start', kind: 'start', text: '', terminal: 'new' },
+        { id: 'tab', kind: 'terminal', text: '', terminal: 'new', ref: target.id },
+        { id: 'first', kind, text: '입력한 터미널에서 첫 작업', terminal: 'new' },
+        { id: 'last', kind, text: '출력한 터미널에서 다음 작업', terminal: 'new' }
+      ], edges: [
+        { from: 'start', to: 'first' }, { from: 'first', to: 'last' },
+        { from: 'tab', to: 'first', toPort: AGENT_PORT.terminal },
+        { from: 'first', to: 'last', pin: 'data', fromPort: AGENT_PORT.terminal, toPort: AGENT_PORT.terminal }
+      ] })
+      await api.termRename(target.id, '변경한 탭 이름')
+      const before = await api.termState()
+      const run = await api.runPipeline(graph.id)
+      await vi.waitFor(() => expect(targetPty.write).toHaveBeenCalledWith(expect.stringContaining('입력한 터미널에서 첫 작업')))
+      api.markNodeDone(run.runId, 'first')
+      await vi.waitFor(() => expect(targetPty.write).toHaveBeenCalledWith(expect.stringContaining('출력한 터미널에서 다음 작업')))
+      expect(api.markNodeDone(run.runId, 'last')?.status).toBe('done')
+      expect(api.pipelineRuns()[0].nodes).toMatchObject({ first: { termId: target.id }, last: { termId: target.id } })
+      expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('터미널에서'))
+      expect(ptys).toHaveLength(2)
+      expect(targetPty.kill).not.toHaveBeenCalled()
+      expect(TerminalWorkspace.prototype.whenReady).not.toHaveBeenCalled()
+      const after = await api.termState()
+      expect(after).toMatchObject({ active: other.id, activeGroup: before.activeGroup })
+      expect(after.tabs.find((t) => t.id === target.id)).toMatchObject({ title: '변경한 탭 이름', pid: target.pid, output: '유지할 출력' })
+      await api.termKill(target.id)
+      await expect(api.runPipeline(graph.id)).rejects.toThrow('닫혔습니다')
+      expect(ptys).toHaveLength(2)
+    } finally { api.killAllTerminals() }
+  })
 
   it.each([
     { kind: 'claude', source: '전용 탭' }, { kind: 'codex', source: '전용 탭' },

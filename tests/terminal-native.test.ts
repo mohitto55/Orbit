@@ -49,6 +49,7 @@ it.skipIf(!process.env.ORBIT_NATIVE_SMOKE).each([
     const runner = new PipelineRunner({
       createTerminal: (kind, _label, resume) => workspace.open(kind, settings, { resume }),
       hasTerminal: (id) => workspace.has(id),
+      getTerminal: (id) => workspace.get(id),
       whenReady: (id) => workspace.whenReady(id),
       submit: (id, text) => workspace.submit(id, text),
       runCommand: (id, text) => workspace.runCommand(id, text),

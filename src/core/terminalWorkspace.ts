@@ -5,7 +5,7 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, type CliLaunch } from './terminalIntegration'
+import { beginOutputCapture, endOutputCapture, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, type CliLaunch } from './terminalIntegration'
 import type { Ctx, ProjectSettings } from './workspace'
 
 interface SavedTab {
@@ -278,6 +278,13 @@ export class TerminalWorkspace {
 
   private integrationDir(id: string): string { return path.join(`${this.file}.sessions`, id) }
 
+  beginOutputCapture(id: string): void {
+    if (!this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
+    beginOutputCapture(this.integrationDir(id))
+  }
+  readAgentOutput(id: string): string | undefined { return readAgentOutput(this.integrationDir(id)) }
+  endOutputCapture(id: string): void { endOutputCapture(this.integrationDir(id)) }
+
   private syncLaunch(tab: SavedTab): void {
     if (tab.exited !== undefined) return
     const launch = readCliLaunch(this.integrationDir(tab.id))
@@ -465,6 +472,12 @@ export class TerminalWorkspace {
   }
   /** IN-F11: 작업 그래프가 터미널에 프롬프트·명령을 보낸다 */
   has(id: string): boolean { return this.manager.has(id) }
+  get(id: string): TerminalInfo | undefined {
+    const tab = this.tabs.get(id)
+    if (!tab || !this.manager.has(id)) return undefined
+    this.syncLaunch(tab)
+    return this.info(tab)
+  }
   whenReady(id: string): Promise<void> { return this.manager.whenReady(id) }
   submit(id: string, text: string): void {
     const tab = this.tabs.get(id)

@@ -87,8 +87,12 @@ export function createApi(deps: ApiDeps) {
       return { ...info, reused }
     },
     hasTerminal: (id) => !!terminals?.has(id),
+    getTerminal: (id) => terminals?.get(id),
     whenReady: async (id) => (await terms()).whenReady(id),
     submit: (id, text) => terminals?.submit(id, text),
+    beginOutputCapture: (id) => terminals?.beginOutputCapture(id),
+    readAgentOutput: (id) => terminals?.readAgentOutput(id),
+    endOutputCapture: (id) => terminals?.endOutputCapture(id),
     runCommand: (id, command) => terminals?.runCommand(id, command),
     completeTasks: async (ids) => {
       for (const id of ids) await tk.updateTask(need(), id, { status: '완료' })
@@ -519,10 +523,10 @@ export function createApi(deps: ApiDeps) {
       if (!p) throw new Error(`작업 그래프를 찾을 수 없습니다: ${id}`)
       // 템플릿·할 일·스킬은 실행하는 순간의 내용을 쓴다
       const skills = (await sk.listSkills(need().projectDir)).map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body }))
-      const env = { library, tasks: await tk.listTasks(need()), skills, specs: await sp.listSpecs(need()) }
+      const workspace = await terms()
+      const env = { library, tasks: await tk.listTasks(need()), skills, specs: await sp.listSpecs(need()), terminals: workspace.layout().tabs.map((t) => workspace.get(t.id) ?? t) }
       const problems = pipelineProblems(p, env, { requireStart: !p.template })
       if (problems.length) throw new Error(problems.join('\n'))
-      await terms()
       // 빈 리스트를 반복하면 실행할 작업이 없어도 정상 완료한다. 원본 그래프는 위에서 검사했다.
       return pipes.start({ ...p, ...expandPipeline(p, env) }, true)
     },

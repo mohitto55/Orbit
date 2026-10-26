@@ -340,7 +340,6 @@ function TaskEditor({
     links: task?.links.join(', ') ?? ''
   })
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
-  const [bodyView, setBodyView] = useState<'edit' | 'raw'>('edit')
   const badRange = !!f.start && !!f.end && f.start > f.end
   const canSave = !!f.title.trim() && !!f.type && !!f.horizon && !badRange
 
@@ -438,16 +437,7 @@ function TaskEditor({
       </div>
       <TaskChecklist body={f.body} onToggle={(item, checked) => setF((current) => ({ ...current, body: setChecklistChecked(current.body, item.offset, checked) }))} />
       <div className="field">
-        <div className="row between">
-          <label>세부 내용</label>
-          <div className="seg small" aria-label="세부 내용 편집 방식">
-            <button type="button" className={bodyView === 'edit' ? 'on' : ''} aria-pressed={bodyView === 'edit'} onClick={() => setBodyView('edit')}>편집</button>
-            <button type="button" className={bodyView === 'raw' ? 'on' : ''} aria-pressed={bodyView === 'raw'} onClick={() => setBodyView('raw')}>원문</button>
-          </div>
-        </div>
-        {bodyView === 'edit'
-          ? <MdEditor value={f.body} onChange={(value) => set('body', value)} />
-          : <textarea className="task-body" aria-label="세부 내용 Markdown 원문" value={f.body} onChange={(e) => set('body', e.target.value)} placeholder="세부 내용, 메모 (마크다운)" />}
+        <MdEditor label="세부 내용" value={f.body} onChange={(value) => set('body', value)} />
         <span className="small muted">완료 조건은 - [ ] 항목으로 적으면 위에서 체크할 수 있습니다. 편집 내용은 저장을 누르면 반영됩니다.</span>
       </div>
       <div className="row between">

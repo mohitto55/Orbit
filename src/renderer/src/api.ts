@@ -10,6 +10,7 @@ type Promisify<T> = {
 declare global {
   interface Window {
     orbit: {
+      getPathForFile: (file: File) => string
       invoke: (name: string, ...args: unknown[]) => Promise<any>
       on: (channel: string, cb: (payload: any) => void) => () => void
     }

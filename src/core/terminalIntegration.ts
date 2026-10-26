@@ -28,6 +28,21 @@ function save(state) {
   fs.writeFileSync(pending, JSON.stringify(state));
   fs.renameSync(pending, file);
 }
+function complete(event) {
+  if (!read()) return;
+  const dir = path.dirname(file);
+  try {
+    const capture = JSON.parse(fs.readFileSync(path.join(dir, 'capture.json'), 'utf8'));
+    const output = event.last_assistant_message ?? event['last-assistant-message'];
+    if (capture.generation === generation && typeof output === 'string' && output.length <= 4 * 1024 * 1024) {
+      const target = path.join(dir, 'agent-output.json');
+      const pending = target + '.' + process.pid + '.tmp';
+      fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, output }));
+      fs.renameSync(pending, target);
+    }
+  } catch {}
+  fs.appendFileSync(path.join(dir, 'agent.done'), 'done\n');
+}
 const action = process.argv[2];
 if (action === 'start') {
   if (!read()) process.exit(0);
@@ -40,13 +55,15 @@ if (action === 'start') {
 } else if (action === 'stop') {
   const state = read();
   if (state) save({ ...state, running: false });
-} else if (action === 'hook') {
+} else if (action === 'hook' || action === 'done' || action === 'notify') {
   let input = '';
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', chunk => { if (input.length < 65536) input += chunk; });
+  process.stdin.on('data', chunk => { if (input.length < 8 * 1024 * 1024) input += chunk; });
   process.stdin.on('end', () => {
     try {
-      const event = JSON.parse(input);
+      const event = JSON.parse(input.replace(/^\uFEFF/, ''));
+      if (action === 'done' || (action === 'notify' && event.type === 'agent-turn-complete')) { complete(event); return; }
+      if (action !== 'hook') return;
       const state = read();
       if (state?.kind === 'claude' && state.running && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(event.session_id)) {
         save({ ...state, sessionId: event.session_id, cwd: typeof event.cwd === 'string' ? event.cwd : state.cwd });
@@ -73,8 +90,14 @@ if ($global:OrbitCodexCommand) {
     if ($args -match '^(exec|e|review|login|logout|mcp|mcp-server|app-server|completion|sandbox|debug|apply|a|cloud|features|--help|-h|--version|-V)$') { & $global:OrbitCodexCommand @args; return }
     Invoke-OrbitBridge start codex @args
     $orbitExtra = @('-c', "tui.terminal_title=['session-id','status']", '-c', $env:ORBIT_CODEX_NOTIFY)
+    $orbitArgs = @($args)
+    # Windows PowerShell은 네이티브 인자의 큰따옴표를 제거하므로 notify의 TOML 문자열을 보존한다.
+    if ($PSVersionTable.PSVersion -lt [version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') {
+      $orbitArgs = @($orbitArgs | ForEach-Object { if ([string]$_ -like 'notify=*') { ([string]$_).Replace('"', '"""') } else { $_ } })
+      $orbitExtra[3] = $orbitExtra[3].Replace('"', '"""')
+    }
     if ($args -notcontains '--no-daemon') { $orbitExtra += '--no-daemon' }
-    try { & $global:OrbitCodexCommand @args @orbitExtra }
+    try { & $global:OrbitCodexCommand @orbitArgs @orbitExtra }
     finally { $orbitCode = $LASTEXITCODE; Invoke-OrbitBridge stop; $global:LASTEXITCODE = $orbitCode }
   }
 }
@@ -192,6 +215,26 @@ const signalFile = (dir: string, signal: AgentSignal) => path.join(dir, `agent.$
 export type AgentSignal = 'ready' | 'working' | 'done' | 'idle'
 const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle']
 
+/** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
+export function beginOutputCapture(dir: string): void {
+  const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
+  endOutputCapture(dir)
+  rmSync(signalFile(dir, 'done'), { force: true })
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId: randomUUID() }))
+}
+export function readAgentOutput(dir: string): string | undefined {
+  try {
+    const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string }
+    const file = path.join(dir, 'agent-output.json')
+    if (statSync(file).size > 32 * 1024 * 1024) return undefined
+    const result = JSON.parse(readFileSync(file, 'utf8')) as { requestId: string; output?: unknown }
+    return result.requestId === capture.requestId && typeof result.output === 'string' ? result.output : undefined
+  } catch { return undefined }
+}
+export function endOutputCapture(dir: string): void {
+  for (const name of ['capture.json', 'agent-output.json']) rmSync(path.join(dir, name), { force: true })
+}
+
 /** 신호 파일이 있으면 지우고 true를 돌려준다. */
 export function takeAgentSignal(dir: string, signal: AgentSignal): boolean {
   const file = signalFile(dir, signal)
@@ -223,24 +266,26 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   writeFileSync(helper, bridge)
   writeFileSync(init, platform === 'win32' ? powershellInit : path.basename(process.env.SHELL ?? '') === 'fish' ? fishInit : posixInit)
   writeFileSync(state, JSON.stringify({ generation, runId: generation, kind, cwd, args: [], running: kind !== 'shell' }))
-  const hook = platform === 'win32'
-    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`, 'utf16le').toString('base64')}`
-    : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} hook`
+  const hookCommand = (action: string) => platform === 'win32'
+    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`, 'utf16le').toString('base64')}`
+    : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`
   // 지난 실행에서 남은 신호는 지운다
   for (const s of AGENT_SIGNALS) rmSync(signalFile(dir, s), { force: true })
+  endOutputCapture(dir)
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
-  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working')] }], Stop: [{ hooks: [echo('done')] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working')] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
-  const notify = path.join(dir, `notify.${win ? 'cmd' : 'sh'}`)
-  writeFileSync(notify, win ? `@echo done>>"${slash(signalFile(dir, 'done'))}"\r\n` : `#!/bin/sh\necho done >> ${shellQuote(slash(signalFile(dir, 'done')), platform)}\n`)
+  const notify = path.join(dir, `notify.${win ? 'ps1' : 'sh'}`)
+  writeFileSync(notify, win
+    ? `param([string]$Notification)\n$env:ELECTRON_RUN_AS_NODE='1'\n$OutputEncoding=[System.Text.UTF8Encoding]::new($false)\n$Notification | & $env:ORBIT_NODE $env:ORBIT_BRIDGE notify\n`
+    : `#!/bin/sh\nprintf '%s' "$1" | ELECTRON_RUN_AS_NODE=1 "$ORBIT_NODE" "$ORBIT_BRIDGE" notify\n`)
   if (!win) chmodSync(notify, 0o755)
-  const codexNotify = `notify=['${slash(notify).replace(/'/g, '')}']`
+  const codexNotify = `notify=${JSON.stringify(win ? ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', slash(notify)] : [slash(notify)])}`
   return {
     init: `. ${shellQuote(init)}`,
     claudeSettings: settings,
-    // TOML 리터럴 문자열('...') 안에는 작은따옴표를 쓸 수 없다
     codexNotify,
     env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings, ORBIT_CODEX_NOTIFY: codexNotify }
   }

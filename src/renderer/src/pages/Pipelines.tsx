@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import edgehandles from 'cytoscape-edgehandles'
 import { api, on } from '../api'
-import type { DataShape, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task } from '../types'
+import type { DataShape, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task, TerminalInfo } from '../types'
 import {
+  IF_PORT, COMPARE_OPS, isLogic, isExecPort, defaultValue,
   KIND_NAME,
   PARAM_TYPE_NAME,
+  AGENT_PORT,
+  isAgent,
+  edgeShape,
+  hasTerminalInput,
   LOOP_PORT,
-  isLoopExecPort,
   withInputPort,
   functionParams,
   isFunctionBoundary,
@@ -17,6 +21,8 @@ import {
   dataItems,
   dataShape,
   dataValue,
+  agentSchema,
+  outputRefs,
   edgeProblem,
   fillOutputs,
   hasDataOut,
@@ -34,6 +40,8 @@ import {
 } from '../types'
 import { Badge, Empty, errorToast, toast, useDark } from '../ui'
 import { useWheelZoom } from '../cyZoom'
+import { defaultOutputFields, JsonTree, OutputFields } from '../StructuredData'
+import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 
 cytoscape.use(edgehandles)
 
@@ -43,10 +51,10 @@ type Sel = { node: string } | { edge: PipeEdge } | null
 type OutPin = string | undefined
 const sameEdge = (a: PipeEdge, b: PipeEdge) => a.from === b.from && a.to === b.to && a.pin === b.pin && a.fromPort === b.fromPort && a.toPort === b.toPort
 const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort, e.toPort])
-const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isLoopExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
-const isPortNode = (n: PipeNode) => n.kind === 'template' || n.kind === 'foreach' || isFunctionBoundary(n)
+const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
+const isPortNode = (n: PipeNode) => isAgent(n) || n.kind === 'template' || n.kind === 'foreach' || n.kind === 'add' || n.kind === 'if' || isLogic(n) || isFunctionBoundary(n)
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
-type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[] }
+type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[]; terminals: TerminalInfo[] }
 
 const KIND_LABEL = KIND_NAME
 const SPEC_KINDS: NodeKind[] = ['spec', 'feature', 'ac']
@@ -62,9 +70,15 @@ const KIND_COLOR: Record<NodeKind, string> = {
   'function-input': '#a353b9',
   'function-output': '#a353b9',
   foreach: '#aa782b',
+  if: '#aa782b', compare: '#bd475a', and: '#bd475a', or: '#bd475a', not: '#bd475a', boolean: '#bd475a', number: '#359878',
   complete: '#5a8f2e',
+  terminal: '#2c8ba3',
   text: '#8a63d2',
+  add: '#8a63d2',
   list: '#8a63d2',
+  schema: '#2f9a8a',
+  dictionary: '#8a63d2',
+  property: '#8a63d2',
   item: '#8a63d2',
   join: '#8a63d2',
   task: '#b98a2e',
@@ -95,12 +109,17 @@ const DATA_H = 44
 const EXEC_DY = -13
 const DATA_DY = 13
 const DATA_COLOR = '#8a63d2'
-type Pin = { side: 'in' | 'out'; type: 'exec' | 'data'; dy: number; list?: boolean; id?: string; label?: string }
+const TERMINAL_COLOR = '#2c8ba3'
+const BOOL_COLOR = '#bd475a', NUMBER_COLOR = '#359878'
+type Pin = { side: 'in' | 'out'; type: 'exec' | 'data'; dy: number; list?: boolean; terminal?: boolean; shape?: DataShape; id?: string; label?: string }
+const pinColor = (pin: Pin, execColor: string) => pin.type === 'exec' ? execColor : pin.terminal ? TERMINAL_COLOR : pin.shape === 'boolean' ? BOOL_COLOR : pin.shape === 'number' ? NUMBER_COLOR : DATA_COLOR
 function pinsOf(kind: NodeKind): Pin[] {
   const list = dataShape({ kind }) === 'list'
+  if (kind === 'terminal') return [{ side: 'out', type: 'data', dy: 0, terminal: true }]
   if (isData({ kind }) && !hasInput({ kind })) return [{ side: 'out', type: 'data', dy: 0, list }]
   if (kind === 'start') return [{ side: 'out', type: 'exec', dy: 0 }]
   if (kind === 'item') return [{ side: 'in', type: 'data', dy: 0, list: true }, { side: 'out', type: 'data', dy: 0 }]
+  if (kind === 'boolean' || kind === 'number') return [{ side: 'in', type: 'data', dy: 0, shape: kind }, { side: 'out', type: 'data', dy: 0, shape: kind }]
   if (isData({ kind })) return [{ side: 'in', type: 'data', dy: 0, list }, { side: 'out', type: 'data', dy: 0, list }]
   return [
     { side: 'in', type: 'exec', dy: EXEC_DY },
@@ -111,6 +130,29 @@ function pinsOf(kind: NodeKind): Pin[] {
 }
 
 function functionGeometry(n: PipeNode, env: Env) {
+  if (n.kind === 'if') return { width: 280, height: 128, pins: [
+    { side: 'in', type: 'exec', dy: -18, label: '실행' },
+    { side: 'in', type: 'data', dy: 20, id: IF_PORT.condition, shape: 'boolean', label: '조건 · Bool' },
+    { side: 'out', type: 'exec', dy: -18, id: IF_PORT.yes, label: 'True (참)' },
+    { side: 'out', type: 'exec', dy: 20, id: IF_PORT.no, label: 'False (거짓)' }
+  ] as Pin[] }
+  if (isLogic(n)) return { width: 280, height: n.kind === 'not' ? 76 : 100, pins: [
+    ...functionParams(n, env).inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, shape: p.type, dy: (n.kind === 'not' ? 8 : -4) + i * 28 })),
+    { side: 'out', type: 'data', dy: n.kind === 'not' ? 8 : -4, shape: 'boolean', label: '결과 · Bool' }
+  ] as Pin[] }
+  if (n.kind === 'add') return { width: 260, height: 100, pins: [
+    ...functionParams(n, env).inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · 텍스트`, dy: -4 + i * 28 })),
+    { side: 'out', type: 'data', dy: -4, label: '결과 · 텍스트' }
+  ] as Pin[] }
+  if (isAgent(n)) return { width: 320, height: 168, pins: [
+    { side: 'in', type: 'exec', dy: -38, label: '실행' },
+    { side: 'out', type: 'exec', dy: -38, label: '실행' },
+    { side: 'in', type: 'data', dy: -10, id: AGENT_PORT.prompt, label: '프롬프트' },
+    { side: 'in', type: 'data', dy: 18, id: AGENT_PORT.terminal, terminal: true, label: '터미널' },
+    { side: 'out', type: 'data', dy: 18, id: AGENT_PORT.terminal, terminal: true, label: '터미널' },
+    { side: 'in', type: 'data', dy: 46, id: AGENT_PORT.schema, label: '출력 구조' },
+    { side: 'out', type: 'data', dy: 46, id: AGENT_PORT.output, label: '응답' }
+  ] as Pin[] }
   if (n.kind === 'foreach') return { width: 300, height: 158, pins: [
     { side: 'in', type: 'exec', dy: -33, label: '실행' },
     { side: 'in', type: 'data', dy: -5, id: LOOP_PORT.list, list: true, label: '리스트' },
@@ -125,8 +167,8 @@ function functionGeometry(n: PipeNode, env: Env) {
   const pins: Pin[] = [
     ...(n.kind !== 'function-input' ? [{ side: 'in' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
     ...(n.kind !== 'function-output' ? [{ side: 'out' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
-    ...inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', dy: top + (i + 1) * 28 })),
-    ...outputs.map((p, i): Pin => ({ side: 'out', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', dy: top + (i + 1) * 28 }))
+    ...inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 })),
+    ...outputs.map((p, i): Pin => ({ side: 'out', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 }))
   ]
   return { pins, width: n.kind === 'template' ? 360 : 260, height }
 }
@@ -176,7 +218,7 @@ function bezierCtrl(e: cytoscape.EdgeSingular): { w: number[]; d: number[] } {
   }
 }
 function pinSvg(p: Pin, execColor: string, bg: string): string {
-  const color = p.type === 'exec' ? execColor : DATA_COLOR
+  const color = pinColor(p, execColor)
   const fill = p.side === 'out' ? color : bg
   // 리스트: 블루프린트의 배열 핀처럼 작은 칸 아홉 개 (입력은 가운데 칸만 비운다)
   const grid = () =>
@@ -213,8 +255,8 @@ function functionStyle(n: PipeNode, env: Env, color: string, bg: string) {
   const { pins, width, height } = functionGeometry(n, env)
   const style = pinStyle(pins, color, bg)
   const xml = (text: string) => text.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]!)
-  const heading = n.kind === 'template' ? `${nodeName(n)} · ${env.library.find((p) => p.id === n.ref)?.title ?? '함수 선택'}` : KIND_LABEL[n.kind]
-  const labels = pins.map((p) => `<text x="${p.side === 'in' ? 14 : width - 14}" y="${height / 2 + p.dy + 4}" text-anchor="${p.side === 'in' ? 'start' : 'end'}" font-size="12" fill="${p.type === 'data' ? DATA_COLOR : color}">${xml(short(p.label ?? '', n.kind === 'template' ? 16 : 26))}</text>`).join('')
+  const heading = n.kind === 'compare' ? `${nodeName(n)} · ${COMPARE_OPS[n.operation ?? 'eq']}` : n.kind === 'template' ? `${nodeName(n)} · ${env.library.find((p) => p.id === n.ref)?.title ?? '함수 선택'}` : isAgent(n) || n.kind === 'add' || n.kind === 'if' || isLogic(n) ? `${nodeName(n)}${nodeName(n).startsWith(KIND_LABEL[n.kind]) ? '' : ` · ${KIND_LABEL[n.kind]}`}` : KIND_LABEL[n.kind]
+  const labels = pins.map((p) => `<text x="${p.side === 'in' ? 14 : width - 14}" y="${height / 2 + p.dy + 4}" text-anchor="${p.side === 'in' ? 'start' : 'end'}" font-size="12" fill="${pinColor(p, color)}">${xml(short(p.label ?? '', n.kind === 'template' ? 16 : 26))}</text>`).join('')
   const svg = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><text x="${width / 2}" y="21" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="12" fill="${color}">${xml(short(heading, 36))}</text><path d="M12 30H${width - 12}" stroke="${color}" opacity=".2"/>${labels}</svg>`)}`
   return {
     width, height, label: '', ...style,
@@ -240,7 +282,7 @@ function nodeStatus(run: RunState | undefined, id: string): string | undefined {
   const inner = nodeRuns(run, id).map(([, v]) => v.status)
   if (!inner.length) return undefined
   for (const s of ['failed', 'running', 'starting'] as const) if (inner.includes(s)) return s
-  if (inner.every((s) => s === 'done')) return 'done'
+  if (inner.some((s) => s === 'done') && inner.every((s) => s === 'done' || s === 'skipped')) return 'done'
   if (inner.every((s) => s === 'skipped')) return 'skipped'
   return inner.some((s) => s === 'done') ? 'running' : 'waiting'
 }
@@ -263,7 +305,7 @@ function useRuns(): Map<string, RunState> {
 }
 
 /** IN-F11~F13: 터미널 작업을 노드로 잇는 작업 그래프 (블루프린트처럼 실행 선과 데이터 선). */
-export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: string; title: string }[]; onShowTerminal: (termId: string) => void }) {
+export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: TerminalInfo[]; onShowTerminal: (termId: string) => void }) {
   const [list, setList] = useState<Pipeline[] | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [skills, setSkills] = useState<SkillItem[]>([])
@@ -361,15 +403,17 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     if (!draft) return
     const id = newNodeId()
     const last = draft.nodes[draft.nodes.length - 1]
+    const step = isAgent({ kind }) || (after && isAgent(after)) ? 380 : 260
     const node: PipeNode = {
       id,
       name: freshName(draft, kind),
       kind,
-      text: '',
+      text: kind === 'boolean' || kind === 'number' ? defaultValue(kind) : '',
+      ...(kind === 'schema' ? { fields: defaultOutputFields() } : {}),
       // 같은 종류의 에이전트 뒤에 붙이면 대화 맥락을 잇는 쪽이 자연스럽다
       terminal: after && after.kind === kind && (kind === 'claude' || kind === 'codex') ? 'continue' : 'new',
       // 데이터 노드는 위쪽에, 실행 노드는 오른쪽으로 이어서 놓는다
-      x: after?.x !== undefined ? after.x + 260 : (last?.x ?? 0) + (isData({ kind }) ? 0 : 260),
+      x: after?.x !== undefined ? after.x + step : (last?.x ?? 0) + (isData({ kind }) ? 0 : step),
       y: after?.y ?? (last?.y ?? 120) + (isData({ kind }) ? -110 : 0),
       ...extra
     }
@@ -384,7 +428,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
   const extract = (from: PipeNode, v: InnerValue, at?: Pt) => {
     // 패널에서 꺼낼 때는 같은 종류가 겹치지 않게 아래로 쌓는다
     const i = draft?.nodes.filter((n) => n.kind === v.kind).length ?? 0
-    addNode(v.kind, { ...innerExtra(v), ...(at ?? { x: (from.x ?? 0) + 230, y: (from.y ?? 0) + 60 * i }) }, from)
+    addNode(v.kind, { ...innerExtra(v), name: uniqueName(v.label, draft?.nodes.map(nodeName) ?? []), ...(at ?? { x: (from.x ?? 0) + 350, y: (from.y ?? 0) + 60 * i }) }, from, true, isAgent(from) ? AGENT_PORT.output : undefined)
   }
   /** 이름 바꾸기. 겹치면 뒤에 숫자를 붙인다 */
   const rename = (id: string, want: string) => {
@@ -426,7 +470,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
     if (!menu || !draft) return
     const from = menu.from ? draft.nodes.find((n) => n.id === menu.from) : undefined
     // 노드 가운데가 아니라 왼쪽 입력 핀이 놓은 자리에 오도록
-    const w = item.kind === 'template' ? 360 : item.kind === 'foreach' ? 300 : isData({ kind: item.kind }) ? DATA_W : EXEC_W
+    const w = item.kind === 'template' ? 360 : item.kind === 'foreach' || isAgent({ kind: item.kind }) ? 300 : item.kind === 'add' ? 260 : isData({ kind: item.kind }) ? DATA_W : EXEC_W
     addNode(item.kind, { ...item.extra, x: Math.round(menu.pos.x + (from ? w / 2 : 0)), y: Math.round(menu.pos.y) }, from, true, menu.pin)
     setMenu(null)
   }
@@ -449,8 +493,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
 
   // 지금 고치는 그래프는 저장 전이라도 지금 내용으로 검사한다
   const env: Env = useMemo(
-    () => ({ library: (list ?? []).map((p) => (draft && p.id === draft.id ? { ...p, ...draft } : p)), tasks, skills, specs }),
-    [list, draft, tasks, skills, specs]
+    () => ({ library: (list ?? []).map((p) => (draft && p.id === draft.id ? { ...p, ...draft } : p)), tasks, skills, specs, terminals: tabs }),
+    [list, draft, tasks, skills, specs, tabs]
   )
   const problems = useMemo(() => (draft ? pipelineProblems(draft, env, { requireStart: !draft.template }) : []), [draft, env])
   // 시작 노드가 있을 때, 시작에서 닿지 않아 실행되지 않는 노드
@@ -573,18 +617,32 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: { id: s
             </button>
             <span className="small muted">유틸리티</span>
             <button disabled={running} onClick={() => addNode('foreach')} title="리스트를 한 항목씩 순서대로 처리합니다">For Each</button>
+            <button disabled={running} onClick={() => addNode('if')} title="Bool 조건에 따라 True 또는 False 경로를 실행합니다">If</button>
+            <select aria-label="비교 노드 추가" value="" disabled={running} onChange={(e) => e.target.value && addNode('compare', { operation: e.target.value as PipeNode['operation'] })}>
+              <option value="">+ 비교</option>
+              {Object.entries(COMPARE_OPS).map(([op, label]) => <option key={op} value={op}>{label}</option>)}
+            </select>
+            {(['and', 'or', 'not'] as const).map((kind) => <button key={kind} disabled={running} onClick={() => addNode(kind)}>{KIND_LABEL[kind]}</button>)}
             <span className="small muted" style={{ marginLeft: 8 }}>
               데이터
             </span>
+            <button disabled={running} onClick={() => addNode('terminal')}>
+              터미널
+            </button>
+            <button disabled={running} onClick={() => addNode('boolean')}>Bool</button>
+            <button disabled={running} onClick={() => addNode('number')}>숫자</button>
             <button disabled={running} onClick={() => addNode('text')}>
               텍스트
             </button>
+            <button disabled={running} onClick={() => addNode('add')} title="A 뒤에 B를 그대로 이어 붙입니다">텍스트 Add</button>
             <button disabled={running} onClick={() => addNode('list', { items: [''] })}>
               리스트
             </button>
             <button disabled={running} onClick={() => addNode('join')}>
               합치기
             </button>
+            <button disabled={running} onClick={() => addNode('schema')}>출력 구조</button>
+            <button disabled={running} onClick={() => addNode('dictionary', { text: '{}' })}>Dictionary</button>
             <select value="" disabled={running} onChange={(e) => e.target.value && addNode('task', { ref: e.target.value })}>
               <option value="">+ 할 일</option>
               {tasks
@@ -733,7 +791,7 @@ interface MenuItem {
 }
 
 /** 꺼낸 안쪽 값으로 만드는 새 데이터 노드의 내용 */
-const innerExtra = (v: InnerValue): Partial<PipeNode> => ({ ...(v.ref ? { ref: v.ref } : {}), ...(v.text !== undefined ? { text: v.text } : {}), ...(v.index !== undefined ? { index: v.index } : {}) })
+const innerExtra = (v: InnerValue): Partial<PipeNode> => ({ ...(v.ref ? { ref: v.ref } : {}), ...(v.text !== undefined ? { text: v.text } : {}), ...(v.index !== undefined ? { index: v.index } : {}), ...(v.pointer !== undefined ? { pointer: v.pointer } : {}) })
 
 const KIND_WORDS: Record<NodeKind, string> = {
   claude: 'claude code 클로드 에이전트 agent 프롬프트',
@@ -743,10 +801,19 @@ const KIND_WORDS: Record<NodeKind, string> = {
   'function-input': '함수 입력 input',
   'function-output': '함수 출력 output',
   foreach: 'for foreach for each loop 반복 순회 유틸 리스트 배열 항목 인덱스',
+  if: 'if branch 조건 분기 참 거짓 true false bool',
+  compare: 'compare 비교 계산 같음 다름 크다 작다 == != > >= < <=',
+  and: 'and 논리 모두 참 &&', or: 'or 논리 하나라도 참 ||', not: 'not 논리 부정 반전 !',
+  boolean: 'bool boolean 불리언 참 거짓 true false 변환', number: 'number 숫자 수 변환',
   item: '리스트 항목 array get index',
   complete: 'complete done 할일완료 완료 task',
+  terminal: 'terminal 터미널 탭 세션 입력 input 기존 재사용',
   text: 'text 텍스트 글 문자열 string 단일',
+  add: 'add text string 텍스트 문자열 더하기 이어붙이기 concat append +',
   list: 'list array 리스트 목록 배열 여러',
+  schema: 'schema 구조화 출력 형식 필드 규칙 json',
+  dictionary: 'dictionary dict object 객체 JSON 데이터 결과',
+  property: 'property key path 필드 키 경로 JSON 꺼내기',
   join: 'join append 합치기 더하기 이어붙이기 concat',
   task: 'task todo 할일 할 일',
   start: 'start begin 시작 이벤트 event',
@@ -764,7 +831,16 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
     ...AGENT_KINDS.map((k) => base(k, '실행')),
     base('complete', '실행'),
     base('foreach', '유틸리티'),
+    base('if', '유틸리티'),
+    ...Object.entries(COMPARE_OPS).map(([op, label]): MenuItem => ({ ...base('compare', '비교'), key: `compare:${op}`, label, extra: { operation: op as PipeNode['operation'] } })),
+    ...(['and', 'or', 'not'] as const).map((kind) => base(kind, '논리')),
+    base('boolean', '데이터'), base('number', '데이터'),
+    base('terminal', '데이터'),
     base('text', '데이터'),
+    base('add', '데이터'),
+    { ...base('schema', '데이터'), extra: { fields: defaultOutputFields() } },
+    { ...base('dictionary', '데이터'), extra: { text: '{}' } },
+    base('property', '데이터'),
     { ...base('list', '데이터'), extra: { items: [''] } },
     { ...base('item', '데이터'), extra: { index: 0 } },
     base('join', '데이터'),
@@ -897,6 +973,9 @@ function Help({ empty }: { empty: boolean }) {
         <b>셸의 데이터 출력</b>: 셸 노드 오른쪽 아래 ● 핀은 명령이 끝난 뒤의 출력을 넘깁니다. 출력을 받는 노드는 그 셸보다 실행 선으로 뒤에 있어야 합니다.
       </p>
       <p>
+        <b>구조화된 출력</b>: Claude·Codex에서 출력 형식을 고르거나 출력 구조 노드를 연결해 필드 이름·타입·작성 규칙을 지정하세요. 응답을 Dictionary로 연결하면 결과를 펼쳐 보고 원하는 키·배열 인덱스를 JSON 필드 노드로 꺼낼 수 있습니다. 응답이 구조와 다르면 뒤 작업을 멈춥니다.
+      </p>
+      <p>
         <b>잇기</b>: 오른쪽 출력 핀을 눌러 다른 노드까지 끌어 놓으세요. 빈 곳에 놓으면 이어 붙일 노드를 검색합니다. 선을 누르고 Delete로 끊습니다.
       </p>
       <p>
@@ -994,12 +1073,25 @@ function FunctionParameters({ node, locked, onPatch }: { node: PipeNode; locked:
   </div>
 }
 
-function FunctionValues({ node, params, draft, locked, onPatch }: { node: PipeNode; params: FunctionParam[]; draft: Draft; locked: boolean; onPatch: (patch: Partial<PipeNode>) => void }) {
+function TerminalField({ terminals, value, disabled, label = '사용할 터미널', onChange }: { terminals: TerminalInfo[]; value?: string; disabled: boolean; label?: string; onChange: (id: string) => void }) {
+  const available = terminals.filter((t) => isAgent(t) && t.exited === undefined)
+  return <select aria-label={label} value={value ?? ''} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+    <option value="">열려 있는 터미널을 고르세요</option>
+    {value && !available.some((t) => t.id === value) && <option value={value}>닫힌 터미널 · 다시 선택하세요</option>}
+    {available.map((t) => <option key={t.id} value={t.id}>{t.title} · {KIND_LABEL[t.kind]}{t.activity === 'working' ? ' (작업 중)' : ''}</option>)}
+  </select>
+}
+
+function FunctionValues({ node, params, draft, env, locked, onPatch }: { node: PipeNode; params: FunctionParam[]; draft: Draft; env: Env; locked: boolean; onPatch: (patch: Partial<PipeNode>) => void }) {
   return <>{params.map((param, index) => {
     const linked = draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e) && (e.toPort ?? params[0]?.id) === param.id)
     return <div className="field" key={param.id}>
       <label>{param.name} · {PARAM_TYPE_NAME[param.type]}{linked ? ' (핀으로 연결됨)' : ''}</label>
-      <textarea aria-label={`${param.name} 기본값`} rows={2} disabled={locked || linked} value={node.values?.[param.id] ?? (node.kind === 'template' && index === 0 ? node.text : '')} placeholder={linked ? '연결된 노드의 값을 사용합니다' : param.type === 'list' ? '한 줄에 한 항목' : '핀을 연결하거나 기본값을 입력하세요'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />
+      {param.type === 'terminal'
+        ? linked ? <div className="small muted">연결된 터미널을 사용합니다.</div> : <TerminalField terminals={env.terminals} label={`${param.name} 기본값`} disabled={locked} value={node.values?.[param.id]} onChange={(id) => onPatch({ values: { ...node.values, [param.id]: id } })} />
+        : param.type === 'boolean' ? <select aria-label={`${param.name} 기본값`} disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? 'false'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })}>{linked ? <option value="">연결된 Bool 값을 사용합니다</option> : <><option value="false">False (거짓)</option><option value="true">True (참)</option></>}</select>
+        : param.type === 'number' ? <input aria-label={`${param.name} 기본값`} type="number" step="any" disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? '0'} placeholder={linked ? '연결된 숫자 값을 사용합니다' : ''} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />
+        : <textarea aria-label={`${param.name} 기본값`} rows={2} disabled={locked || linked} value={node.values?.[param.id] ?? (node.kind === 'template' && index === 0 ? node.text : '')} placeholder={linked ? '연결된 노드의 값을 사용합니다' : param.type === 'list' ? '한 줄에 한 항목' : '핀을 연결하거나 기본값을 입력하세요'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />}
     </div>
   })}</>
 }
@@ -1024,7 +1116,7 @@ function NodePanel({
   draft: Draft
   env: Env
   run?: RunState
-  tabs: { id: string; title: string }[]
+  tabs: TerminalInfo[]
   locked: boolean
   onPatch: (p: Partial<PipeNode>) => void
   onRename: (name: string) => void
@@ -1040,20 +1132,36 @@ function NodePanel({
   const nm = (id: string) => nodeName(draft.nodes.find((n) => n.id === id) ?? { id })
   const inputs = draft.edges.filter((e) => e.to === node.id).map((e) => nm(e.from))
   const outputs = draft.edges.filter((e) => e.from === node.id).map((e) => nm(e.to))
-  const inner = (() => { try { return innerValues(node, env, draft) } catch { return [] } })()
+  const output = (id: string) => run?.nodes[id]?.status === 'done' ? run.nodes[id].output : undefined
+  const inner = (() => { try { return innerValues(node, env, draft, output) } catch { return [] } })()
+  const schemaLinked = draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e) && (e.toPort === AGENT_PORT.schema || edgeShape(draft, e, env) === 'schema'))
+  const jsonResult = (() => {
+    if (node.kind !== 'dictionary' && node.kind !== 'property') return undefined
+    try {
+      const text = dataValue(draft, node.id, env)
+      if (outputRefs(text).some((id) => output(id) === undefined)) return undefined
+      return { value: parseJson(fillOutputs(text, (id) => output(id) ?? '')) }
+    } catch { return undefined }
+  })()
   const target = specTarget(node, env)
+  const linkedTerminal = hasTerminalInput(draft, node, env)
   // 실행 노드의 결과가 들어갈 자리는 "[셸의 출력]"처럼 보여 준다
   const preview = (() => {
     try {
-      const text = isData(node) ? dataValue(draft, node.id, env) : node.kind === 'complete' ? '' : nodeInput(draft, node.id, env)
-      return fillOutputs(text, (id) => `[${nm(id)}의 출력]`)
+      if (node.kind === 'terminal') return env.terminals.find((t) => t.id === node.ref)?.title ?? '사용할 터미널을 고르세요'
+      let text = isData(node) ? dataValue(draft, node.id, env) : node.kind === 'complete' ? '' : nodeInput(draft, node.id, env)
+      const schema = agentSchema(draft, node.id, env)
+      if (schema) text = structuredPrompt(text, schema)
+      const refs = outputRefs(text)
+      const pending = refs.some((id) => output(id) === undefined) || (!refs.length && text.includes('\u0000계산:'))
+      return fillOutputs(text, (id) => output(id) ?? `[${nm(id)}의 출력]`, pending)
     } catch (e) {
       return e instanceof Error ? e.message : String(e)
     }
   })()
   const listItems = (() => {
     try {
-      return node.kind === 'list' && inputs.length ? dataItems(draft, node.id, env).map((t) => fillOutputs(t, (id) => `[${nm(id)}의 출력]`)) : []
+      return node.kind === 'list' && inputs.length ? dataItems(draft, node.id, env).map((t) => fillOutputs(t, (id) => output(id) ?? `[${nm(id)}의 출력]`, outputRefs(t).some((id) => output(id) === undefined))) : []
     } catch {
       return []
     }
@@ -1072,11 +1180,57 @@ function NodePanel({
   return (
     <>
       <NameField key={node.id} name={nodeName(node)} kind={KIND_LABEL[node.kind]} disabled={locked || isFunctionBoundary(node)} onRename={onRename} />
+      {node.kind === 'if' && <>
+        <div className="small muted">Bool 조건이 참이면 True, 거짓이면 False 경로로 실행합니다. 비교·논리 노드의 빨간 출력 핀을 조건에 연결하세요.</div>
+        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
+      </>}
+      {isLogic(node) && <>
+        {node.kind === 'compare' && <div className="grid2">
+          <div className="field"><label>비교 타입</label><select aria-label="비교 타입" disabled={locked} value={node.compareType ?? 'number'} onChange={(e) => {
+            const compareType = e.target.value as NonNullable<PipeNode['compareType']>
+            onPatch({ compareType, operation: compareType !== 'number' && !['eq', 'ne'].includes(node.operation ?? 'eq') ? 'eq' : node.operation, values: Object.fromEntries(functionParams(node, env).inputs.map((p) => [p.id, defaultValue(compareType)])) })
+          }}>{(['number', 'single', 'boolean'] as const).map((type) => <option key={type} value={type}>{PARAM_TYPE_NAME[type]}</option>)}</select></div>
+          <div className="field"><label>비교 연산</label><select aria-label="비교 연산" disabled={locked} value={node.operation ?? 'eq'} onChange={(e) => onPatch({ operation: e.target.value as PipeNode['operation'] })}>
+            {Object.entries(COMPARE_OPS).filter(([op]) => !node.compareType || node.compareType === 'number' || ['eq', 'ne'].includes(op)).map(([op, label]) => <option key={op} value={op}>{label}</option>)}
+          </select></div>
+        </div>}
+        <div className="small muted">{node.kind === 'compare' ? '같은 타입의 A와 B를 비교합니다. 텍스트는 대소문자·공백까지 일치해야 같습니다.' : node.kind === 'and' ? 'A와 B가 모두 참이면 True입니다.' : node.kind === 'or' ? 'A와 B 중 하나라도 참이면 True입니다.' : '입력 Bool 값을 반전합니다.'}</div>
+        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
+      </>}
+      {(node.kind === 'boolean' || node.kind === 'number') && <div className="field">
+        <label>{KIND_LABEL[node.kind]} 값</label>
+        {inputs.length ? <div className="small muted">연결된 값을 {KIND_LABEL[node.kind]}로 변환합니다. {node.kind === 'boolean' ? 'true 또는 false만 허용합니다.' : '유효한 숫자만 허용합니다.'}</div>
+          : node.kind === 'boolean' ? <select aria-label="Bool 값" disabled={locked} value={node.text || 'false'} onChange={(e) => onPatch({ text: e.target.value })}><option value="false">False (거짓)</option><option value="true">True (참)</option></select>
+          : <input aria-label="숫자 값" type="number" step="any" disabled={locked} value={node.text || '0'} onChange={(e) => onPatch({ text: e.target.value })} />}
+      </div>}
+      {node.kind === 'schema' && <div className="field">
+        <label>출력 필드</label>
+        <OutputFields fields={node.fields ?? []} disabled={locked} onChange={(fields) => onPatch({ fields })} />
+        <div className="small muted">Claude·Codex의 출력 구조 핀에 연결하면 이 형식으로 응답을 요청합니다.</div>
+      </div>}
+      {node.kind === 'dictionary' && <div className="field">
+        <label>Dictionary 값</label>
+        {inputs.length ? <div className="small muted">{inputs.join(', ')}의 JSON 객체를 읽습니다. 다시 실행하면 새 결과를 표시합니다.</div> : <textarea aria-label="Dictionary JSON" rows={6} disabled={locked} value={node.text} placeholder={'{ "people": "민수" }'} onChange={(e) => onPatch({ text: e.target.value })} />}
+      </div>}
+      {node.kind === 'property' && <div className="field">
+        <label>필드 경로</label>
+        <input aria-label="JSON 필드 경로" value={node.pointer ?? ''} disabled={locked} placeholder="/people 또는 /people/0/name" onChange={(e) => onPatch({ pointer: e.target.value })} />
+        <div className="small muted">연결된 원본에서 해당 키나 배열 인덱스를 읽습니다. 빈 경로는 전체 값입니다. 키의 /는 ~1, ~는 ~0으로 적으세요.</div>
+      </div>}
+      {jsonResult && <div className="field pipe-json-result">
+        <label>현재 데이터</label>
+        <JsonTree value={jsonResult.value} disabled={locked} onExtract={(path) => onExtract({ kind: 'property', pointer: toPointer(path), label: path.join(' / ') })} />
+      </div>}
       {isFunctionBoundary(node) && <>
         <div className="small muted">함수의 고정 {node.kind === 'function-input' ? '입력' : '출력'} 노드입니다.</div>
         <FunctionParameters node={node} locked={locked} onPatch={onPatch} />
-        {node.kind === 'function-output' && <FunctionValues node={node} params={node.params ?? []} draft={draft} locked={locked} onPatch={onPatch} />}
+        {node.kind === 'function-output' && <FunctionValues node={node} params={node.params ?? []} draft={draft} env={env} locked={locked} onPatch={onPatch} />}
       </>}
+      {node.kind === 'terminal' && <div className="field">
+        <label>사용할 터미널</label>
+        <TerminalField terminals={env.terminals} value={node.ref} disabled={locked} onChange={(ref) => onPatch({ ref })} />
+        <div className="small muted">출력 핀을 같은 종류의 Codex·Claude Code 노드의 터미널 입력에 연결하세요. 선택한 탭에서 실행합니다.</div>
+      </div>}
       {node.kind === 'item' && <div className="field">
         <label>항목 인덱스 (0부터 시작)</label>
         <input aria-label="항목 인덱스" type="number" min="0" step="1" value={node.index ?? 0} disabled={locked} onChange={(e) => onPatch({ index: Math.max(0, Math.trunc(Number(e.target.value))) })} />
@@ -1084,7 +1238,7 @@ function NodePanel({
       </div>}
       {node.kind === 'foreach' && <>
         <div className="small muted">리스트를 한 항목씩 순서대로 처리합니다. 반복 본문에 작업을 연결하고 항목·인덱스 핀으로 값을 넘기세요. 본문 끝을 다시 연결할 필요가 없습니다. 모든 반복을 마치면 완료 핀으로 넘어갑니다.</div>
-        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} locked={locked} onPatch={onPatch} />
+        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
       </>}
       <div className="small muted" title="이름을 바꿔도 이어진 선은 그대로입니다">
         {isData(node) ? `데이터 노드 (${SHAPE_NAME[dataShape(node)]})` : '액션 노드'} · {KIND_LABEL[node.kind]}
@@ -1100,10 +1254,13 @@ function NodePanel({
               {st.termId && tabs.some((t) => t.id === st.termId) && <button onClick={() => onShowTerminal(st.termId!)}>터미널 보기</button>}
               {st.output !== undefined && (
                 <details className="pipe-preview" style={{ width: '100%' }}>
-                  <summary className="small">명령 출력 (데이터 출력으로 넘긴 글)</summary>
+                  <summary className="small">{isAgent(node) ? '최종 응답' : '명령 출력 (데이터 출력으로 넘긴 글)'}</summary>
                   <pre>{st.output || '(출력 없음)'}</pre>
                 </details>
               )}
+              {st.structuredOutput && <div className="pipe-json-result" style={{ width: '100%' }}>
+                <JsonTree value={st.structuredOutput} disabled={locked} onExtract={(path) => onExtract({ kind: 'property', pointer: toPointer(path), label: path.join(' / ') })} />
+              </div>}
               {st.status === 'running' && !st.code && (
                 <button title="응답 끝 신호가 오지 않았을 때 직접 넘깁니다" onClick={() => run && void api.markNodeDone(run.runId, k)}>
                   끝남으로 넘기기
@@ -1129,13 +1286,15 @@ function NodePanel({
             </div>
             <div className="field">
               <label>터미널</label>
-              <select value={node.terminal} disabled={locked} onChange={(e) => onPatch({ terminal: e.target.value as PipeNode['terminal'] })}>
+              <select aria-label="터미널 실행 방식" value={linkedTerminal ? 'input' : node.terminal} disabled={locked || linkedTerminal} onChange={(e) => onPatch({ terminal: e.target.value as PipeNode['terminal'] })}>
+                {linkedTerminal && <option value="input">입력 핀에 연결한 터미널</option>}
                 <option value="new">{node.session ? '선택한 세션에서' : '새 탭에서'}</option>
                 <option value="continue">앞 노드 터미널에서 이어서</option>
               </select>
             </div>
           </div>
-          {(node.kind === 'claude' || node.kind === 'codex') && node.terminal === 'new' && (
+          {linkedTerminal && <div className="small muted">터미널 입력에 연결된 탭에서 실행합니다. 터미널 출력으로 뒤 노드에 같은 탭을 넘길 수 있습니다.</div>}
+          {(node.kind === 'claude' || node.kind === 'codex') && node.terminal === 'new' && !linkedTerminal && (
             <SessionField kind={node.kind} value={node.session} disabled={locked} onChange={(session) => onPatch({ session })} />
           )}
           <div className="field">
@@ -1148,6 +1307,16 @@ function NodePanel({
               onChange={(e) => onPatch({ text: e.target.value })}
             />
           </div>
+          {isAgent(node) && <div className="field">
+            <label>출력 형식</label>
+            <select aria-label="출력 형식" value={schemaLinked || node.fields ? 'json' : 'text'} disabled={locked || schemaLinked} onChange={(e) => onPatch({ fields: e.target.value === 'json' ? defaultOutputFields() : undefined })}>
+              <option value="text">자유 텍스트</option>
+              <option value="json">구조화된 JSON</option>
+            </select>
+            {schemaLinked ? <div className="small muted">출력 구조 핀에 연결한 노드의 필드·작성 규칙을 사용합니다.</div> : node.fields && <OutputFields fields={node.fields} disabled={locked} onChange={(fields) => onPatch({ fields })} />}
+            <div className="small muted">프롬프트 핀에 텍스트·데이터를 연결할 수 있습니다. 구조화된 응답은 필수 키와 타입을 검사하며, 맞지 않으면 뒤 작업을 멈춥니다.</div>
+            <button disabled={locked} onClick={() => onExtract({ kind: 'dictionary', label: `${nodeName(node)} 결과` })}>+ 결과 Dictionary</button>
+          </div>}
         </>
       )}
 
@@ -1174,10 +1343,15 @@ function NodePanel({
               함수의 Input·Output에서 변수 이름과 타입을 설정합니다. 함수 변경은 다음 호출부터 반영됩니다.
             </div>
           )}
-          <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} locked={locked} onPatch={onPatch} />
+          <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
           <div className="small muted">출력: {functionParams(node, env).outputs.map((p) => `${p.name} (${PARAM_TYPE_NAME[p.type]})`).join(', ') || '없음'}</div>
         </>
       )}
+
+      {node.kind === 'add' && <>
+        <div className="small muted">A 뒤에 B를 그대로 이어 붙입니다. 입력 핀에 텍스트를 연결하거나 아래에 직접 적으세요. 공백·줄바꿈은 입력한 만큼만 들어갑니다.</div>
+        <FunctionValues node={node} params={functionParams(node, env).inputs} draft={draft} env={env} locked={locked} onPatch={onPatch} />
+      </>}
 
       {node.kind === 'text' &&
         (inputs.length > 0 ? (
@@ -1321,7 +1495,7 @@ function NodePanel({
 
       {inner.length > 0 && (
         <div className="field">
-          <label>꺼내기 ({node.kind === 'spec' ? '기능' : node.kind === 'list' ? '항목' : '수용 기준'}을 새 데이터 노드로 · 출력 핀을 빈 곳에 놓아도 됩니다)</label>
+          <label>꺼내기 ({node.kind === 'spec' ? '기능' : node.kind === 'list' ? '항목' : node.kind === 'feature' ? '수용 기준' : '필드'}를 새 데이터 노드로 · 출력 핀을 빈 곳에 놓아도 됩니다)</label>
           <div className="pipe-inner">
             {inner.map((v, i) => (
               <button key={v.ref ?? i}className="ghost" disabled={locked} title={v.label} onClick={() => onExtract(v)}>
@@ -1334,7 +1508,7 @@ function NodePanel({
 
       {preview && node.kind !== 'text' && node.kind !== 'foreach' && (
         <details className="pipe-preview" open={isData(node)}>
-          <summary className="small">{isData(node) ? '내보내는 글' : node.kind === 'template' ? '함수에 넘길 입력' : '실제로 보낼 글'}</summary>
+          <summary className="small">{node.kind === 'if' ? '조건 (Bool)' : isLogic(node) ? '계산 결과 (Bool)' : node.kind === 'terminal' ? '선택한 터미널' : isData(node) ? '내보내는 값' : node.kind === 'template' ? '함수에 넘길 입력' : '실제로 보낼 글'}</summary>
           <pre>{preview}</pre>
         </details>
       )}
@@ -1449,6 +1623,8 @@ function Canvas({
         { selector: 'node.unused', style: { opacity: 0.4 } },
         { selector: 'node[kind = "start"]', style: { shape: 'round-rectangle', width: 110, height: 40, 'background-opacity': 0.3, 'font-weight': 'bold' } },
         { selector: 'node.sel', style: { 'overlay-color': accent, 'overlay-opacity': 0.12, 'overlay-padding': 6 } },
+        // 상세 패널의 sel과 별개로 Shift+클릭·영역 선택된 모든 노드에 외곽선을 표시한다.
+        { selector: 'node:selected', style: { 'outline-color': accent, 'outline-width': 2, 'outline-offset': 4 } },
         { selector: 'node.source, node.eh-source', style: { 'border-color': '#d0702a', 'border-width': 3 } },
         { selector: 'node.eh-target', style: { 'border-color': accent, 'border-width': 3.5 } },
         {
@@ -1473,6 +1649,9 @@ function Canvas({
           } as unknown as cytoscape.Css.Edge
         },
         { selector: 'edge.data', style: { 'line-color': DATA_COLOR, width: 2 } },
+        { selector: 'edge.terminal', style: { 'line-color': TERMINAL_COLOR, width: 2 } },
+        { selector: 'edge.boolean', style: { 'line-color': BOOL_COLOR, width: 2 } },
+        { selector: 'edge.number', style: { 'line-color': NUMBER_COLOR, width: 2 } },
         { selector: 'edge.sel, edge.hover', style: { 'line-color': accent, width: 3.4 } },
         { selector: '.eh-ghost-edge, edge.eh-preview', style: { 'line-color': '#d0702a', 'line-style': 'dashed', width: 2 } },
         { selector: '.eh-ghost-edge.eh-preview-active', style: { opacity: 0 } }
@@ -1482,7 +1661,7 @@ function Canvas({
     let dragPin: OutPin
     let pointer: Pt | undefined
     const targetPins = (source: NodeSingular, target: NodeSingular) => {
-      const type = (dragPin && !isLoopExecPort(dragPin)) || source.data('data') ? 'data' : 'exec'
+      const type = (dragPin && !isExecPort(dragPin)) || source.data('data') ? 'data' : 'exec'
       return ((target.data('pins') as Pin[] | undefined) ?? []).filter((p) => p.side === 'in' && p.type === type)
     }
     const targetPort = (source: NodeSingular, target?: NodeSingular): string | undefined => {
@@ -1619,7 +1798,7 @@ function Canvas({
         let el = c.getElementById(id)
         if (el.empty()) el = c.add({ group: 'edges', data: { id, source: e.from, target: e.to, pin: e.pin, fromPort: e.fromPort, toPort: e.toPort } })
         const s = !!sel && 'edge' in sel && sameEdge(sel.edge, e)
-        el.classes([isDataEdge(draft, e) ? 'data' : '', s ? 'sel' : ''].filter(Boolean))
+        el.classes([...(isDataEdge(draft, e) ? ['data', edgeShape(draft, e, env)] : []), ...(s ? ['sel'] : [])])
       }
     })
     c.style().update()
@@ -1649,7 +1828,8 @@ function nodeLabel(n: PipeNode, env: Env, draft: Draft): string {
   const name = nodeName(n)
   const head = `${name}${name.startsWith(KIND_LABEL[n.kind]) ? '' : ` · ${KIND_LABEL[n.kind]}`}${n.terminal === 'continue' && AGENT_KINDS.includes(n.kind) ? ' (이어서)' : n.session ? ' (세션 불러옴)' : ''}`
   let body = ''
-  if (n.kind === 'template') body = env.library.find((p) => p.id === n.ref)?.title ?? '(함수 없음)'
+  if (n.kind === 'terminal') body = env.terminals.find((t) => t.id === n.ref)?.title ?? '(터미널 선택)'
+  else if (n.kind === 'template') body = env.library.find((p) => p.id === n.ref)?.title ?? '(함수 없음)'
   else if (SPEC_KINDS.includes(n.kind)) {
     const { spec, feature, ac } = specTarget(n, env)
     body =
