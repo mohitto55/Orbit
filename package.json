@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "productName": "Orbit",
-  "version": "0.3.33",
+  "version": "0.3.34",
   "description": "도메인 모델, 기능 명세, 설계, 테스트, 할 일을 한곳에서 관리하는 데스크톱 앱",
   "main": "./out/main/index.js",
   "author": "mohitto55",
