@@ -1706,6 +1706,18 @@ function Canvas({
     // 지금 끌고 있는 출력 핀 (실행 노드의 데이터 출력이면 'data')
     let dragPin: OutPin
     let pointer: Pt | undefined
+    let releasedAt: Pt | undefined
+    const onSourcePin = (source: NodeSingular, point?: Pt) => {
+      const s = source.position(), dy = outPin(source, dragPin).dy
+      return !!point && Math.hypot(point.x - s.x - source.width() / 2, point.y - s.y - dy) <= Math.max(9 / instance.zoom(), PIN / 2 + 4)
+    }
+    // 커서를 따라가는 ghost 선에는 edgehandles의 edgeParams가 적용되지 않는다.
+    // 타깃 위의 미리 보기와 완성된 선처럼, 누른 출력 핀을 명시한다.
+    instance.on('add', 'edge.eh-ghost-edge', (event) => {
+      const edge = event.target as cytoscape.EdgeSingular
+      const { pin, fromPort } = edgeOf(edge.source().id(), edge.target().id(), dragPin)
+      edge.data({ pin, fromPort })
+    })
     const targetPins = (source: NodeSingular, target: NodeSingular) => {
       const type = (dragPin && !isExecPort(dragPin)) || source.data('data') ? 'data' : 'exec'
       return ((target.data('pins') as Pin[] | undefined) ?? []).filter((p) => p.side === 'in' && p.type === type)
@@ -1725,6 +1737,8 @@ function Canvas({
         if (port) e.data('toPort', port)
       })
     })
+    // edgehandles가 tapend를 처리하기 전에 실제 놓은 위치를 보관한다.
+    instance.on('tapend', (event) => { releasedAt = event.position })
     const eh = (instance as unknown as { edgehandles: (o: object) => { start: (n: NodeSingular) => void } }).edgehandles({
       // 빈 곳에 놓을 때는 대상이 비어서 오는데, 여기서 막으면 ehcancel(→ 검색 메뉴)이 오지 않는다
       // edgehandles는 노드 단위로 결과를 기억한다. 가능한 포트가 있으면 허용하고, 놓을 때 고른 포트를 검사한다.
@@ -1755,6 +1769,8 @@ function Canvas({
       hit.node.ungrabify()
       grabbed = hit.node
       dragPin = hit.pin
+      pointer = e.position
+      releasedAt = undefined
       eh.start(hit.node)
     })
     instance.on('tapend', () => {
@@ -1762,16 +1778,17 @@ function Canvas({
       grabbed = null
     })
     instance.on('ehcomplete', (event, source: NodeSingular, target: NodeSingular, added: cytoscape.EdgeSingular) => {
-      if (event.position) pointer = event.position
+      pointer = releasedAt ?? event.position ?? pointer
       added.remove()
+      if (onSourcePin(source, pointer)) return
       h.current.onConnect(source.id(), target.id(), dragPin, targetPort(source, target))
     })
     // 블루프린트처럼: 핀을 빈 곳에 놓으면 그 자리에 이어 붙일 노드를 검색한다
     instance.on('ehcancel', (e, source: NodeSingular) => {
-      const m = e.position
+      const m = releasedAt ?? e.position
       if (m) pointer = m
       const s = source.position()
-      if (!m || Math.hypot(m.x - s.x, m.y - s.y) < source.width() / 2 + 30) return
+      if (!m || onSourcePin(source, m) || Math.hypot(m.x - s.x, m.y - s.y) < source.width() / 2 + 30) return
       // 노드 위에 놓았는데 머문 시간이 짧아 대상으로 잡히지 않았으면 그 노드에 바로 잇는다
       const over = instance.nodes().filter((n) => {
         const bb = n.boundingBox({ includeLabels: false, includeOverlays: false })
@@ -1825,7 +1842,7 @@ function Canvas({
     const live = draft.nodes.some((n) => n.kind === 'start') ? liveNodes(draft) : null
     c.batch(() => {
       if (!fitted.current?.startsWith(`${draft.id}:`)) c.elements().remove()
-      c.nodes().forEach((n) => void (ids.has(n.id()) || n.remove()))
+      c.nodes().not('.eh-ghost').forEach((n) => void (ids.has(n.id()) || n.remove()))
       for (const n of draft.nodes) {
         const st = live && !live.has(n.id) ? 'unused' : nodeStatus(run, n.id)
         const label = nodeLabel(n, env, draft)
@@ -1838,10 +1855,10 @@ function Canvas({
         const color = dark ? '#e4e7ec' : '#3d4454', background = dark ? '#1c2026' : '#ffffff'
         el.style((functional ? functionStyle(n, env, color, background) : { ...pinStyle(pins, color, background), label, width: n.kind === 'start' ? 110 : isData(n) ? DATA_W : EXEC_W, height: n.kind === 'start' ? 40 : isData(n) ? DATA_H : EXEC_H }) as unknown as cytoscape.Css.Node)
         const selected = !!sel && 'node' in sel && sel.node === n.id
-        el.classes([st ?? '', selected ? 'sel' : '', connectFrom === n.id ? 'source' : ''].filter(Boolean))
+        el.classes([...el.classes().filter((name) => name.startsWith('eh-')), st ?? '', selected ? 'sel' : '', connectFrom === n.id ? 'source' : ''].filter(Boolean))
       }
       const want = new Set(draft.edges.map(edgeKey))
-      c.edges().forEach((e) => void (want.has(e.id()) || e.remove()))
+      c.edges().not('.eh-ghost, .eh-preview').forEach((e) => void (want.has(e.id()) || e.remove()))
       for (const e of draft.edges) {
         const id = edgeKey(e)
         let el = c.getElementById(id)
