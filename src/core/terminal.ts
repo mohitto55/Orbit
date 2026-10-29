@@ -1,18 +1,18 @@
 import type { IPty } from 'node-pty'
 import { randomUUID } from 'crypto'
 import type { ProjectSettings } from './workspace'
+import type { AgentOptions } from './agentModel'
 
 /** 연동: 프로젝트 폴더에서 셸·Claude Code·Codex를 실행하는 터미널 세션 관리. */
 export type TerminalKind = 'shell' | 'claude' | 'codex'
 export type TerminalActivity = 'idle' | 'working' | 'completed'
 
-export interface TerminalInfo {
+export interface TerminalInfo extends AgentOptions {
   id: string
   kind: TerminalKind
   title: string
   pid: number
   sessionId?: string
-  model?: string
   exited?: number
   groupId?: string
   /** completed는 작업이 끝났지만 사용자가 아직 확인하지 않은 상태다. */
@@ -241,7 +241,11 @@ export class TerminalManager {
   }
 
   killAll(): void {
-    for (const id of [...this.terms.keys()]) this.kill(id)
+    const errors: string[] = []
+    for (const id of [...this.terms.keys()]) {
+      try { this.kill(id) } catch (error) { errors.push(`${id}: ${String(error)}`) }
+    }
+    if (errors.length) this.events.onError?.(`터미널 종료 실패: ${errors.join('\n')}`)
   }
 
   list(): TerminalInfo[] {

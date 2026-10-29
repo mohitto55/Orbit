@@ -8,6 +8,8 @@ import type { TerminalActivity, TerminalInfo, TerminalKind, TerminalSnapshot } f
 import type { TerminalGroup, TerminalLayout, TerminalOrderPosition } from '../../../core/terminalWorkspace'
 import { terminalFilePastes } from '../../../core/terminalFiles'
 import PipelineEditor from './Pipelines'
+import { AgentOptionsFields } from '../AgentOptionsFields'
+import type { AgentOptions } from '../../../core/agentModel'
 
 interface Output { id: string; data: string; sequence: number }
 type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
@@ -38,6 +40,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState(false)
   const [editing, setEditing] = useState<Editing | null>(null)
+  const [configuring, setConfiguring] = useState<{ id: string; title: string; kind: 'claude' | 'codex'; value: AgentOptions } | null>(null)
   const [updating, setUpdating] = useState(false)
   const [name, setName] = useState('')
   const [view, setView] = useState<'terms' | 'graph'>('terms')
@@ -55,7 +58,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const shownTabs = tabs.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
   const selectedGroup = groups.find((g) => g.id === activeGroup)
   const activeTab = tabs.find((tab) => tab.id === active)
-  const canDropFiles = visible && view === 'terms' && !busy && !editing && !!activeTab && activeTab.exited === undefined
+  const canDropFiles = visible && view === 'terms' && !busy && !editing && !configuring && !!activeTab && activeTab.exited === undefined
 
   function applyLayout(layout: TerminalLayout) {
     if (!mounted.current) return
@@ -388,6 +391,18 @@ export default function Terminals({ visible }: { visible: boolean }) {
     finally { if (mounted.current) setOpening(false) }
   }
 
+  async function saveAgentOptions() {
+    if (!configuring || busy) return
+    setUpdating(true)
+    try {
+      const snapshot = await api.termSetAgentOptions(configuring.id, configuring.value)
+      if (!mounted.current) return
+      setTabs((all) => all.map((tab) => tab.id === snapshot.id ? mergeActivity(snapshot, tab) : tab))
+      setConfiguring(null)
+    } catch (error) { errorToast(error) }
+    finally { if (mounted.current) setUpdating(false) }
+  }
+
   return (
     <div className="page terminals" style={{ display: visible ? 'flex' : 'none' }}>
       <div className="row between">
@@ -431,6 +446,9 @@ export default function Terminals({ visible }: { visible: boolean }) {
       </div>
       <div className="term-group-tools">
         <span className="small muted">탭·그룹을 끌어 정리하세요. 사진·파일은 아래 터미널에 놓아 추가할 수 있습니다.</span>
+        {activeTab && activeTab.kind !== 'shell' && <button disabled={busy} aria-label="세션 모델·Effort 설정" onClick={() => setConfiguring({ id: activeTab.id, title: activeTab.title, kind: activeTab.kind as 'claude' | 'codex', value: { model: activeTab.model, effort: activeTab.effort } })}>
+          Model: {activeTab.model ?? '기본값'} · Effort: {activeTab.effort ?? '기본값'}
+        </button>}
         {activeTab && <label className="small">선택한 터미널의 그룹
           <select aria-label="선택한 터미널의 그룹" value={activeTab.groupId ?? ''} disabled={busy} onChange={(event) => void changeLayout(() => api.termMoveToGroup(activeTab.id, event.target.value || null))}>
             <option value="">미분류</option>
@@ -473,6 +491,13 @@ export default function Terminals({ visible }: { visible: boolean }) {
           </form>
         </Modal>
       )}
+      {configuring && <Modal title={`${configuring.title} · Model / Effort`} onClose={() => { if (!updating) setConfiguring(null) }}>
+        <form onSubmit={(event) => { event.preventDefault(); void saveAgentOptions() }}>
+          <AgentOptionsFields kind={configuring.kind} value={configuring.value} disabled={updating} onChange={(patch) => setConfiguring({ ...configuring, value: { ...configuring.value, ...patch } })} />
+          {tabs.find((tab) => tab.id === configuring.id)?.activity === 'working' && <p className="small muted">현재 작업이 끝나면 설정을 적용할 수 있습니다.</p>}
+          <div className="row end"><button type="button" disabled={updating} onClick={() => setConfiguring(null)}>취소</button><button className="primary" type="submit" disabled={busy || tabs.find((tab) => tab.id === configuring.id)?.activity === 'working'}>{updating ? '적용 중…' : '적용'}</button></div>
+        </form>
+      </Modal>}
     </div>
   )
 }

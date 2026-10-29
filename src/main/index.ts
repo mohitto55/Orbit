@@ -68,7 +68,7 @@ const aiCheckApi = createAiCheckApi({
   }
 })
 
-const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion() })
+const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion(), beforeInstall: cleanup })
 
 const theme = createTheme({ userData: app.getPath('userData') })
 
@@ -113,6 +113,7 @@ function createWindow() {
     }
   })
   win.on('ready-to-show', () => win?.show())
+  win.on('closed', () => { win = null })
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
@@ -181,10 +182,18 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('will-quit', () => {
+let cleanedUp = false
+function cleanup() {
+  if (cleanedUp) return
+  cleanedUp = true
   globalShortcut.unregisterAll()
-  api.killAllTerminals()
-})
+  // 종료 중 저장/PTY 오류가 Electron 오류 대화상자를 띄워 숨은 앱을 남기지 않게 한다.
+  try { api.killAllTerminals() } catch (error) { console.error('Orbit 종료 정리 실패:', error) }
+  void watcher?.close().catch((error: unknown) => console.error('Orbit 파일 감시 종료 실패:', error))
+  watcher = null
+}
+app.on('before-quit', cleanup)
+app.on('will-quit', cleanup)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

@@ -113,6 +113,14 @@ export function withTerminalModel(command: string, model: string): string {
   return `${withoutModel} --model ${shellQuote(model)}`
 }
 
+/** 세션의 effort만 덮어쓴다. 다른 -c 설정이나 전역 설정 파일은 건드리지 않는다. */
+export function withTerminalEffort(command: string, kind: 'claude' | 'codex', effort: string): string {
+  if (kind === 'claude') return `${command.replace(/(^|\s)--effort(?:\s+|=)(?:"[^"]*"|'[^']*'|[^\s]+)/g, '$1').trimEnd()} --effort ${shellQuote(effort)}`
+  const withoutEffort = command.replace(/(^|\s)(?:-c|--config)(?:\s+|=)("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s]+)/g, (option, space: string, value: string) =>
+    /^['"]?model_reasoning_effort=/.test(value) ? space : option)
+  return `${withoutEffort.trimEnd()} -c ${shellQuote(`model_reasoning_effort="${effort}"`)}`
+}
+
 const powershellInit = String.raw`
 function global:Invoke-OrbitBridge {
   param([string]$Action)

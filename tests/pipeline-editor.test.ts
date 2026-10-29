@@ -74,6 +74,28 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it('[DM-F02-AC24] Task 기본값을 할 일 목록에서 선택·저장하고 함수 변수의 Task 타입을 편집한다', async () => {
+    const invoke = window.orbit.invoke
+    window.orbit.invoke = async (name, ...args) => name === 'listTasks' ? [{ id: 'task-1', title: '로그인 수정', body: '세션 유지', status: '진행' }] : invoke(name, ...args)
+    saved[0].nodes = [node('call', 'template', { ref: 'fn' })]
+    saved.push({ id: 'fn', title: '할 일 함수', file: '', template: true, nodes: [
+      node('in', 'function-input', { params: [{ id: 'job', name: '대상', type: 'task' }] }),
+      node('out', 'function-output', { params: [{ id: 'result', name: '반환', type: 'task' }] })
+    ], edges: [{ from: 'in', to: 'out' }, { from: 'in', to: 'out', pin: 'data', fromPort: 'job', toPort: 'result' }] })
+    await mount(); await select('call')
+    const field = host.querySelector<HTMLSelectElement>('[aria-label="대상 기본값"]')!
+    expect(field.options[1].textContent).toContain('로그인 수정')
+    await change(field, 'task-1')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved.find((p) => p.id === 'g')!.nodes[0].values).toEqual({ job: 'task-1' })
+    await click('열기'); await select('in')
+    const type = host.querySelector<HTMLSelectElement>('[aria-label="대상 타입"]')!
+    expect(type.value).toBe('task')
+    expect([...type.options].find((option) => option.value === 'task')!.textContent).toBe('Task')
+    await select('out')
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="반환 타입"]')!.value).toBe('task')
+  })
+
   it.each(['claude', 'codex'] as const)('[DM-F02-AC22] %s 터미널 액션의 모델을 고르거나 직접 입력하고 다시 열어도 유지한다', async (kind) => {
     saved[0].nodes = [node('tab', 'terminal', { ref: 'live' }), node('ai', kind, { text: '작업' })]
     saved[0].edges = [{ from: 'tab', to: 'ai', toPort: A.terminal }]

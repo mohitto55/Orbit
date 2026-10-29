@@ -13,7 +13,7 @@ import {
 type AutoUpdater = typeof import('electron-updater').autoUpdater
 
 /** PL-F04: GitHub Releases 기반 자동 업데이트. 설치판에서만 동작하고, 실패해도 앱은 계속 동작한다. */
-export function createUpdater(deps: { send: (channel: string, payload: unknown) => void; userData: string; isPackaged: boolean; version: string }) {
+export function createUpdater(deps: { send: (channel: string, payload: unknown) => void; userData: string; isPackaged: boolean; version: string; beforeInstall?: () => void }) {
   const settingsFile = path.join(deps.userData, 'update-settings.json')
   let settings: UpdateSettings = { ...DEFAULT_UPDATE_SETTINGS }
   let status: UpdateStatus = { state: deps.isPackaged ? 'idle' : 'dev', currentVersion: deps.version }
@@ -88,7 +88,7 @@ export function createUpdater(deps: { send: (channel: string, payload: unknown) 
       /** 받아둔 업데이트를 설치하고 앱을 다시 연다 */
       async updateInstall() {
         const u = await getUpdater()
-        if (u && status.state === 'downloaded') setImmediate(() => u.quitAndInstall())
+        if (u && status.state === 'downloaded') setImmediate(() => { deps.beforeInstall?.(); u.quitAndInstall() })
       },
       updateSettings: () => settings,
       async saveUpdateSettings(next: UpdateSettings) {

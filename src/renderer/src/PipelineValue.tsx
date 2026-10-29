@@ -18,7 +18,7 @@ function values(node: PipeNode, graph: Graph, env: Env, run: RunState | undefine
     try {
       return dataPreviews(graph, node.id, env).map((entry) => {
         const refs = [...new Set(entry.items.flatMap(outputRefs))]
-        const base = { id: entry.id, name: entry.name, source: entry.preview ? '설정 미리보기' : refs.length ? '현재 설정 + 최근 실행 응답' : '현재 값' }
+        const base = { id: entry.id, name: entry.name, ...(entry.shape === 'task' ? { type: 'Task' } : {}), source: entry.preview ? '설정 미리보기' : refs.length ? '현재 설정 + 최근 실행 응답' : '현재 값' }
         const missing = refs.filter((id) => run?.nodes[id]?.status !== 'done' || run.nodes[id].output === undefined)
         if (missing.length) return { ...base, message: missing.map((id) => {
           const state = run?.nodes[id]

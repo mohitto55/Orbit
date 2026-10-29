@@ -43,6 +43,7 @@ import { useWheelZoom } from '../cyZoom'
 import { defaultOutputFields, JsonTree, OutputFields } from '../StructuredData'
 import { PipelineOutput } from '../PipelineOutput'
 import { PipelineValue } from '../PipelineValue'
+import { AgentOptionsFields } from '../AgentOptionsFields'
 import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 
@@ -116,10 +117,11 @@ const DATA_COLOR = '#8a63d2'
 const TERMINAL_COLOR = '#2c8ba3'
 const BOOL_COLOR = '#bd475a', NUMBER_COLOR = '#359878'
 type Pin = { side: 'in' | 'out'; type: 'exec' | 'data'; dy: number; list?: boolean; terminal?: boolean; shape?: DataShape; id?: string; label?: string }
-const pinColor = (pin: Pin, execColor: string) => pin.type === 'exec' ? execColor : pin.terminal ? TERMINAL_COLOR : pin.shape === 'boolean' ? BOOL_COLOR : pin.shape === 'number' ? NUMBER_COLOR : DATA_COLOR
+const pinColor = (pin: Pin, execColor: string) => pin.type === 'exec' ? execColor : pin.terminal ? TERMINAL_COLOR : pin.shape === 'task' ? KIND_COLOR.task : pin.shape === 'boolean' ? BOOL_COLOR : pin.shape === 'number' ? NUMBER_COLOR : DATA_COLOR
 function pinsOf(kind: NodeKind): Pin[] {
   const list = dataShape({ kind }) === 'list'
   if (kind === 'terminal') return [{ side: 'out', type: 'data', dy: 0, terminal: true }]
+  if (kind === 'task') return [{ side: 'out', type: 'data', dy: 0, shape: 'task' }]
   if (isData({ kind }) && !hasInput({ kind })) return [{ side: 'out', type: 'data', dy: 0, list }]
   if (kind === 'start') return [{ side: 'out', type: 'exec', dy: 0 }]
   if (kind === 'item') return [{ side: 'in', type: 'data', dy: 0, list: true }, { side: 'out', type: 'data', dy: 0 }]
@@ -128,7 +130,7 @@ function pinsOf(kind: NodeKind): Pin[] {
   return [
     { side: 'in', type: 'exec', dy: EXEC_DY },
     { side: 'out', type: 'exec', dy: EXEC_DY },
-    { side: 'in', type: 'data', dy: DATA_DY },
+    { side: 'in', type: 'data', dy: DATA_DY, ...(kind === 'complete' ? { shape: 'task' as const } : {}) },
     ...(hasDataOut({ kind }) ? [{ side: 'out' as const, type: 'data' as const, dy: DATA_DY }] : [])
   ]
 }
@@ -1037,22 +1039,6 @@ function NameField({ name, kind, disabled, onRename }: { name: string; kind: str
 
 type AgentSession = Awaited<ReturnType<typeof api.agentSessions>>[number]
 
-function ModelField({ kind, value, disabled, onChange }: { kind: 'claude' | 'codex'; value?: string; disabled: boolean; onChange: (model?: string) => void }) {
-  const [models, setModels] = useState<Awaited<ReturnType<typeof api.agentModels>>>([])
-  useEffect(() => {
-    let live = true
-    setModels([])
-    api.agentModels(kind).then((list) => { if (live) setModels(list) }).catch(() => {})
-    return () => { live = false }
-  }, [kind])
-  return <div className="field">
-    <label htmlFor="pipe-agent-model">Model</label>
-    <input id="pipe-agent-model" aria-label="Model" list="pipe-agent-models" value={value ?? ''} disabled={disabled} placeholder="기존 세션 / CLI 기본값" onChange={(e) => onChange(e.target.value || undefined)} />
-    <datalist id="pipe-agent-models">{models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</datalist>
-    <div className="small muted">목록에서 고르거나 Model ID를 입력하세요. 비우면 기존 설정을 유지합니다. 열린 세션의 모델을 바꾸면 같은 탭에서 대화를 이어서 적용합니다.</div>
-  </div>
-}
-
 /** DM-F02-AC4: 세션 불러오기. 로컬 세션의 열린 터미널을 재사용하고, 없으면 새 탭에서 이어 쓴다 */
 function SessionField({ kind, value, disabled, onChange }: { kind: 'claude' | 'codex'; value?: string; disabled: boolean; onChange: (session?: string) => void }) {
   const [list, setList] = useState<AgentSession[] | null>(null)
@@ -1124,6 +1110,11 @@ function FunctionValues({ node, params, draft, env, locked, onPatch }: { node: P
       <label>{param.name} · {PARAM_TYPE_NAME[param.type]}{linked ? ' (핀으로 연결됨)' : ''}</label>
       {param.type === 'terminal'
         ? linked ? <div className="small muted">연결된 터미널을 사용합니다.</div> : <TerminalField terminals={env.terminals} label={`${param.name} 기본값`} disabled={locked} value={node.values?.[param.id]} onChange={(id) => onPatch({ values: { ...node.values, [param.id]: id } })} />
+        : param.type === 'task' ? <select aria-label={`${param.name} 기본값`} disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? ''} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })}>
+          <option value="">{linked ? '연결된 할 일을 사용합니다' : '할 일을 고르거나 Task 핀을 연결하세요'}</option>
+          {!linked && node.values?.[param.id] && !env.tasks.some((t) => t.id === node.values?.[param.id]) && <option value={node.values[param.id]}>찾을 수 없는 할 일 · 다시 선택하세요</option>}
+          {env.tasks.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.title} ({t.status})</option>)}
+        </select>
         : param.type === 'boolean' ? <select aria-label={`${param.name} 기본값`} disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? 'false'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })}>{linked ? <option value="">연결된 Bool 값을 사용합니다</option> : <><option value="false">False (거짓)</option><option value="true">True (참)</option></>}</select>
         : param.type === 'number' ? <input aria-label={`${param.name} 기본값`} type="number" step="any" disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? '0'} placeholder={linked ? '연결된 숫자 값을 사용합니다' : ''} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />
         : <textarea aria-label={`${param.name} 기본값`} rows={2} disabled={locked || linked} value={node.values?.[param.id] ?? (node.kind === 'template' && index === 0 ? node.text : '')} placeholder={linked ? '연결된 노드의 값을 사용합니다' : param.type === 'list' ? '한 줄에 한 항목' : '핀을 연결하거나 기본값을 입력하세요'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />}
@@ -1207,9 +1198,9 @@ function NodePanel({
   const linkedTasks =
     node.kind === 'complete'
       ? draft.edges
-          .filter((e) => e.to === node.id)
+          .filter((e) => e.to === node.id && isDataEdge(draft, e) && edgeShape(draft, e, env) === 'task')
           .map((e) => draft.nodes.find((n) => n.id === e.from))
-          .filter((n) => n?.kind === 'task')
+          .filter((n): n is PipeNode => !!n)
       : []
 
   return (
@@ -1341,7 +1332,7 @@ function NodePanel({
           {(node.kind === 'claude' || node.kind === 'codex') && node.terminal === 'new' && !linkedTerminal && (
             <SessionField kind={node.kind} value={node.session} disabled={locked} onChange={(session) => onPatch({ session })} />
           )}
-          {(node.kind === 'claude' || node.kind === 'codex') && <ModelField kind={node.kind} value={node.model} disabled={locked} onChange={(model) => onPatch({ model })} />}
+          {(node.kind === 'claude' || node.kind === 'codex') && <AgentOptionsFields kind={node.kind} value={{ model: node.model }} showEffort={false} disabled={locked} onChange={onPatch} />}
           <div className="field">
             <label>{node.kind === 'shell' ? '명령 (여러 줄이면 차례로 실행)' : '프롬프트'}</label>
             <textarea
@@ -1467,7 +1458,7 @@ function NodePanel({
             ))}
           </select>
           {node.ref && !task && <div className="small" style={{ color: 'var(--bad)' }}>할 일을 찾을 수 없습니다 ({node.ref})</div>}
-          {linkedTasks.length > 0 && <div className="small muted">이어진 할 일: {linkedTasks.map((n) => n!.ref).join(', ')}</div>}
+          {linkedTasks.length > 0 && <div className="small muted">이어진 할 일: {linkedTasks.map((n) => n.kind === 'task' ? `${n.ref} · ${env.tasks.find((t) => t.id === n.ref)?.title ?? nodeName(n)}` : `${nodeName(n)} (Task)`).join(', ')}</div>}
         </div>
       )}
 
@@ -1696,6 +1687,7 @@ function Canvas({
         },
         { selector: 'edge.data', style: { 'line-color': DATA_COLOR, width: 2 } },
         { selector: 'edge.terminal', style: { 'line-color': TERMINAL_COLOR, width: 2 } },
+        { selector: 'edge.task', style: { 'line-color': KIND_COLOR.task, width: 2 } },
         { selector: 'edge.boolean', style: { 'line-color': BOOL_COLOR, width: 2 } },
         { selector: 'edge.number', style: { 'line-color': NUMBER_COLOR, width: 2 } },
         { selector: 'edge.sel, edge.hover', style: { 'line-color': accent, width: 3.4 } },

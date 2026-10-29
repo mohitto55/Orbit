@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { agentModels } from '../src/core/agentModels'
 import { modelProblem } from '../src/core/agentModel'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
-import { resumeOptions, shellQuote, withTerminalModel } from '../src/core/terminalIntegration'
+import { resumeOptions, shellQuote, withTerminalModel, withTerminalEffort } from '../src/core/terminalIntegration'
 import { encodeClaudeProjectDir } from '../src/core/drift'
 import { tempDir } from './helpers'
 
@@ -35,6 +35,25 @@ it('노드 모델은 실행 명령의 모델 옵션과 복원 인자보다 우�
     expect(command).toContain(`--model ${shellQuote('custom/model:v2')}`)
     expect(resumeOptions(['-m', 'old', '--model=old', '--yolo'], command)).toEqual(['--yolo'])
   }
+})
+
+it('[TE-F01-AC13] effort는 CLI별 옵션만 덮어쓰고 다른 설정·모델은 유지한다', () => {
+  for (const option of ['-c model_reasoning_effort=low', "--config 'model_reasoning_effort=\"low\"'", '--config=model_reasoning_effort=low']) {
+    const command = withTerminalEffort(`codex ${option} -c other=true --model model-a`, 'codex', 'high')
+    expect(command).not.toContain('low')
+    expect(command).toContain('-c other=true --model model-a')
+    expect(command).toContain(shellQuote('model_reasoning_effort="high"'))
+  }
+  const command = withTerminalEffort('claude --model opus --effort=low', 'claude', 'high')
+  expect(command).not.toContain('low')
+  expect(command).toContain(`--effort ${shellQuote('high')}`)
+  expect(resumeOptions(['--effort', 'low'], command)).toEqual([])
+})
+
+it('[TE-F01-AC13] Codex 모델 목록에서 지원하는 effort만 읽는다', async () => {
+  const dir = await tempDir('orbit-efforts-'); vi.stubEnv('CODEX_HOME', dir)
+  await fs.writeFile(path.join(dir, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'model-a', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }, { effort: 'unsafe' }, null] }] }))
+  expect(await agentModels('codex')).toEqual([{ id: 'model-a', name: 'model-a', efforts: ['low', 'high'] }])
 })
 
 async function setup() {
@@ -106,4 +125,31 @@ it('작업 중이거나 대화 ID가 없는 세션은 중단하지 않고 모델
   await expect(h.workspace.setModel(tab.id, 'model-a', h.settings)).rejects.toThrow('대화 ID')
   expect(h.ptys[0].kill).not.toHaveBeenCalled()
   expect(h.ptys).toHaveLength(1)
+})
+
+it.each(['claude', 'codex'] as const)('[TE-F01-AC13] %s 새 세션의 모델·effort를 한 번에 적용하고 탭별로 복원한다', async (kind) => {
+  const h = await setup(), first = h.workspace.create(kind, h.settings), other = h.workspace.create(kind, h.settings, undefined, undefined, { model: 'other-model', effort: 'low' })
+  await h.workspace.setAgentOptions(first.id, { model: 'model-a', effort: 'high' }, h.settings)
+  expect(h.ptys[0].kill).toHaveBeenCalledTimes(1)
+  expect(h.ptys[1].kill).not.toHaveBeenCalled()
+  expect(h.workspace.get(first.id)).toMatchObject({ id: first.id, model: 'model-a', effort: 'high' })
+  expect(h.workspace.get(other.id)).toMatchObject({ model: 'other-model', effort: 'low' })
+  const command = vi.mocked(h.ptys[2].write).mock.calls.map(([value]) => value).join('\n')
+  expect(command).toContain(kind === 'codex' ? 'model_reasoning_effort="high"' : `--effort ${shellQuote('high')}`)
+  await h.workspace.setAgentOptions(first.id, { effort: 'high' }, h.settings)
+  expect(h.ptys).toHaveLength(3)
+  h.workspace.suspend()
+  const restored = h.create(); await restored.restore(h.settings)
+  expect(restored.state().tabs.map((tab) => [tab.id, tab.model, tab.effort])).toEqual([[first.id, 'model-a', 'high'], [other.id, 'other-model', 'low']])
+})
+
+it('[TE-F01-AC13] 지원하지 않는 effort와 작업 중 설정 변경은 프로세스를 중단하지 않는다', async () => {
+  const h = await setup(), tab = h.workspace.create('codex', h.settings)
+  await fs.mkdir(path.join(h.dir, 'codex'), { recursive: true })
+  await fs.writeFile(path.join(h.dir, 'codex', 'models_cache.json'), JSON.stringify({ models: [{ slug: 'model-a', supported_reasoning_levels: [{ effort: 'low' }] }] }))
+  await expect(h.workspace.setAgentOptions(tab.id, { model: 'model-a', effort: 'high' }, h.settings)).rejects.toThrow('지원하지 않습니다')
+  h.ptys[0].emit('\x1b]0;Working\x07')
+  await expect(h.workspace.setAgentOptions(tab.id, { effort: 'low' }, h.settings)).rejects.toThrow('작업 중')
+  expect(h.ptys[0].kill).not.toHaveBeenCalled()
+  expect(h.workspace.get(tab.id)?.effort).toBeUndefined()
 })

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Terminals from '../src/renderer/src/pages/Terminals'
 import type { TerminalSnapshot } from '../src/core/terminal'
 import type { TerminalGroup } from '../src/core/terminalWorkspace'
+import type { AgentOptions } from '../src/core/agentModel'
 import * as ui from '../src/renderer/src/ui'
 
 const writes = vi.hoisted(() => [] as string[])
@@ -131,6 +132,8 @@ beforeEach(() => {
         return
       }
       if (['listPipelines', 'listTasks', 'listSkills', 'listSpecs', 'pipelineRuns'].includes(name)) return []
+      if (name === 'agentModels') return [{ id: 'model-a', name: 'Model A', efforts: ['low', 'high'] }]
+      if (name === 'termSetAgentOptions') { const tab = saved.find((item) => item.id === args[0])!; Object.assign(tab, args[1] as AgentOptions); return { ...tab } }
       if (name === 'termKill') { saved = saved.filter((tab) => tab.id !== args[0]); reconcile(); return layout() }
       if (name === 'termRename') { const tab = saved.find((tab) => tab.id === args[0])!; tab.title = String(args[1]); return { ...tab } }
       if (name === 'termSelectGroup') { activeGroup = String(args[0]); reconcile(); return layout() }
@@ -165,6 +168,30 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks()
+})
+
+it('[TE-F01-AC13] 선택한 세션의 모델·effort만 저장하고 대화 화면·다른 탭을 유지한다', async () => {
+  await mount()
+  const before = disposals.mock.calls.length
+  await click('세션 모델·Effort 설정')
+  const model = host.querySelector<HTMLInputElement>('[aria-label="Model"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(model, 'model-a')
+    model.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const effort = host.querySelector<HTMLSelectElement>('[aria-label="Effort"]')!
+  expect([...effort.options].map((option) => option.value)).toEqual(['', 'low', 'high'])
+  await act(async () => { effort.value = 'high'; effort.dispatchEvent(new Event('change', { bubbles: true })) })
+  await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(saved[0]).toMatchObject({ id: first.id, model: 'model-a', effort: 'high', sessionId: 'saved-id', output: '이전 출력' })
+  expect(saved[1]).toEqual(second)
+  expect(disposals.mock.calls.length).toBe(before)
+  expect(inputWrites).toEqual([])
+  expect(host.textContent).toContain('Model: model-a · Effort: high')
+  await click('세션 모델·Effort 설정'); await activity(first.id, 'working')
+  expect([...host.querySelectorAll('button')].find((button) => button.textContent === '적용')!.disabled).toBe(true)
+  await click('취소'); await click(second.title)
+  expect(host.querySelector('[aria-label="세션 모델·Effort 설정"]')).toBeNull()
 })
 
 it('[TE-F01-AC3] 버튼을 누르지 않아도 탭·활성 탭·출력을 복원하고 겹치는 출력은 한 번만 그린다', async () => {

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { createHash } from 'crypto'
@@ -43,15 +43,17 @@ export function createApi(deps: ApiDeps) {
   let terminals: TerminalWorkspace | null = null
   let loadingTerminals: Promise<TerminalWorkspace> | null = null
   let recovery: AbortController | null = null
+  let shuttingDown = false
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
+    if (shuttingDown) throw new Error('앱을 종료하는 중입니다')
     const c = need()
     if (loadingTerminals) return loadingTerminals
     if (terminals) return terminals
     loadingTerminals ??= import('node-pty').then(async ({ spawn: spawnFn }) => {
       const settings = await ws.readSettings(c)
-      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      if (shuttingDown || ctx !== c) throw new Error('프로젝트가 변경되었거나 앱을 종료하는 중입니다')
       const key = createHash('sha256').update(path.resolve(c.projectDir)).digest('hex')
       const workspace = new TerminalWorkspace(path.join(path.dirname(deps.recentFile), 'terminals', `${key}.json`), c, spawnFn, {
         onData: (id, data, sequence) => deps.send('term-data', { id, data, sequence }),
@@ -109,9 +111,14 @@ export function createApi(deps: ApiDeps) {
   /** 프로젝트를 바꾸거나 닫으면 터미널이 모두 꺼지므로 돌던 작업 그래프도 멈춘다. */
   function stopTerminals() {
     for (const r of pipes.list()) pipes.stop(r.runId)
-    terminals?.suspend()
-    terminals = null
-    loadingTerminals = null
+    try { terminals?.suspend() }
+    finally { terminals = null; loadingTerminals = null }
+  }
+
+  function stopTests() {
+    if (!testProc?.pid) return
+    if (process.platform === 'win32') execFile('taskkill', ['/pid', String(testProc.pid), '/T', '/F'], { windowsHide: true }, () => {})
+    else testProc.kill('SIGTERM')
   }
 
   const need = (): ws.Ctx => {
@@ -450,11 +457,7 @@ export function createApi(deps: ApiDeps) {
         testBusy = false
       }
     },
-    stopTests() {
-      if (!testProc?.pid) return
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(testProc.pid), '/T', '/F'])
-      else testProc.kill('SIGTERM')
-    },
+    stopTests,
 
     // Knowledge
     listKnowledge: () => kn.listKnowledge(need()),
@@ -496,6 +499,12 @@ export function createApi(deps: ApiDeps) {
       const workspace = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       return workspace.restart(id, settings)
+    },
+    async termSetAgentOptions(id: string, options: import('../core/agentModel').AgentOptions) {
+      const c = need(), settings = await ws.readSettings(c), workspace = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      await workspace.setAgentOptions(id, options, settings)
+      return workspace.state().tabs.find((tab) => tab.id === id)!
     },
     async termWrite(id: string, data: string) {
       ;(await terms()).write(id, data)
@@ -550,8 +559,9 @@ export function createApi(deps: ApiDeps) {
       return pipes.markDone(runId, nodeId)
     },
     killAllTerminals() {
+      shuttingDown = true
       recovery?.abort()
-      terminals?.suspend()
+      try { stopTerminals() } finally { stopTests() }
     }
   }
 }
