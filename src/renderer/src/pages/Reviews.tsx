@@ -16,6 +16,7 @@ export default function Reviews(props: PageProps) {
   const [pending] = useLoad(() => api.pendingItems(), [props.refreshKey])
   const reqCount = (requests ?? []).filter((r) => r.status === 'pending').length
   const [tab, setTab] = useState<'requests' | 'docs' | null>(props.focus?.startsWith('request:') ? 'requests' : null)
+  useEffect(() => { if (props.focus?.startsWith('request:')) setTab('requests') }, [props.focus])
   const current = tab ?? (reqCount > 0 || !(pending?.length ?? 0) ? 'requests' : 'docs')
   return (
     <div className="drift-page">

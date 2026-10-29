@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { api, on, type Dashboard as DashboardData, type Project } from './api'
 import { ChangeDialog, Modal, Toasts, UndoBar, errorToast, toast } from './ui'
 import Start from './pages/Start'
@@ -97,7 +97,7 @@ export default function App() {
     )
   }
 
-  const props: PageProps = { refreshKey, go, focus, reloadBadges: () => setRefreshKey((k) => k + 1) }
+  const props: PageProps = { refreshKey, go, reloadBadges: () => setRefreshKey((k) => k + 1) }
 
   return (
     <div className="app">
@@ -131,6 +131,7 @@ export default function App() {
             className="ghost"
             onClick={async () => {
               await api.closeProject()
+              setFocus(undefined)
               setProject(null)
             }}
           >
@@ -138,16 +139,16 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <main className="main">
-        {page === 'dashboard' && <Dashboard {...props} />}
-        {page === 'domains' && <Domains {...props} />}
-        {page === 'reviews' && <Reviews {...props} />}
-        {page === 'tasks' && <Tasks {...props} />}
-        {page === 'verification' && <Verification {...props} />}
-        {page === 'drift' && <Drift {...props} />}
-        {page === 'knowledge' && <KnowledgePage {...props} />}
-        {page === 'graph' && <GraphPage {...props} />}
-        {page === 'settings' && <Settings {...props} onSaved={() => api.currentProject().then(setProject)} />}
+      <main className="main" key={project.projectDir}>
+        <PageView visible={page === 'dashboard'}><Dashboard {...props} /></PageView>
+        <PageView visible={page === 'domains'}><Domains {...props} focus={page === 'domains' ? focus : undefined} /></PageView>
+        <PageView visible={page === 'reviews'}><Reviews {...props} focus={page === 'reviews' ? focus : undefined} /></PageView>
+        <PageView visible={page === 'tasks'}><Tasks {...props} focus={page === 'tasks' ? focus : undefined} /></PageView>
+        <PageView visible={page === 'verification'}><Verification {...props} /></PageView>
+        <PageView visible={page === 'drift'}><Drift {...props} /></PageView>
+        <PageView visible={page === 'knowledge'}><KnowledgePage {...props} /></PageView>
+        <PageView visible={page === 'graph'}><GraphPage {...props} /></PageView>
+        <PageView visible={page === 'settings'}><Settings {...props} onSaved={() => api.currentProject().then(setProject)} /></PageView>
         <Terminals visible={page === 'terminal'} />
       </main>
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
@@ -157,6 +158,13 @@ export default function App() {
     </div>
   )
 }
+
+/** PL-F01-AC3: 처음 연 화면만 유지한다. 숨긴 화면의 데이터 갱신은 다시 볼 때 반영한다. */
+const PageView = memo(function PageView({ visible, children }: { visible: boolean; children: ReactNode }) {
+  const [opened, setOpened] = useState(visible)
+  useEffect(() => { if (visible) setOpened(true) }, [visible])
+  return visible || opened ? <div className="page-view" hidden={!visible}>{children}</div> : null
+}, (previous, next) => !previous.visible && !next.visible)
 
 /** TK-F01: 한 줄 입력 → Inbox 저장. 분류 입력 없음. */
 function QuickCapture({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {

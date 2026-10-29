@@ -28,6 +28,8 @@ export default function Requests({ refreshKey, reloadBadges, go, focus }: PagePr
   const [sel, setSel] = useState<string | null>(focus?.startsWith('request:') ? focus.slice(8) : null)
   const [note, setNote] = useState('')
 
+  useEffect(() => { if (focus?.startsWith('request:')) setSel(focus.slice(8)) }, [focus])
+
   if (!requests || !docs) return null
   const list = requests
     .filter((r) => showDone || r.status === 'pending')
