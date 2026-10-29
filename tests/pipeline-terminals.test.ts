@@ -170,7 +170,7 @@ describe('작업 그래프 터미널 입출력', () => {
   it('[DM-F02-AC15] 닫힘·종류 변경·작업 중을 전송 직전에 확인하고 새 탭으로 대체하지 않는다', () => {
     for (const tabs of [[], [{ ...tab('codex'), kind: 'claude' as const }], [{ ...tab('codex'), exited: 0 }], [{ ...tab('codex'), activity: 'working' as const }]]) {
       const h = runnerHarness(tabs), run = h.start(graph())
-      expect(run.nodes.work.status).toBe('failed')
+      expect(run.nodes.work.status).toBe(tabs[0]?.activity === 'working' ? 'waiting' : 'failed')
       expect(h.submit).not.toHaveBeenCalled()
       expect(h.createTerminal).not.toHaveBeenCalled()
     }
@@ -182,9 +182,13 @@ describe('작업 그래프 터미널 입출력', () => {
     expect(second.nodes.work.message).toContain('다른 작업 노드가 실행 중')
     expect(h.submit).toHaveBeenCalledTimes(1)
     h.runner.markDone(first.runId, 'work')
+    expect(h.runner.list().find((r) => r.runId === second.runId)?.nodes.work.status).toBe('running')
     const third = h.start({ ...graph(), id: 'third' })
-    expect(third.nodes.work.status).toBe('running')
+    expect(third.nodes.work.status).toBe('waiting')
     expect(h.submit).toHaveBeenCalledTimes(2)
+    h.runner.markDone(second.runId, 'work')
+    expect(h.runner.list().find((r) => r.runId === third.runId)?.nodes.work.status).toBe('running')
+    expect(h.submit).toHaveBeenCalledTimes(3)
   })
 
   it('[DM-F02-AC15] 완료 신호가 상태 제목보다 먼저 와도 같은 탭의 다음 작업을 즉시 시작한다', () => {

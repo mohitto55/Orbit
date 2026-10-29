@@ -121,8 +121,8 @@ describe('함수와 연결된 리스트 항목', () => {
     const graph = caller()
     graph.nodes.push(node('text', 'text'), node('list', 'list'))
     const env = { library: [fn()] }
-    expect(edgeProblem(graph, 'text', 'call', undefined, env, { toPort: 'items' })).toContain('텍스트 리스트 입력에 텍스트')
-    expect(edgeProblem(graph, 'list', 'call', undefined, env, { toPort: 'title' })).toContain('텍스트 입력에 텍스트 리스트')
+    expect(edgeProblem(graph, 'text', 'call', undefined, env, { toPort: 'items' })).toContain('List<String> 입력에 String')
+    expect(edgeProblem(graph, 'list', 'call', undefined, env, { toPort: 'title' })).toContain('String 입력에 List<String>')
     expect(edgeProblem(graph, 'text', 'call', undefined, env, { toPort: 'missing' })).toContain('입력 변수를')
     expect(edgeProblem(graph, 'call', 'work', 'data', env, { fromPort: 'missing' })).toContain('출력 변수를')
     graph.edges.push(wire('text', 'call', undefined, 'title'))

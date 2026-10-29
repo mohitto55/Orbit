@@ -17,7 +17,7 @@ import * as df from '../core/diff'
 import { buildDomainMap, buildDomainScope } from '../core/domainmap'
 import { checkAnchors } from '../core/codecheck'
 import { ensureModelSection } from '../core/model'
-import { listChanges, type ChangeInput, type ChangeSet } from '../core/changes'
+import { listChanges, readSnapshot, type ChangeInput, type ChangeSet } from '../core/changes'
 import { exists, writeMd } from '../core/md'
 import type { TerminalKind } from '../core/terminal'
 import { TerminalWorkspace, type TerminalOrderPosition } from '../core/terminalWorkspace'
@@ -25,7 +25,8 @@ import { readSessionTitle } from '../core/sessionTitles'
 import { agentModels } from '../core/agentModels'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
-import { PipelineRunner, expandPipeline, pipelineProblems, type PipeEdge, type PipeNode } from '../core/pipeline'
+import { PipelineRunner, featureText, taskText, newNodeId, type Env, type Pipeline, type PipelineSource, type PipeEdge, type PipeNode } from '../core/pipeline'
+import { PipelineHistory, prepareExecutions, type PipelineRunRequest, type RunFilter } from '../core/pipelineExecution'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
@@ -44,6 +45,7 @@ export function createApi(deps: ApiDeps) {
   let loadingTerminals: Promise<TerminalWorkspace> | null = null
   let recovery: AbortController | null = null
   let shuttingDown = false
+  let history: PipelineHistory | null = null
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
@@ -61,7 +63,7 @@ export function createApi(deps: ApiDeps) {
           pipes.terminalExit(id)
           deps.send('term-exit', { id, code })
         },
-        onChange: (info) => deps.send('term-info', info),
+        onChange: (info) => { deps.send('term-info', info); queueMicrotask(() => pipes.terminalChanged()) },
         onError: (message) => deps.send('term-error', message),
         onAgentDone: (id) => pipes.agentDone(id),
         onCommandDone: (id, code, output) => pipes.commandDone(id, code, output)
@@ -101,16 +103,22 @@ export function createApi(deps: ApiDeps) {
     beginOutputCapture: (id, prompt) => terminals?.beginOutputCapture(id, prompt),
     readAgentOutput: (id) => terminals?.readAgentOutput(id),
     endOutputCapture: (id) => terminals?.endOutputCapture(id),
+    interrupt: (id) => terminals?.write(id, '\x03'),
     runCommand: (id, command) => terminals?.runCommand(id, command),
     completeTasks: async (ids) => {
       for (const id of ids) await tk.updateTask(need(), id, { status: '완료' })
     },
-    emit: (state) => deps.send('pipeline-state', state)
+    emit: (state) => {
+      const record = pipes.execution(state.runId)
+      if (record) history?.save(record)
+      deps.send('pipeline-state', state)
+      pipes.trimCompleted()
+    }
   })
 
   /** 프로젝트를 바꾸거나 닫으면 터미널이 모두 꺼지므로 돌던 작업 그래프도 멈춘다. */
   function stopTerminals() {
-    for (const r of pipes.list()) pipes.stop(r.runId)
+    pipes.stopMany(pipes.list().map((r) => r.runId))
     try { terminals?.suspend() }
     finally { terminals = null; loadingTerminals = null }
   }
@@ -142,7 +150,14 @@ export function createApi(deps: ApiDeps) {
 
   async function opened(c: ws.Ctx) {
     recovery?.abort()
-    if (ctx?.projectDir !== c.projectDir) stopTerminals()
+    if (ctx?.projectDir !== c.projectDir) {
+      stopTerminals()
+      history?.finish()
+      pipes.reset()
+      const key = createHash('sha256').update(path.resolve(c.projectDir)).digest('hex')
+      history = new PipelineHistory(path.join(path.dirname(deps.recentFile), 'pipeline-runs', key), (error) => deps.send('project-error', `실행 기록 저장 실패: ${error instanceof Error ? error.message : String(error)}`))
+      await history.load()
+    }
     ctx = c
     await remember(c.projectDir)
     deps.onProjectOpened(c)
@@ -171,6 +186,38 @@ export function createApi(deps: ApiDeps) {
       changed = true
     }
     return changed
+  }
+
+  async function executionEnvironment(c: ws.Ctx, snapshotIds = new Set<string>(), graphs?: Pipeline[]): Promise<Env & { sources: PipelineSource[] }> {
+    const [tasks, specs, changes, library, skills] = await Promise.all([tk.listTasks(c), sp.listSpecs(c), listChanges(c), graphs ?? pl.listPipelines(c), sk.listSkills(c.projectDir)])
+    const sources: PipelineSource[] = [
+      ...tasks.map((t): PipelineSource => ({ kind: 'task', id: t.id, title: t.title, text: taskText(t), version: createHash('sha256').update(JSON.stringify(t)).digest('hex'), location: { page: 'tasks', focus: t.id } })),
+      ...specs.flatMap((s): PipelineSource[] => [
+        { kind: 'spec', id: s.id, title: s.title, text: s.content, version: String(s.version), location: { page: 'domains', focus: `${s.domainId}#spec` } },
+        ...s.features.map((f): PipelineSource => ({ kind: 'feature', id: `${s.id}#${f.id}`, title: f.name, text: featureText(f), version: String(s.version), location: { page: 'domains', focus: `${s.domainId}#spec` } }))
+      ]),
+      ...await Promise.all(changes.map(async (change): Promise<PipelineSource> => {
+        const snapshot = snapshotIds.has(change.id) ? await readSnapshot(c, change.id) : null
+        return { kind: 'change', id: change.id, title: change.summary, version: change.created,
+          text: [`Change ${change.id}: ${change.summary}`, `${change.target} v${change.from} → v${change.to}`, `Changed: ${change.changed.join(', ') || '전체'}`, ...(snapshot ? [`File: ${snapshot.file}`, `Before:\n${snapshot.before}`, `After:\n${snapshot.after}`] : [])].join('\n\n'),
+          location: { page: 'reviews', focus: `change:${change.id}` } }
+      }))
+    ]
+    return { tasks, specs, sources, library, skills: skills.map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body })) }
+  }
+
+  async function runGraphs(request: PipelineRunRequest) {
+    const c = need()
+    const library = await pl.listPipelines(c), graph = library.find((p) => p.id === request.pipelineId)
+    if (!graph) throw new Error('작업 그래프를 찾을 수 없습니다')
+    if (graph.template) throw new Error('함수는 작업 그래프에서 호출하세요')
+    const snapshotIds = new Set([...(request.selection?.sources.filter((s) => s.kind === 'change').map((s) => s.id) ?? []), ...Object.values(request.values ?? {}).flatMap((v) => v.split('\n')), ...graph.nodes.flatMap((n) => Object.values(n.values ?? {}).flatMap((v) => v.split('\n')))])
+    const env = await executionEnvironment(c, snapshotIds, library)
+    const workspace = await terms()
+    env.terminals = workspace.layout().tabs.map((t) => workspace.get(t.id) ?? t)
+    const prepared = prepareExecutions(graph, env, { ...request, terminalIds: request.terminalIds ?? env.terminals.filter((t) => t.exited === undefined).map((t) => t.id), allowNew: request.allowNew ?? false })
+    if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+    return prepared.map(({ pipe, options }) => pipes.start(pipe, true, options))
   }
 
   return {
@@ -207,6 +254,9 @@ export function createApi(deps: ApiDeps) {
     closeProject() {
       recovery?.abort()
       stopTerminals()
+      history?.finish()
+      pipes.reset()
+      history = null
       ctx = null
     },
     getSettings: () => ws.readSettings(need()),
@@ -477,6 +527,7 @@ export function createApi(deps: ApiDeps) {
     async termState() {
       return (await terms()).state()
     },
+    async termLayout() { return (await terms()).layout() },
     async termAcknowledge(id: string, revision: number) { (await terms()).acknowledge(id, revision) },
     async termActivate(id: string) {
       const workspace = await terms()
@@ -533,18 +584,40 @@ export function createApi(deps: ApiDeps) {
       }))
       return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
-    async runPipeline(id: string) {
-      const library = await pl.listPipelines(need())
-      const p = library.find((x) => x.id === id)
-      if (!p) throw new Error(`작업 그래프를 찾을 수 없습니다: ${id}`)
-      // 템플릿·할 일·스킬은 실행하는 순간의 내용을 쓴다
-      const skills = (await sk.listSkills(need().projectDir)).map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body }))
-      const workspace = await terms()
-      const env = { library, tasks: await tk.listTasks(need()), skills, specs: await sp.listSpecs(need()), terminals: workspace.layout().tabs.map((t) => workspace.get(t.id) ?? t) }
-      const problems = pipelineProblems(p, env, { requireStart: !p.template })
-      if (problems.length) throw new Error(problems.join('\n'))
-      // 빈 리스트를 반복하면 실행할 작업이 없어도 정상 완료한다. 원본 그래프는 위에서 검사했다.
-      return pipes.start({ ...p, ...expandPipeline(p, env) }, true)
+    async runPipeline(id: string) { return (await runGraphs({ pipelineId: id }))[0] },
+    runPipelineBatch: runGraphs,
+    async pipelineSources() { return (await executionEnvironment(need())).sources.map(({ text: _t, version: _v, ...source }) => source) },
+    listPipelineRuns: (filter?: RunFilter) => history?.list(filter) ?? { runs: [], total: 0, counts: { running: 0, waiting: 0, done: 0, failed: 0, stopped: 0 } },
+    async pipelineExecution(id: string) {
+      const live = pipes.execution(id)
+      if (live) return live
+      if (!history) throw new Error('프로젝트가 열려 있지 않습니다')
+      return history.get(id)
+    },
+    async retryPipeline(id: string) {
+      const c = need(), store = history
+      const record = pipes.execution(id) ?? await store?.get(id)
+      if (!record) throw new Error('실행 기록을 찾을 수 없습니다')
+      if (record.state.status === 'running') throw new Error('진행 중인 작업은 다시 실행할 수 없습니다')
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      return pipes.start(record.pipe, true, { ...record.options, retryOf: id, groupId: `group-${newNodeId()}` })
+    },
+    stopPipelineGroup(groupId: string) {
+      return pipes.stopMany(pipes.list().filter((r) => r.groupId === groupId && r.status === 'running').map((r) => r.runId))
+    },
+    async retryPipelineGroup(groupId: string) {
+      const c = need(), store = history
+      if (!store) throw new Error('실행 기록을 찾을 수 없습니다')
+      const rows = []
+      for (let offset = 0; ; offset += 100) {
+        const page = store.list({ groupId, status: 'failed', offset, limit: 100 })
+        rows.push(...page.runs)
+        if (offset + page.runs.length >= page.total) break
+      }
+      const records = await Promise.all(rows.map((r) => pipes.execution(r.runId) ?? store.get(r.runId)))
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const nextGroup = `group-${newNodeId()}`
+      return records.map((record) => pipes.start(record.pipe, true, { ...record.options, groupId: nextGroup, retryOf: record.state.runId }))
     },
     stopPipeline: (runId: string) => pipes.stop(runId),
     /** 스킬 노드에서 고를 Claude Code 스킬 (프로젝트·내 홈) */
@@ -561,7 +634,7 @@ export function createApi(deps: ApiDeps) {
     killAllTerminals() {
       shuttingDown = true
       recovery?.abort()
-      try { stopTerminals() } finally { stopTests() }
+      try { stopTerminals() } finally { history?.finish(); stopTests() }
     }
   }
 }

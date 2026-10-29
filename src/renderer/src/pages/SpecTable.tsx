@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { Domain, Feature, FeatureStatus, Spec } from '../types'
 import { AC_LABEL, Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import { History } from './Domains'
+import { RunButton, SourceRuns } from '../Automation'
 
 export default function SpecTable({ domain, refreshKey, onChanged }: { domain: Domain; refreshKey: number; onChanged: () => void }) {
   const [specs, reload] = useLoad(() => api.listSpecs(), [refreshKey])
@@ -14,6 +15,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   const [picking, setPicking] = useState<number | null>(null)
   const [newName, setNewName] = useState('')
   const [showHistory, setShowHistory] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
 
   useEffect(() => {
     if (spec) setRows(spec.features.map((f) => ({ ...f, acs: f.acs.map((a) => ({ ...a })) })))
@@ -100,6 +102,12 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
           {showHistory ? '표 보기' : '변경 이력'}
         </button>
       </div>
+      <div className="row">
+        <RunButton sources={[{ kind: 'spec', id: spec.id, title: spec.title }]} disabled={dirty} label="명세 전체 그래프로 실행" />
+        <RunButton sources={spec.features.filter((f) => selected.includes(f.id)).map((f) => ({ kind: 'feature', id: `${spec.id}#${f.id}`, title: f.name }))} disabled={dirty} label={`선택한 기능 ${selected.length}개 실행`} />
+        <SourceRuns source={{ kind: 'spec', id: spec.id, title: spec.title }} />
+        {dirty && <span className="small muted">수정한 명세를 저장한 뒤 실행하세요.</span>}
+      </div>
       {status && status.stale.length > 0 && (
         <div className="banner warn">
           <div>
@@ -128,6 +136,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
           <table className="table spec">
             <thead>
               <tr>
+                <th><input type="checkbox" aria-label="기능 전체 선택" checked={spec.features.length > 0 && spec.features.every((f) => selected.includes(f.id))} onChange={(e) => setSelected(e.target.checked ? spec.features.map((f) => f.id) : [])} /></th>
                 <th style={{ width: 90 }}>ID</th>
                 <th style={{ width: 140 }}>{noun}</th>
                 <th style={{ width: 150 }}>목적</th>
@@ -142,6 +151,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
                 const design = ownDesigns.find((d) => d.basedOn.some((b) => b.feature === f.id))
                 return (
                   <tr key={f.id} className={f.status === '폐기' ? 'dim' : ''}>
+                    <td><input type="checkbox" aria-label={`${f.name} 실행 대상 선택`} checked={selected.includes(f.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, f.id] : selected.filter((id) => id !== f.id))} /></td>
                     <td className="mono small">{f.id}</td>
                     <td>
                       {/* 긴 이름도 다 보이게 줄바꿈해서 보여준다. 이름은 한 줄이므로 Enter·줄바꿈은 넣지 않는다 */}

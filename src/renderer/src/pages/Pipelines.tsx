@@ -46,6 +46,8 @@ import { PipelineValue } from '../PipelineValue'
 import { AgentOptionsFields } from '../AgentOptionsFields'
 import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
+import { useAutomation } from '../Automation'
+import { isListShape } from '../../../core/pipeline'
 
 cytoscape.use(edgehandles)
 
@@ -177,8 +179,8 @@ function functionGeometry(n: PipeNode, env: Env) {
   const pins: Pin[] = [
     ...(n.kind !== 'function-input' ? [{ side: 'in' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
     ...(n.kind !== 'function-output' ? [{ side: 'out' as const, type: 'exec' as const, dy: top, label: '실행' }] : []),
-    ...inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 })),
-    ...outputs.map((p, i): Pin => ({ side: 'out', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: p.type === 'list', terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 }))
+    ...inputs.map((p, i): Pin => ({ side: 'in', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: isListShape(p.type), terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 })),
+    ...outputs.map((p, i): Pin => ({ side: 'out', type: 'data', id: p.id, label: `${p.name} · ${PARAM_TYPE_NAME[p.type]}`, list: isListShape(p.type), terminal: p.type === 'terminal', shape: p.type, dy: top + (i + 1) * 28 }))
   ]
   return { pins, width: n.kind === 'template' ? 360 : 260, height }
 }
@@ -297,25 +299,29 @@ function nodeStatus(run: RunState | undefined, id: string): string | undefined {
   return inner.some((s) => s === 'done') ? 'running' : 'waiting'
 }
 
-/** 이 프로젝트에서 실행 중이거나 마지막으로 실행한 결과 (그래프마다 하나) */
+/** 실행 ID별 상태를 유지한다. 같은 그래프의 병렬 실행끼리 덮어쓰지 않는다. */
 function useRuns(): Map<string, RunState> {
   const [runs, setRuns] = useState(new Map<string, RunState>())
   useEffect(() => {
-    void api.pipelineRuns().then((list) => setRuns(new Map(list.map((r) => [r.pipelineId, r]))))
-    return on('pipeline-state', (r: RunState) => {
+    let alive = true
+    void api.pipelineRuns().then((list) => { if (alive) setRuns((current) => new Map([...list.map((r): [string, RunState] => [r.runId, r]), ...current])) }).catch(errorToast)
+    const off = on('pipeline-state', (r: RunState) => {
       setRuns((m) => {
-        const prev = m.get(r.pipelineId)
-        if (r.status === 'done' && prev?.status === 'running') toast(`"${r.title}" 작업 그래프를 모두 마쳤습니다`)
-        if (r.status === 'failed' && prev?.status === 'running') toast(`"${r.title}" 작업 그래프에서 실패한 작업이 있습니다`, 'error')
-        return new Map(m).set(r.pipelineId, r)
+        const all = [...new Map(m).set(r.runId, r).values()]
+        const kept = [...all.filter((run) => run.status === 'running'), ...all.filter((run) => run.status !== 'running').sort((a, b) => (b.finished ?? b.started).localeCompare(a.finished ?? a.started)).slice(0, 20)]
+        return new Map(kept.map((run) => [run.runId, run]))
       })
     })
+    return () => { alive = false; off() }
   }, [])
   return runs
 }
 
 /** IN-F11~F13: 터미널 작업을 노드로 잇는 작업 그래프 (블루프린트처럼 실행 선과 데이터 선). */
 export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: TerminalInfo[]; onShowTerminal: (termId: string) => void }) {
+  const automation = useAutomation()
+  const root = useRef<HTMLDivElement>(null)
+  const [selectedRun, setSelectedRun] = useState('')
   const layout = usePipelineLayout()
   const [list, setList] = useState<Pipeline[] | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
@@ -325,8 +331,9 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const [sel, setSel] = useState<Sel>(null)
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
   const runs = useRuns()
-  const run = draft ? runs.get(draft.id) : undefined
-  const running = run?.status === 'running'
+  const graphRuns = [...runs.values()].filter((r) => r.pipelineId === draft?.id).reverse()
+  const run = graphRuns.find((r) => r.runId === selectedRun) ?? graphRuns[0]
+  // 실행은 시작 당시의 복사본을 사용하므로 정의 편집과 다음 실행을 막지 않는다.
 
   const toDraft = (p: Pipeline): Draft => ({ id: p.id, title: p.title, template: p.template, nodes: p.nodes, edges: p.edges })
   const reload = async (pick?: string) => {
@@ -387,8 +394,11 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
       const nodes: PipeNode[] = template ? [
         { id: newNodeId(), name: '함수 Input', kind: 'function-input', text: '', terminal: 'new', x: 0, y: 0, params: [{ id: newNodeId(), name: '입력', type: 'single' }] },
         { id: newNodeId(), name: '함수 Output', kind: 'function-output', text: '', terminal: 'new', x: 500, y: 0, params: [{ id: newNodeId(), name: '결과', type: 'single' }] }
-      ] : [{ id: newNodeId(), name: KIND_LABEL.start, kind: 'start', text: '', terminal: 'new', x: 0, y: 0 }]
-      const p = await api.savePipeline({ title: template ? '새 함수' : '새 작업 그래프', template, nodes, edges: template ? [{ from: nodes[0].id, to: nodes[1].id }] : [] })
+      ] : [
+        { id: newNodeId(), name: 'Input', kind: 'function-input', text: '', terminal: 'new', x: 0, y: 0, params: [{ id: newNodeId(), name: 'target', type: 'task' }] },
+        { id: newNodeId(), name: 'Output', kind: 'function-output', text: '', terminal: 'new', x: 600, y: 0, params: [] }
+      ]
+      const p = await api.savePipeline({ title: template ? '새 함수' : '새 작업 그래프', template, nodes, edges: [{ from: nodes[0].id, to: nodes[1].id }] })
       await reload(p.id)
     } catch (e) {
       errorToast(e)
@@ -496,7 +506,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     dirty.current = true
     await flush(draft)
     try {
-      await api.runPipeline(draft.id)
+      automation.open([], draft.id)
     } catch (e) {
       errorToast(e)
     }
@@ -537,7 +547,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   // Delete 키로 고른 노드·선을 지운다 (입력 중일 때는 제외)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' || running) return
+      if (e.key !== 'Delete' || root.current?.closest('[hidden]')) return
       const t = e.target as HTMLElement
       if (t.closest('input, textarea, select')) return
       if (selNode) removeNode(selNode.id)
@@ -552,7 +562,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const templates = list.filter((p) => p.template)
   const usableTemplates = templates.filter((t) => t.id !== draft?.id)
   return (
-    <div className="pipe-layout" style={layout.style}>
+    <div className="pipe-layout" style={layout.style} ref={root}>
       <div className="pipe-list">
         <div className="pipe-list-head">
           작업 그래프
@@ -563,7 +573,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
         {graphs.map((p) => (
           <div key={p.id} className={`tree-item ${draft?.id === p.id ? 'on' : ''}`} onClick={() => void switchTo(p.id)}>
             {p.title}
-            {runs.get(p.id)?.status === 'running' && <span title="실행 중"> ⟳</span>}
+            {[...runs.values()].some((r) => r.pipelineId === p.id && r.status === 'running') && <span title="실행 중"> ⟳</span>}
           </div>
         ))}
         <div className="pipe-list-head">
@@ -586,38 +596,34 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
         <div className="pipe-main">
           <div className="row between" style={{ marginTop: 0 }}>
             <div className="row" style={{ margin: 0, flex: 1 }}>
-              <input className="pipe-title" value={draft.title} onChange={(e) => update((d) => ({ ...d, title: e.target.value }))} disabled={running} />
+              <input className="pipe-title" value={draft.title} onChange={(e) => update((d) => ({ ...d, title: e.target.value }))} />
               <label className="small">
-                <input type="checkbox" checked={!!draft.template} disabled={running || !!draft.template} onChange={() => update((d) => ({ ...d, template: true, ...withFunctionBoundary(d, d.id) }))} /> 함수로 쓰기
+                <input type="checkbox" checked={!!draft.template} disabled={!!draft.template} onChange={() => update((d) => ({ ...d, template: true, ...withFunctionBoundary(d, d.id) }))} /> 함수로 쓰기
               </label>
             </div>
             <div className="row" style={{ margin: 0 }}>
+              {!draft.nodes.some((n) => n.kind === 'function-input') && <button onClick={() => update((d) => ({ ...d, ...withFunctionBoundary(d, d.id) }))}>외부 Input 추가</button>}
+              {!!graphRuns.length && <><select aria-label="표시할 실행" value={run?.runId ?? ''} onChange={(e) => setSelectedRun(e.target.value)}>{graphRuns.map((r) => <option key={r.runId} value={r.runId}>{r.sources?.map((s) => s.title).join(', ') || r.title} · {RUN_LABEL[r.status]} · {new Date(r.started).toLocaleTimeString()}</option>)}</select><button onClick={() => run && automation.inspect(run.runId)}>실행 상세</button></>}
               <button className="ghost" title="패널 크기 초기화" onClick={layout.reset}>레이아웃 초기화</button>
-              {running ? (
-                <button className="danger" onClick={() => run && void api.stopPipeline(run.runId)}>
-                  ■ 중지
-                </button>
-              ) : (
-                <button className="primary" disabled={!!draft.template || problems.length > 0} title={draft.template ? '함수는 작업 그래프에서 호출해 실행합니다' : problems.join('\n')} onClick={start}>
+                <button className="primary" disabled={!!draft.template} title={draft.template ? '함수는 작업 그래프에서 호출해 실행합니다' : '입력과 실행 환경을 지정합니다'} onClick={start}>
                   ▶ 실행
                 </button>
-              )}
-              <button className="ghost danger" disabled={running} onClick={remove}>
+              <button className="ghost danger" onClick={remove}>
                 삭제
               </button>
             </div>
           </div>
           <div className="pipe-palette">
             <span className="small muted">실행</span>
-            <button disabled={running || !!draft.template} onClick={() => addNode('start')}>
+            <button disabled={!!draft.template || draft.nodes.some(isFunctionBoundary)} onClick={() => addNode('start')}>
               <span className="dot" style={{ background: KIND_COLOR.start }} /> 시작
             </button>
             {AGENT_KINDS.map((k) => (
-              <button key={k} disabled={running} onClick={() => addNode(k)}>
+              <button key={k} onClick={() => addNode(k)}>
                 <span className={`dot ${k}`} /> {KIND_LABEL[k]}
               </button>
             ))}
-            <select value="" disabled={running || !usableTemplates.length} onChange={(e) => e.target.value && addNode('template', { ref: e.target.value })}>
+            <select value="" disabled={!usableTemplates.length} onChange={(e) => e.target.value && addNode('template', { ref: e.target.value })}>
               <option value="">{usableTemplates.length ? '+ 함수 호출' : '함수 없음'}</option>
               {usableTemplates.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -625,39 +631,39 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                 </option>
               ))}
             </select>
-            <button disabled={running} onClick={() => addNode('complete')}>
+            <button onClick={() => addNode('complete')}>
               할 일 완료
             </button>
             <span className="small muted">유틸리티</span>
-            <button disabled={running} onClick={() => addNode('print')} title="실행 시 입력값을 출력 로그에 표시합니다">Print</button>
-            <button disabled={running} onClick={() => addNode('foreach')} title="리스트를 한 항목씩 순서대로 처리합니다">For Each</button>
-            <button disabled={running} onClick={() => addNode('if')} title="Bool 조건에 따라 True 또는 False 경로를 실행합니다">If</button>
-            <select aria-label="비교 노드 추가" value="" disabled={running} onChange={(e) => e.target.value && addNode('compare', { operation: e.target.value as PipeNode['operation'] })}>
+            <button onClick={() => addNode('print')} title="실행 시 입력값을 출력 로그에 표시합니다">Print</button>
+            <button onClick={() => addNode('foreach')} title="리스트를 한 항목씩 순서대로 처리합니다">For Each</button>
+            <button onClick={() => addNode('if')} title="Bool 조건에 따라 True 또는 False 경로를 실행합니다">If</button>
+            <select aria-label="비교 노드 추가" value="" onChange={(e) => e.target.value && addNode('compare', { operation: e.target.value as PipeNode['operation'] })}>
               <option value="">+ 비교</option>
               {Object.entries(COMPARE_OPS).map(([op, label]) => <option key={op} value={op}>{label}</option>)}
             </select>
-            {(['and', 'or', 'not'] as const).map((kind) => <button key={kind} disabled={running} onClick={() => addNode(kind)}>{KIND_LABEL[kind]}</button>)}
+            {(['and', 'or', 'not'] as const).map((kind) => <button key={kind} onClick={() => addNode(kind)}>{KIND_LABEL[kind]}</button>)}
             <span className="small muted" style={{ marginLeft: 8 }}>
               데이터
             </span>
-            <button disabled={running} onClick={() => addNode('terminal')}>
+            <button onClick={() => addNode('terminal')}>
               터미널
             </button>
-            <button disabled={running} onClick={() => addNode('boolean')}>Bool</button>
-            <button disabled={running} onClick={() => addNode('number')}>숫자</button>
-            <button disabled={running} onClick={() => addNode('text')}>
+            <button onClick={() => addNode('boolean')}>Bool</button>
+            <button onClick={() => addNode('number')}>숫자</button>
+            <button onClick={() => addNode('text')}>
               텍스트
             </button>
-            <button disabled={running} onClick={() => addNode('add')} title="A 뒤에 B를 그대로 이어 붙입니다">텍스트 Add</button>
-            <button disabled={running} onClick={() => addNode('list', { items: [''] })}>
+            <button onClick={() => addNode('add')} title="A 뒤에 B를 그대로 이어 붙입니다">텍스트 Add</button>
+            <button onClick={() => addNode('list', { items: [''] })}>
               리스트
             </button>
-            <button disabled={running} onClick={() => addNode('join')}>
+            <button onClick={() => addNode('join')}>
               합치기
             </button>
-            <button disabled={running} onClick={() => addNode('schema')}>출력 구조</button>
-            <button disabled={running} onClick={() => addNode('dictionary', { text: '{}' })}>Dictionary</button>
-            <select value="" disabled={running} onChange={(e) => e.target.value && addNode('task', { ref: e.target.value })}>
+            <button onClick={() => addNode('schema')}>출력 구조</button>
+            <button onClick={() => addNode('dictionary', { text: '{}' })}>Dictionary</button>
+            <select value="" onChange={(e) => e.target.value && addNode('task', { ref: e.target.value })}>
               <option value="">+ 할 일</option>
               {tasks
                 .filter((t) => t.status === '대기' || t.status === '진행')
@@ -667,7 +673,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                   </option>
                 ))}
             </select>
-            <select value="" disabled={running || !skills.length} onChange={(e) => e.target.value && addNode('skill', { ref: e.target.value })}>
+            <select value="" disabled={!skills.length} onChange={(e) => e.target.value && addNode('skill', { ref: e.target.value })}>
               <option value="">{skills.length ? '+ 스킬' : '스킬 없음'}</option>
               {skills.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -676,7 +682,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                 </option>
               ))}
             </select>
-            <select value="" disabled={running || !specs.length} onChange={(e) => e.target.value && addNode('spec', { ref: e.target.value })}>
+            <select value="" disabled={!specs.length} onChange={(e) => e.target.value && addNode('spec', { ref: e.target.value })}>
               <option value="">{specs.length ? '+ 기능 명세' : '기능 명세 없음'}</option>
               {specs.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -693,7 +699,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               </span>
             </div>
           )}
-          {!running && problems.length > 0 && (
+          {problems.length > 0 && (
             <div className="banner warn pipe-problems">
               <div>
                 <b>실행할 수 없는 이유</b>
@@ -705,7 +711,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                   ))}
                 </ul>
               </div>
-              {!draft.template && !draft.nodes.some((n) => n.kind === 'start') && <button onClick={addStart}>시작 노드 추가</button>}
+              {!draft.template && !draft.nodes.some((n) => n.kind === 'start' || n.kind === 'function-input') && <button onClick={addStart}>시작 노드 추가</button>}
             </div>
           )}
           {unused.length > 0 && <div className="small muted">시작에서 이어지지 않아 실행되지 않는 노드: {unused.join(', ')}</div>}
@@ -717,7 +723,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               run={run}
               sel={sel}
               connectFrom={connectFrom}
-              locked={running}
+              locked={false}
               canConnect={(a, b, pin, toPort) => canConnect(draft, a, b, pin, toPort)}
               onConnect={connect}
               onTapNode={(id) => {
@@ -767,7 +773,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                         ? `${nm(selEdge.from)}의 글을 ${nm(selEdge.to)}에 넘깁니다.`
                         : `${nm(selEdge.from)}이(가) 끝나면 ${nm(selEdge.to)}을(를) 실행합니다.`}
                   </div>
-                  <button className="danger" disabled={running} onClick={() => disconnect(selEdge)}>
+                  <button className="danger" onClick={() => disconnect(selEdge)}>
                     연결 끊기 (Delete)
                   </button>
                 </>
@@ -779,7 +785,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                   env={env}
                   run={run}
                   tabs={tabs}
-                  locked={running}
+                  locked={false}
                   onPatch={(p) => patchNode(selNode.id, p)}
                   onRename={(name) => rename(selNode.id, name)}
                   onExtract={(v) => extract(selNode, v)}

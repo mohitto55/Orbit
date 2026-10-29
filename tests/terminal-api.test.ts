@@ -158,7 +158,7 @@ describe('작업 그래프 세션 재사용', () => {
       const first = await saveGraph(api, kind, session)
       const second = await saveGraph(api, kind, session)
       await Promise.all([api.runPipeline(first.id), api.runPipeline(second.id)])
-      await vi.waitFor(() => expect(api.pipelineRuns().map((r) => r.nodes.work.status).sort()).toEqual(['failed', 'running']))
+      await vi.waitFor(() => expect(api.pipelineRuns().map((r) => r.nodes.work.status).sort()).toEqual(['running', 'waiting']))
       expect(ptys).toHaveLength(1)
       expect(TerminalWorkspace.prototype.whenReady).toHaveBeenCalledTimes(1)
       const state = await api.termState()
@@ -167,11 +167,13 @@ describe('작업 그래프 세션 재사용', () => {
       expect(state.tabs[0].title).toBe(`${kind === 'claude' ? 'Claude Code' : 'Codex'} · 결제 검토`)
       expect(ptys[0].write).toHaveBeenCalledWith(expect.stringContaining(kind === 'claude' ? `claude --resume ${session}` : `codex resume ${session}`))
       expect(vi.mocked(ptys[0].write).mock.calls.filter(([input]) => input.includes('기존 대화에 보내는 작업'))).toHaveLength(1)
-      const running = api.pipelineRuns().find((r) => r.status === 'running')!
-      const failed = api.pipelineRuns().find((r) => r.status === 'failed')!
-      expect(failed.nodes.work.message).toContain('다른 작업 노드가 실행 중')
+      const running = api.pipelineRuns().find((r) => r.nodes.work.status === 'running')!
+      const waiting = api.pipelineRuns().find((r) => r.nodes.work.status === 'waiting')!
+      expect(waiting.nodes.work.message).toContain('다른 작업 노드가 실행 중')
       expect(api.markNodeDone(running.runId, 'work')?.status).toBe('done')
-      expect(api.pipelineRuns().find((r) => r.runId === failed.runId)?.status).toBe('failed')
+      await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === waiting.runId)?.nodes.work.status).toBe('running'))
+      expect(ptys).toHaveLength(1)
+      expect(vi.mocked(ptys[0].write).mock.calls.filter(([input]) => input.includes('기존 대화에 보내는 작업'))).toHaveLength(2)
     } finally { api.killAllTerminals() }
   })
 })

@@ -31,11 +31,17 @@ export const isData = (n: Pick<PipeNode, 'kind'>) => DATA_KINDS.includes(n.kind)
 export const isAgent = (n: Pick<PipeNode, 'kind'>) => n.kind === 'claude' || n.kind === 'codex'
 
 /** 데이터의 형태. 터미널은 탭 참조이며 텍스트로 변환하지 않는다. */
-export type DataShape = 'single' | 'list' | 'terminal' | 'task' | 'json' | 'schema' | 'boolean' | 'number'
+export const SOURCE_KINDS = ['task', 'change', 'spec', 'feature'] as const
+export type SourceKind = typeof SOURCE_KINDS[number]
+export interface SourceRef { kind: SourceKind; id: string; title: string; location?: { page: 'tasks' | 'domains' | 'reviews'; focus: string } }
+export interface PipelineSource extends SourceRef { text: string; version?: string }
+export type DataShape = 'single' | 'list' | 'terminal' | 'json' | 'schema' | 'boolean' | 'number' | SourceKind | `${SourceKind}[]`
+export const sourceKind = (shape: string): SourceKind | undefined => SOURCE_KINDS.find((kind) => shape === kind || shape === `${kind}[]`)
+export const isListShape = (shape: string) => shape === 'list' || shape.endsWith('[]')
 export const isLogic = (n: Pick<PipeNode, 'kind'>) => ['compare', 'and', 'or', 'not'].includes(n.kind)
 export const dataShape = (n: Pick<PipeNode, 'kind'>): DataShape => n.kind === 'boolean' || isLogic(n) ? 'boolean' : n.kind === 'number' ? 'number' : n.kind === 'terminal' ? 'terminal' : n.kind === 'task' ? 'task' : n.kind === 'schema' ? 'schema' : n.kind === 'dictionary' || n.kind === 'property' ? 'json' : n.kind === 'list' || n.kind === 'spec' ? 'list' : 'single'
-export const SHAPE_NAME: Record<DataShape, string> = { single: '단일', list: '리스트', terminal: '터미널', task: 'Task', json: 'JSON', schema: '출력 구조', boolean: 'Bool', number: '숫자' }
-export const PARAM_TYPE_NAME: Record<DataShape, string> = { single: '텍스트', list: '텍스트 리스트', terminal: '터미널', task: 'Task', json: 'JSON', schema: '출력 구조', boolean: 'Bool', number: '숫자' }
+export const SHAPE_NAME: Record<DataShape, string> = { single: 'String', list: 'List<String>', terminal: 'Terminal', task: 'Task', change: 'Change', spec: 'Spec', feature: 'Feature', 'task[]': 'List<Task>', 'change[]': 'List<Change>', 'spec[]': 'List<Spec>', 'feature[]': 'List<Feature>', json: 'JSON', schema: 'Schema', boolean: 'Bool', number: 'Number' }
+export const PARAM_TYPE_NAME = SHAPE_NAME
 export interface FunctionParam { id: string; name: string; type: DataShape }
 export const isFunctionBoundary = (n: Pick<PipeNode, 'kind'>) => n.kind === 'function-input' || n.kind === 'function-output'
 export const LOOP_PORT = { body: '$body', done: '$done', list: '$list', item: '$item', index: '$index' } as const
@@ -134,6 +140,7 @@ export interface Env {
   /** 도메인의 기능·규칙 명세 */
   specs?: EnvSpec[]
   terminals?: Pick<TerminalInfo, 'id' | 'title' | 'kind' | 'exited' | 'activity'>[]
+  sources?: PipelineSource[]
 }
 
 export interface EnvFeature {
@@ -294,6 +301,16 @@ export function functionParams(n: PipeNode, env: Env): { inputs: FunctionParam[]
 }
 
 const inputToken = (node: string, port: string) => `\u0000입력:${JSON.stringify([node, port])}\u0000`
+/** 외부 입력도 함수와 같은 변수 ID·타입·핀을 사용한다. 원본 정의는 변경하지 않는다. */
+export function bindPipelineInputs(p: Pipeline, values: Record<string, string>): Pipeline {
+  const entry = p.nodes.find((n) => n.kind === 'function-input')
+  if (!entry) {
+    if (Object.keys(values).length) throw new Error('그래프에 Input 변수를 정의하세요')
+    return p
+  }
+  const substitute = (text: string) => (entry.params ?? []).reduce((s, param) => s.split(`{{${param.name}}}`).join(inputToken(entry.id, param.id)), text)
+  return { ...p, nodes: p.nodes.map((n) => ({ ...n, text: substitute(n.text), ...(n.items ? { items: n.items.map(substitute) } : {}), ...(n.id === entry.id ? { values: { ...n.values, ...values } } : {}) })) }
+}
 function resolveInputs(text: string, p: Graph, env: Env, seen: string[] = []): string {
   return text.replace(/\u0000입력:([^\u0000]+)\u0000/g, (_match, value: string) => {
     const [id, port] = JSON.parse(value) as [string, string]
@@ -362,6 +379,19 @@ function portItems(p: Graph, id: string, port: string | undefined, env: Env, see
     const taskId = taskSource(p, { from: id, fromPort: param.id }, env)
     const task = env.tasks?.find((t) => t.id === taskId)
     return task ? [taskText(task)] : []
+  }
+  const kind = sourceKind(param.type)
+  if (kind) {
+    if (n.kind === 'function-input' && !edges.length && n.values?.[param.id] === undefined) return [`{{${param.name}}}`]
+    return sourceIds(p, { from: id, fromPort: param.id }, env).map((sourceId) => {
+      if (kind === 'task') {
+        const task = env.tasks?.find((t) => t.id === sourceId)
+        if (task) return taskText(task)
+      }
+      const source = env.sources?.find((s) => s.kind === kind && s.id === sourceId)
+      if (!source) throw new Error(`${param.name}: ${SHAPE_NAME[kind]} 데이터를 찾을 수 없습니다 (${sourceId})`)
+      return source.text
+    })
   }
   if (edges.length) {
     const items = edges.flatMap((e) => edgeItems(p, e, env, next))
@@ -545,8 +575,8 @@ export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['
       if (shape === 'terminal' || shape === 'schema') return 'Print에는 텍스트·리스트·JSON·Bool·숫자 값을 연결하세요'
       if (incomingData(p, to).some((e) => e.from !== from || e.fromPort !== ports.fromPort)) return '출력할 값은 하나만 연결할 수 있습니다'
     }
-    if (b.kind === 'item' && shape !== 'list') return '리스트 항목에는 리스트를 연결하세요'
-    if (b.kind === 'complete' && shape !== 'task') return '할 일 완료에는 Task 타입의 출력을 연결하세요'
+    if (b.kind === 'item' && !isListShape(shape)) return '리스트 항목에는 리스트를 연결하세요'
+    if (b.kind === 'complete' && sourceKind(shape) !== 'task') return '할 일 완료에는 Task 타입의 출력을 연결하세요'
     if (b.kind === 'feature' && a.kind !== 'spec') return '기능에는 원본 기능 명세를 연결하세요'
     if (b.kind === 'ac' && a.kind !== 'feature') return '수용 기준에는 원본 기능을 연결하세요'
     if (['item', 'feature', 'ac', 'dictionary', 'property', 'boolean', 'number'].includes(b.kind) && incomingData(p, to).some((e) => e.from !== from || e.fromPort !== ports.fromPort)) return '원본 데이터는 하나만 연결할 수 있습니다'
@@ -576,8 +606,8 @@ export function edgeProblem(p: Graph, from: string, to: string, pin?: PipeEdge['
       const target = targetPorts.find((v) => v.id === (ports.toPort ?? targetPorts[0]?.id))
       if (!target) return b.kind === 'add' ? '텍스트 Add의 A 또는 B 입력을 고르세요' : '함수의 입력 변수를 고르세요'
       // 예전 템플릿의 이름 없는 입력 선은 글을 합쳐 넘기던 동작을 유지한다.
-      const textShape = shape === 'task' ? 'single' : shape
-      if ((ports.toPort || b.kind !== 'template' || !['single', 'list'].includes(target.type) || !['single', 'list'].includes(textShape)) && target.type !== shape && !(target.type === 'single' && shape === 'task')) return `${target.name}: ${PARAM_TYPE_NAME[target.type]} 입력에 ${PARAM_TYPE_NAME[shape]}을 연결할 수 없습니다`
+      const textShape = sourceKind(shape) ? isListShape(shape) ? 'list' : 'single' : shape
+      if ((ports.toPort || b.kind !== 'template' || !['single', 'list'].includes(target.type) || !['single', 'list'].includes(textShape)) && target.type !== shape && !(target.type === textShape && sourceKind(shape))) return `${target.name}: ${PARAM_TYPE_NAME[target.type]} 입력에 ${PARAM_TYPE_NAME[shape]}을 연결할 수 없습니다`
       if ((ports.toPort || b.kind !== 'template') && p.edges.some((e) => e.to === to && (e.toPort ?? targetPorts[0]?.id) === target.id && isDataEdge(p, e) && (e.from !== from || e.fromPort !== ports.fromPort))) return `${target.name}: 이미 연결된 입력입니다`
     } else if (shape === 'terminal') return '터미널은 터미널 타입의 입력 핀에 연결하세요'
     else if (ports.toPort) return '존재하지 않는 입력 변수입니다'
@@ -692,10 +722,26 @@ export function completeTargets(p: Graph, id: string, env: Env = {}): string[] {
   const graph = p.nodes.some((n) => n.kind === 'template') ? lowerFunctions(p, env, []) : p
   const n = byId(graph, id)
   if (!n) return []
-  const linked = incomingData(graph, id).filter((e) => edgeShape(graph, e, env) === 'task').map((e) => taskSource(graph, e, env))
+  const linked = incomingData(graph, id).filter((e) => sourceKind(edgeShape(graph, e, env)) === 'task').flatMap((e) => edgeShape(graph, e, env) === 'task' ? [taskSource(graph, e, env)] : sourceIds(graph, e, env))
   // 펼친 뒤에는 text에 id가 쉼표로 담겨 있다
   const expanded = n.text.split(',').map((x) => x.trim()).filter(Boolean)
   return [...new Set([...(n.ref ? [n.ref] : []), ...linked, ...expanded])]
+}
+
+/** 참조형 변수는 함수 경계를 지나도 원본 ID와 목록 경계를 유지한다. */
+function sourceIds(p: Graph, edge: Pick<PipeEdge, 'from' | 'fromPort'>, env: Env, seen: string[] = []): string[] {
+  const node = byId(p, edge.from)
+  if (!node) throw new Error('입력 원본을 찾을 수 없습니다')
+  if (node.kind === 'task') return [taskSource(p, edge, env)]
+  const param = node.params?.find((v) => v.id === (edge.fromPort ?? node.params?.[0]?.id))
+  if (!param || !sourceKind(param.type)) throw new Error(`${nodeName(node)}: 원본 참조 타입을 연결하세요`)
+  const key = JSON.stringify([node.id, param.id])
+  if (seen.includes(key)) throw new Error('입력 데이터 선이 고리를 이룹니다')
+  const edges = incomingData(p, node.id).filter((e) => (e.toPort ?? node.params?.[0]?.id) === param.id)
+  if (edges.length > 1) throw new Error(`${param.name}: 입력은 하나만 연결할 수 있습니다`)
+  if (edges.length) return sourceIds(p, edges[0], env, [...seen, key])
+  const value = node.values?.[param.id] ?? ''
+  return isListShape(param.type) ? value.split('\n').filter(Boolean) : value ? [value] : []
 }
 
 /**
@@ -933,6 +979,9 @@ export function dataPreviews(p: Graph, id: string, env: Env = {}): { id: string;
     try { graph = lowerLoops(lowerFunctions(p, env, []), env) }
     catch { preview = true } // 편집 중인 다른 함수·반복이 불완전해도 현재 설정은 볼 수 있다.
   }
+  const boundary = graph.nodes.find((n) => n.id === id && isFunctionBoundary(n))
+  if (boundary) return (boundary.params ?? []).map((param) => ({ id: `${id}:${param.id}`, name: param.name, shape: param.type, preview: boundary.values?.[param.id] === undefined,
+    items: param.type === 'terminal' ? [(() => { const ref = terminalSource(graph, { from: id, to: '', fromPort: param.id }); return 'tabId' in ref ? env.terminals?.find((t) => t.id === ref.tabId)?.title ?? ref.tabId : nodeName(byId(graph, ref.nodeId) ?? { id: ref.nodeId }) })()] : portItems(graph, id, param.id, env, []) }))
   const copies = graph.nodes.filter((n) => isData(n) && n.id !== id && n.sourceIds?.includes(id))
   const expanded = new Set<string>()
   for (const copy of copies) {
@@ -1112,6 +1161,7 @@ export interface NodeRun {
   /** 출력 계약을 통과한 Dictionary. */
   structuredOutput?: JsonObject
   message?: string
+  waitingFor?: string
   conditionResult?: boolean
   skipReason?: 'condition' | 'failed'
 }
@@ -1123,7 +1173,50 @@ export interface RunState {
   status: 'running' | 'done' | 'failed' | 'stopped'
   nodes: Record<string, NodeRun>
   started: string
+  finished?: string
+  groupId?: string
+  sources?: SourceRef[]
+  retryOf?: string
+  message?: string
 }
+
+export interface RunOptions {
+  groupId?: string
+  sources?: SourceRef[]
+  retryOf?: string
+  /** 지정한 세션만 자동 배정한다. 명시적으로 연결한 터미널·세션은 이 설정보다 우선한다. */
+  terminalIds?: string[]
+  allowNew?: boolean
+  maxConcurrent?: number
+  snapshot?: { graph: Pipeline; env: Env; values: Record<string, string> }
+}
+export interface PipelineExecution { state: RunState; pipe: Pipeline; options: RunOptions }
+
+export interface PipelineRunSummary {
+  runId: string
+  pipelineId: string
+  title: string
+  status: RunState['status']
+  started: string
+  finished?: string
+  groupId?: string
+  retryOf?: string
+  sources: SourceRef[]
+  stage: string
+  message?: string
+  done: number
+  total: number
+  waiting: boolean
+}
+
+export function summarizeRun(state: RunState): PipelineRunSummary {
+  const nodes = Object.values(state.nodes)
+  const current = nodes.find((n) => n.status === 'running' || n.status === 'starting') ?? nodes.find((n) => n.status === 'waiting') ?? nodes.find((n) => n.status === 'failed')
+  return { runId: state.runId, pipelineId: state.pipelineId, title: state.title, status: state.status, started: state.started, finished: state.finished, groupId: state.groupId, retryOf: state.retryOf, sources: state.sources ?? [], stage: current?.name ?? '', message: state.message ?? current?.message, done: nodes.filter((n) => n.status === 'done').length, total: nodes.length, waiting: state.status === 'running' && current?.status === 'waiting' }
+}
+
+export interface RunFilter { source?: Pick<SourceRef, 'kind' | 'id'>; status?: RunState['status'] | 'waiting'; groupId?: string; offset?: number; limit?: number }
+
 
 export interface RunnerDeps {
   /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
@@ -1137,6 +1230,7 @@ export interface RunnerDeps {
   beginOutputCapture?: (termId: string, prompt: string) => void
   readAgentOutput?: (termId: string) => string | undefined
   endOutputCapture?: (termId: string) => void
+  interrupt?: (termId: string) => void
   /** "할 일 완료" 노드: Task를 완료 상태로 바꾼다 */
   completeTasks: (ids: string[]) => Promise<void>
   emit: (state: RunState) => void
@@ -1149,14 +1243,15 @@ const GRACE_MS = 1500
 interface Run extends RunState {
   pipe: Pipeline
   sentAt: Record<string, number>
+  options: RunOptions
 }
 
 export class PipelineRunner {
   private runs = new Map<string, Run>()
   /** 터미널 → 지금 그 터미널에서 실행 중인 노드 */
   private owner = new Map<string, { runId: string; nodeId: string }>()
-  private seq = 0
   private outputSeq = 0
+  private waking = false
 
   constructor(private deps: RunnerDeps) {}
 
@@ -1165,29 +1260,48 @@ export class PipelineRunner {
   }
 
   private publish(run: Run): RunState {
-    const { pipe: _p, sentAt: _s, ...state } = run
+    const { pipe: _p, sentAt: _s, options: _o, ...state } = run
     const copy = JSON.parse(JSON.stringify(state)) as RunState
-    this.deps.emit(copy)
+    if (this.runs.get(run.runId) === run) this.deps.emit(copy)
     return copy
   }
 
   list(): RunState[] {
-    return [...this.runs.values()].map(({ pipe: _p, sentAt: _s, ...s }) => JSON.parse(JSON.stringify(s)))
+    return [...this.runs.values()].map(({ pipe: _p, sentAt: _s, options: _o, ...s }) => JSON.parse(JSON.stringify(s)))
   }
 
-  start(pipe: Pipeline, allowEmpty = false): RunState {
+  execution(runId: string): PipelineExecution | undefined {
+    const run = this.runs.get(runId)
+    if (!run) return undefined
+    const { pipe, options, sentAt: _s, ...state } = run
+    return JSON.parse(JSON.stringify({ state, pipe, options })) as PipelineExecution
+  }
+
+  reset(): void {
+    this.stopMany([...this.runs.keys()])
+    this.runs.clear()
+    this.owner.clear()
+  }
+
+  trimCompleted(limit = 20): void {
+    const finished = [...this.runs.values()].filter((r) => r.status !== 'running').sort((a, b) => (b.finished ?? b.started).localeCompare(a.finished ?? a.started))
+    for (const run of finished.slice(limit)) if (![...this.owner.values()].some((o) => o.runId === run.runId)) this.runs.delete(run.runId)
+  }
+
+  start(pipe: Pipeline, allowEmpty = false, options: RunOptions = {}): RunState {
     const problems = allowEmpty && !pipe.nodes.length ? [] : pipelineProblems(pipe)
     if (problems.length) throw new Error(problems.join('\n'))
-    if ([...this.runs.values()].some((r) => r.pipelineId === pipe.id && r.status === 'running')) throw new Error('이 작업 그래프는 이미 실행 중입니다')
-    // 같은 그래프의 지난 실행 기록은 새 실행으로 바꾼다
-    for (const [id, r] of this.runs) if (r.pipelineId === pipe.id) this.runs.delete(id)
     const run: Run = {
-      runId: `run-${++this.seq}`,
+      runId: `run-${newNodeId()}`,
       pipelineId: pipe.id,
       title: pipe.title,
       status: 'running',
       nodes: Object.fromEntries(pipe.nodes.map((n) => [n.id, { status: 'waiting' as NodeStatus, name: nodeName(n), kind: n.kind, sourceIds: n.sourceIds ?? [n.id] }])),
       started: new Date(this.now()).toISOString(),
+      groupId: options.groupId,
+      sources: options.sources,
+      retryOf: options.retryOf,
+      options: JSON.parse(JSON.stringify(options)) as RunOptions,
       pipe: JSON.parse(JSON.stringify(pipe)),
       sentAt: {}
     }
@@ -1205,7 +1319,7 @@ export class PipelineRunner {
       changed = false
       for (const n of pipe.nodes) {
         const st = run.nodes[n.id]
-        if (st.status !== 'waiting') continue
+        if (st.status !== 'waiting' || st.waitingFor) continue
         const before = pipe.edges.filter((e) => e.to === n.id).map((e) => {
           const source = run.nodes[e.from]
           if (source.status === 'failed' || (source.status === 'skipped' && source.skipReason !== 'condition')) return 'failed'
@@ -1224,12 +1338,40 @@ export class PipelineRunner {
       }
     } while (changed)
     const active = pipe.nodes.some((n) => ['waiting', 'starting', 'running'].includes(run.nodes[n.id].status))
-    if (!active) run.status = pipe.nodes.some((n) => run.nodes[n.id].status === 'failed') ? 'failed' : 'done'
+    if (!active) {
+      run.status = pipe.nodes.some((n) => run.nodes[n.id].status === 'failed') ? 'failed' : 'done'
+      run.finished = new Date(this.now()).toISOString()
+    }
+  }
+
+  /** 자원이 풀릴 때만 다시 배정한다. 사용 중인 터미널은 실패나 새 탭 생성 사유가 아니다. */
+  terminalChanged(readyTerminal?: string): void {
+    if (this.waking) return
+    this.waking = true
+    try {
+    for (const [id, owner] of this.owner) {
+      if (this.runs.get(owner.runId)?.status === 'stopped' && (id === readyTerminal || ['idle', 'completed'].includes(this.deps.getTerminal(id)?.activity ?? ''))) this.owner.delete(id)
+    }
+    for (const run of this.runs.values()) {
+      if (run.status !== 'running') continue
+      for (const node of run.pipe.nodes) {
+        const st = run.nodes[node.id]
+        if (st.status !== 'waiting' || !st.waitingFor) continue
+        delete st.waitingFor
+        void this.launch(run, node, readyTerminal)
+      }
+    }
+    } finally { this.waking = false }
   }
 
   private async launch(run: Run, node: PipeNode, readyTerminal?: string) {
     const st = run.nodes[node.id]
     st.status = 'starting'
+    delete st.message
+    const wait = (reason: string, termId?: string) => {
+      Object.assign(st, { status: 'waiting', waitingFor: reason, message: reason, termId })
+      this.publish(run)
+    }
     try {
       if (node.kind === 'print') {
         this.recordOutput(st, fillOutputs(node.text, (id) => {
@@ -1262,6 +1404,11 @@ export class PipelineRunner {
       }
       let termId: string
       let needsReady = false
+      const limit = run.options.maxConcurrent
+      if (limit && [...this.runs.values()].filter((r) => r.groupId === run.groupId).flatMap((r) => Object.values(r.nodes)).filter((s) => s !== st && ['claude', 'codex', 'shell'].includes(s.kind ?? '') && (s.status === 'running' || s.status === 'starting')).length >= limit) {
+        wait(`동시 실행 한도 ${limit}개 · 실행 중인 작업 대기`)
+        return
+      }
       const from = continueFrom(run.pipe, node, (n) => run.nodes[n.id].status === 'done')
       if (node.terminalInput) {
         const input = node.terminalInput
@@ -1271,22 +1418,31 @@ export class PipelineRunner {
         if (!termId || !this.deps.hasTerminal(termId)) throw new Error(`${nodeName(from)}의 터미널이 닫혀 이어서 실행할 수 없습니다`)
       } else {
         const session = node.kind === 'claude' || node.kind === 'codex' ? node.session : undefined
+        const pool = !session && run.options.terminalIds?.map((id) => this.deps.getTerminal(id)).filter((t): t is TerminalInfo => !!t && t.exited === undefined && t.kind === node.kind)
+        const available = pool && pool.find((t) => !this.owner.has(t.id) && (t.activity !== 'working' || t.id === readyTerminal))
+        if (available) termId = available.id
+        else if (pool && (pool.length || !run.options.allowNew)) {
+          if (!pool.length) throw new Error(`선택한 ${KIND_NAME[node.kind]} 터미널이 닫혔습니다. 실행 환경을 확인하세요`)
+          wait('선택한 터미널 사용 중')
+          return
+        } else {
         const model = isAgent(node) ? node.model?.trim() || undefined : undefined
         const terminal = model
           ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model)
           : await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
         termId = terminal.id
         needsReady = !terminal.reused
+        }
       }
       if (run.status !== 'running') return
-      if (this.owner.has(termId)) throw new Error('이 세션의 터미널에서 다른 작업 노드가 실행 중입니다. 해당 작업이 끝난 뒤 다시 실행하세요')
+      if (this.owner.has(termId)) { wait('지정 터미널에서 다른 작업 노드가 실행 중', termId); return }
       const terminal = this.deps.getTerminal(termId)
       if (node.terminalInput) {
         if (!terminal || terminal.exited !== undefined) throw new Error('연결한 터미널이 닫혔습니다. 사용할 터미널을 다시 고르세요')
         if (terminal.kind !== node.kind) throw new Error(`${KIND_NAME[node.kind]} 노드에는 같은 종류의 터미널을 연결하세요`)
       }
       // 완료 알림이 상태 제목(Ready)보다 먼저 올 수 있다. 방금 완료한 탭은 즉시 이어 쓴다.
-      if (!needsReady && terminal?.activity === 'working' && termId !== readyTerminal) throw new Error('연결한 터미널에서 작업이 진행 중입니다. 작업이 끝난 뒤 다시 실행하세요')
+      if (!needsReady && terminal?.activity === 'working' && termId !== readyTerminal) { wait('지정 터미널에서 작업이 진행 중', termId); return }
       st.termId = termId
       // 새 탭의 준비를 기다리는 동안에도 다른 노드가 같은 터미널에 먼저 입력하지 못하게 한다.
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
@@ -1315,9 +1471,11 @@ export class PipelineRunner {
         this.deps.endOutputCapture?.(st.termId)
         this.owner.delete(st.termId)
       }
+      if (run.status !== 'running') return
       st.status = 'failed'
       st.message = e instanceof Error ? e.message : String(e)
       this.tick(run)
+      this.terminalChanged()
     }
     this.publish(run)
   }
@@ -1332,6 +1490,11 @@ export class PipelineRunner {
     const run = this.runs.get(o.runId)
     if (!run) return null
     const st = run.nodes[o.nodeId]
+    if (run.status === 'stopped') {
+      this.owner.delete(termId)
+      this.terminalChanged(termId)
+      return null
+    }
     if (st.status !== 'running') return null
     if (!manual && this.now() - (run.sentAt[o.nodeId] ?? 0) < GRACE_MS) return null
     this.deps.endOutputCapture?.(termId)
@@ -1339,7 +1502,9 @@ export class PipelineRunner {
     Object.assign(st, patch, { status: ok ? 'done' : 'failed' })
     if (patch.output !== undefined) this.recordOutput(st, patch.output)
     this.tick(run, ok ? termId : undefined)
-    return this.publish(run)
+    const state = this.publish(run)
+    this.terminalChanged(termId)
+    return state
   }
 
   /** 에이전트가 응답을 끝냈을 때 */
@@ -1380,16 +1545,34 @@ export class PipelineRunner {
   }
 
   terminalExit(termId: string): RunState | null {
-    return this.finish(termId, false, { message: '터미널이 닫혔습니다' }, true)
+    const state = this.finish(termId, false, { message: '터미널이 닫혔습니다' }, true)
+    this.terminalChanged()
+    return state
   }
 
   /** 실행을 멈춘다. 이미 열린 터미널은 그대로 둔다. */
+  stopMany(ids: string[]): (RunState | null)[] {
+    this.waking = true
+    let states: (RunState | null)[]
+    try { states = ids.map((id) => this.stop(id)) }
+    finally { this.waking = false }
+    this.terminalChanged()
+    return states
+  }
+
   stop(runId: string): RunState | null {
     const run = this.runs.get(runId)
     if (!run || run.status !== 'running') return null
     run.status = 'stopped'
-    for (const [termId, o] of this.owner) if (o.runId === runId) { this.deps.endOutputCapture?.(termId); this.owner.delete(termId) }
+    run.finished = new Date(this.now()).toISOString()
+    for (const [termId, o] of this.owner) if (o.runId === runId) {
+      this.deps.endOutputCapture?.(termId)
+      if (this.deps.interrupt) this.deps.interrupt(termId)
+      else this.owner.delete(termId)
+    }
     for (const st of Object.values(run.nodes)) if (st.status === 'waiting' || st.status === 'starting' || st.status === 'running') st.status = 'skipped'
-    return this.publish(run)
+    const state = this.publish(run)
+    this.terminalChanged()
+    return state
   }
 }

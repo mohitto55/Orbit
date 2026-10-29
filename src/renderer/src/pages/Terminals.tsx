@@ -7,7 +7,6 @@ import { Empty, Modal, errorToast } from '../ui'
 import type { TerminalActivity, TerminalInfo, TerminalKind, TerminalSnapshot } from '../../../core/terminal'
 import type { TerminalGroup, TerminalLayout, TerminalOrderPosition } from '../../../core/terminalWorkspace'
 import { terminalFilePastes } from '../../../core/terminalFiles'
-import PipelineEditor from './Pipelines'
 import { AgentOptionsFields } from '../AgentOptionsFields'
 import type { AgentOptions } from '../../../core/agentModel'
 
@@ -32,7 +31,7 @@ function theme() {
 }
 
 /** TE-F01: 프로젝트를 열면 이전 탭과 세션을 자동으로 복원한다. */
-export default function Terminals({ visible }: { visible: boolean }) {
+export default function Terminals({ visible, focus, onGraphs }: { visible: boolean; focus?: string; onGraphs?: () => void }) {
   const [tabs, setTabs] = useState<TerminalInfo[]>([])
   const [active, setActive] = useState<string | null>(null)
   const [groups, setGroups] = useState<TerminalGroup[]>([])
@@ -43,7 +42,7 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const [configuring, setConfiguring] = useState<{ id: string; title: string; kind: 'claude' | 'codex'; value: AgentOptions } | null>(null)
   const [updating, setUpdating] = useState(false)
   const [name, setName] = useState('')
-  const [view, setView] = useState<'terms' | 'graph'>('terms')
+  const view = 'terms'
   const [foreground, setForeground] = useState(() => document.visibilityState !== 'hidden' && document.hasFocus())
   const area = useRef<HTMLDivElement>(null)
   const tabList = useRef<HTMLDivElement>(null)
@@ -59,6 +58,10 @@ export default function Terminals({ visible }: { visible: boolean }) {
   const selectedGroup = groups.find((g) => g.id === activeGroup)
   const activeTab = tabs.find((tab) => tab.id === active)
   const canDropFiles = visible && view === 'terms' && !busy && !editing && !configuring && !!activeTab && activeTab.exited === undefined
+
+  useEffect(() => {
+    if (visible && focus && !loading) void api.termActivate(focus).then(applyLayout).catch(errorToast)
+  }, [focus, visible, loading])
 
   function applyLayout(layout: TerminalLayout) {
     if (!mounted.current) return
@@ -333,7 +336,6 @@ export default function Terminals({ visible }: { visible: boolean }) {
 
   async function open(kind: TerminalKind) {
     if (busy) return
-    setView('terms')
     setOpening(true)
     try {
       const snapshot = await api.termCreate(kind)
@@ -409,8 +411,8 @@ export default function Terminals({ visible }: { visible: boolean }) {
         <div className="row">
           <h2>터미널</h2>
           <div className="seg small">
-            <button className={view === 'terms' ? 'on' : ''} onClick={() => setView('terms')}>터미널</button>
-            <button className={view === 'graph' ? 'on' : ''} onClick={() => setView('graph')}>작업 그래프</button>
+            <button className="on">터미널</button>
+            <button onClick={onGraphs}>작업 그래프 ↗</button>
           </div>
         </div>
         <div className="row">
@@ -419,7 +421,6 @@ export default function Terminals({ visible }: { visible: boolean }) {
           <button disabled={busy} onClick={() => void open('shell')}>+ 터미널</button>
         </div>
       </div>
-      {view === 'graph' && <PipelineEditor tabs={tabs} onShowTerminal={(id) => { void changeLayout(() => api.termActivate(id)).then(() => { if (mounted.current) setView('terms') }) }} />}
       {view === 'terms' && <>
       <div className="term-group-bar" role="region" aria-label="터미널 그룹">
         <div className="term-groups">

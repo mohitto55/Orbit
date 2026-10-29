@@ -6,12 +6,15 @@ import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
 import { MdViewer } from '../Markdown'
 import DiffView from './DiffView'
 import Requests from './Requests'
+import { RunButton, RunDrawer, SourceRuns } from '../Automation'
 
 const LAYER: Record<string, string> = { spec: '명세', design: '설계', test: '테스트' }
 const KIND: Record<string, string> = { domain: '도메인', spec: '명세', design: '설계' }
 
 /** 변경 검토: 변경에 대해 사람이 결정할 것을 모은다. 변경 요청(바깥 → 도메인)과 확인할 문서(도메인 → 아래). */
 export default function Reviews(props: PageProps) {
+  const [changeId, setChangeId] = useState<string | null>(props.focus?.startsWith('change:') ? props.focus.slice(7) : null)
+  useEffect(() => { if (props.focus?.startsWith('change:')) setChangeId(props.focus.slice(7)) }, [props.focus])
   const [requests] = useLoad(() => api.listRequests(), [props.refreshKey])
   const [pending] = useLoad(() => api.pendingItems(), [props.refreshKey])
   const reqCount = (requests ?? []).filter((r) => r.status === 'pending').length
@@ -20,6 +23,7 @@ export default function Reviews(props: PageProps) {
   const current = tab ?? (reqCount > 0 || !(pending?.length ?? 0) ? 'requests' : 'docs')
   return (
     <div className="drift-page">
+      {changeId && <RunDrawer title="변경 내용" onClose={() => setChangeId(null)}><DiffView changeId={changeId} /></RunDrawer>}
       <div className="tabs drift-tabs">
         <button className={current === 'requests' ? 'on' : ''} onClick={() => setTab('requests')}>
           변경 요청 {reqCount > 0 && <span className="count">{reqCount}</span>}
@@ -142,6 +146,7 @@ function ImpactReviews({ refreshKey, reloadBadges, go }: PageProps) {
                   v{change.from} → v{change.to} <Badge kind={change.size}>{change.size === 'major' ? '큰 변경' : '작은 변경'}</Badge>
                 </div>
                 <div className="flow-summary">{change.summary}</div>
+                <div className="row"><RunButton sources={[{ kind: 'change', id: change.id, title: change.summary }]} /><SourceRuns source={{ kind: 'change', id: change.id, title: change.summary }} /></div>
                 {change.changed.length > 0 && (
                   <div className="chips">
                     {change.changed.map((c) => (

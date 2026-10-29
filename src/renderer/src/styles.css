@@ -789,3 +789,35 @@ ol.pipe-list-items { padding-left: 20px; display: block; }
 .pipe-json-entry .row b { overflow-wrap: anywhere; }
 .pipe-json-entry .row button { margin-left: auto; }
 .pipe-json-scalar { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 자동화: 원본 화면 위에서 실행하고 실행별 입력·결과를 확인한다. */
+.run-backdrop { position: fixed; inset: 0; z-index: 120; background: #0005; display: flex; justify-content: flex-end; }
+.run-drawer { width: min(760px, 92vw); height: 100%; box-sizing: border-box; overflow: auto; padding: 24px; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow-float); }
+.run-drawer > header { position: sticky; top: -24px; z-index: 1; background: var(--panel); padding: 12px 0; margin-top: -12px; border-bottom: 1px solid var(--line); }
+.run-drawer h2 { margin: 0; font-size: 19px; overflow-wrap: anywhere; }
+.run-drawer details { margin: 16px 0; }
+.run-drawer summary { cursor: pointer; padding: 8px 0; }
+.run-drawer footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+.run-drawer select, .run-drawer textarea { max-width: 100%; }
+.run-targets { display: flex; flex-direction: column; gap: 8px; padding: 14px; margin: 16px 0; max-height: 220px; overflow: auto; border-radius: 10px; background: var(--sunken); overflow-wrap: anywhere; }
+.run-preview { display: flex; flex-direction: column; gap: 8px; background: var(--accent-soft); border: 1px solid var(--accent-line); padding: 16px; border-radius: 10px; margin: 16px 0; }
+.run-preview span { color: var(--muted); font-size: 12px; }
+.run-environment { border: 1px solid var(--line); border-radius: 10px; padding: 0 14px 12px; }
+.run-terminal { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+.run-terminal small { display: block; color: var(--muted); margin-top: 3px; }
+.run-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; padding: 12px; background: var(--sunken); border-radius: 6px; }
+.run-node-list { display: flex; flex-direction: column; max-height: 280px; overflow: auto; margin: 12px 0; gap: 5px; }
+.run-node-list button { display: flex; text-align: left; justify-content: space-between; gap: 14px; }
+.run-node-list small { color: var(--muted); }
+.run-node-list .on { background: var(--accent-soft); border-color: var(--accent-line); }
+.run-status.running { color: var(--accent); }
+.run-status.waiting { color: var(--warn); }
+.run-status.done { color: var(--ok); }
+.run-status.failed { color: var(--bad); }
+.run-status.stopped { color: var(--muted); }
+.automation-page { display: flex; flex-direction: column; min-height: 0; }
+.automation-editor { flex: 1; min-height: 0; display: flex; }
+.automation-editor[hidden] { display: none; }
+.automation-editor .pipe-layout { flex: 1; min-height: 450px; }
+.run-table td { vertical-align: top; }
+.run-table td:first-child { width: 32%; overflow-wrap: anywhere; }

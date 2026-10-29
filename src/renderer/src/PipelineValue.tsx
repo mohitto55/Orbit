@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { dataPreviews, fillOutputs, isData, nodeName, outputRefs, type Env, type Graph, type NodeRun, type PipeNode, type RunState } from '../../core/pipeline'
+import { isListShape, dataPreviews, fillOutputs, isData, nodeName, outputRefs, type Env, type Graph, type NodeRun, type PipeNode, type RunState } from '../../core/pipeline'
 import { FIELD_TYPE_NAME, jsonType, parseJson, type JsonValue } from '../../core/structuredData'
 import { JsonTree } from './StructuredData'
 import { errorToast, toast } from './ui'
@@ -14,7 +14,7 @@ function values(node: PipeNode, graph: Graph, env: Env, run: RunState | undefine
     const tab = env.terminals?.find((t) => t.id === node.ref)
     return [{ id: node.id, name: nodeName(node), source: '선택한 터미널', type: 'Terminal', ...(tab ? { value: tab.title, raw: tab.title } : { message: '사용할 터미널을 고르세요.' }) }]
   }
-  if (isData(node)) {
+  if (isData(node) || node.kind === 'function-input' || node.kind === 'function-output') {
     try {
       return dataPreviews(graph, node.id, env).map((entry) => {
         const refs = [...new Set(entry.items.flatMap(outputRefs))]
@@ -28,8 +28,8 @@ function values(node: PipeNode, graph: Graph, env: Env, run: RunState | undefine
         try {
           const items = entry.items.map((item) => fillOutputs(item, (id) => run!.nodes[id].output!))
           const text = items[0] ?? ''
-          const value = entry.shape === 'list' ? items : ['json', 'schema', 'boolean', 'number'].includes(entry.shape) ? parseJson(text) : text
-          return { ...base, value, raw: entry.shape === 'list' ? JSON.stringify(items, null, 2) : text }
+          const value = isListShape(entry.shape) ? items : ['json', 'schema', 'boolean', 'number'].includes(entry.shape) ? parseJson(text) : text
+          return { ...base, value, raw: isListShape(entry.shape) ? JSON.stringify(items, null, 2) : text }
         } catch (error) { return { ...base, error: true, message: error instanceof Error ? error.message : String(error) } }
       })
     } catch (error) { return [{ id: node.id, name: nodeName(node), source: '현재 값', error: true, message: error instanceof Error ? error.message : String(error) }] }

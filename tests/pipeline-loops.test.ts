@@ -134,7 +134,7 @@ describe('For Each 유틸리티', () => {
     expect(pipelineProblems(leak).join('\n')).toContain('본문 안에서만')
     const wrongType = graph()
     wrongType.nodes.find((n) => n.id === 'list')!.kind = 'text'
-    expect(pipelineProblems(wrongType).join('\n')).toContain('텍스트 리스트 입력에 텍스트')
+    expect(pipelineProblems(wrongType).join('\n')).toContain('List<String> 입력에 String')
   })
 
   it('[IN-F12-AC5] For Each의 본문·완료·항목·인덱스 포트를 저장하고 다시 읽는다', async () => {

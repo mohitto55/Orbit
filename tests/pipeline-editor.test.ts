@@ -507,7 +507,7 @@ describe('함수와 리스트 항목 편집 화면', () => {
     await change(host.querySelector<HTMLInputElement>('[aria-label="입력 변수 이름"]')!, '작업 목록')
     await change(host.querySelector<HTMLSelectElement>('[aria-label="작업 목록 타입"]')!, 'list')
     await click('+ 입력 변수')
-    expect(input.data('pins').filter((p: { type: string }) => p.type === 'data')).toMatchObject([{ list: true, label: '작업 목록 · 텍스트 리스트' }, { list: false }])
+    expect(input.data('pins').filter((p: { type: string }) => p.type === 'data')).toMatchObject([{ list: true, label: '작업 목록 · List<String>' }, { list: false }])
     await act(async () => { await vi.advanceTimersByTimeAsync(550) })
     expect(saved.find((p) => p.id === 'new-function')?.nodes[0].params).toMatchObject([{ name: '작업 목록', type: 'list' }, { name: '입력', type: 'single' }])
   })

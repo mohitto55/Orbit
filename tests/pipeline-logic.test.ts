@@ -62,7 +62,7 @@ describe('Bool 비교·논리 데이터', () => {
     expect(edgeProblem(graph, 'bool', 'if')).toBeNull()
     for (const id of ['text', 'num']) expect(edgeProblem(graph, id, 'if')).toContain('Bool 입력')
     expect(edgeProblem(graph, 'num', 'cmp', undefined, {}, { toPort: A.b })).toBeNull()
-    expect(edgeProblem(graph, 'text', 'cmp')).toContain('숫자 입력')
+    expect(edgeProblem(graph, 'text', 'cmp')).toContain('Number 입력')
     graph.edges.push(data('bool', 'if', I.condition))
     expect(edgeProblem(graph, 'not', 'if')).toContain('이미 연결된 입력')
     graph.edges.push(data('bool', 'not', A.a), data('not', 'bool'))

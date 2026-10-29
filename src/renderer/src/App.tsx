@@ -14,8 +14,10 @@ import Settings from './pages/Settings'
 import Terminals from './pages/Terminals'
 import UpdateButton from './UpdatePanel'
 import { Logo } from './Logo'
+import Automation from './pages/Automation'
+import { AutomationProvider } from './Automation'
 
-export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'settings'
+export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'automation' | 'settings'
 
 const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드', group: '작업' },
@@ -26,7 +28,8 @@ const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData)
   { id: 'drift', label: '도메인 점검', badge: (d) => (d.driftDue ? d.pendingSessions : 0) },
   { id: 'knowledge', label: '지식', group: '자료' },
   { id: 'graph', label: '관계도' },
-  { id: 'terminal', label: '터미널', group: '도구' },
+  { id: 'automation', label: '자동화', group: '도구' },
+  { id: 'terminal', label: '터미널' },
   { id: 'settings', label: '설정' }
 ]
 
@@ -140,6 +143,7 @@ export default function App() {
         </div>
       </aside>
       <main className="main" key={project.projectDir}>
+        <AutomationProvider go={go}>
         <PageView visible={page === 'dashboard'}><Dashboard {...props} /></PageView>
         <PageView visible={page === 'domains'}><Domains {...props} focus={page === 'domains' ? focus : undefined} /></PageView>
         <PageView visible={page === 'reviews'}><Reviews {...props} focus={page === 'reviews' ? focus : undefined} /></PageView>
@@ -149,7 +153,9 @@ export default function App() {
         <PageView visible={page === 'knowledge'}><KnowledgePage {...props} /></PageView>
         <PageView visible={page === 'graph'}><GraphPage {...props} /></PageView>
         <PageView visible={page === 'settings'}><Settings {...props} onSaved={() => api.currentProject().then(setProject)} /></PageView>
-        <Terminals visible={page === 'terminal'} />
+        <PageView visible={page === 'automation'}><Automation {...props} focus={page === 'automation' ? focus : undefined} /></PageView>
+        <Terminals visible={page === 'terminal'} focus={page === 'terminal' ? focus : undefined} onGraphs={() => go('automation', 'graphs')} />
+        </AutomationProvider>
       </main>
       {capture && <QuickCapture onClose={() => setCapture(false)} onSaved={() => setRefreshKey((k) => k + 1)} />}
       <ChangeDialog />

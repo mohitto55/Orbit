@@ -55,6 +55,7 @@ beforeEach(async () => {
     async invoke(name: string, ...args: unknown[]) {
       calls.push(name)
       if (name === 'currentProject') return project()
+      if (name === 'listPipelineRuns') return { runs: [], total: 0 }
       if (name === 'recentProjects') return ['/other-project']
       if (name === 'closeProject') return
       if (name === 'openProject') { projectDir = String(args[0]); return project() }

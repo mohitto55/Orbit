@@ -4,6 +4,7 @@ import type { PageProps } from '../App'
 import type { Domain, DomainScope, SubdomainType } from '../types'
 import { Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import SpecTable from './SpecTable'
+import { RunButton, SourceRuns } from '../Automation'
 import { MdEditor } from '../Markdown'
 import DesignPanel from './DesignPanel'
 import ModelPanel from './ModelPanel'
@@ -500,13 +501,14 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
 
 export function History({ target }: { target: string }) {
   const [changes] = useLoad(() => api.history(target), [target])
+  const [selected, setSelected] = useState<string[]>([])
   if (!changes) return null
   if (changes.length === 0) return <Empty>변경 기록이 없습니다</Empty>
   return (
-    <table className="table">
+    <><div className="row"><RunButton sources={changes.filter((c) => selected.includes(c.id)).map((c) => ({ kind: 'change', id: c.id, title: c.summary }))} label={`선택한 변경 ${selected.length}개 실행`} /></div><table className="table">
       <thead>
         <tr>
-          <th>버전</th>
+          <th><input type="checkbox" aria-label="변경 전체 선택" checked={changes.length > 0 && changes.every((c) => selected.includes(c.id))} onChange={(e) => setSelected(e.target.checked ? changes.map((c) => c.id) : [])} /></th><th>버전</th>
           <th>크기</th>
           <th>요약</th>
           <th>바뀐 항목</th>
@@ -517,20 +519,21 @@ export function History({ target }: { target: string }) {
       <tbody>
         {changes.map((c) => (
           <tr key={c.id}>
+            <td><input type="checkbox" aria-label={`${c.summary} 실행 대상 선택`} checked={selected.includes(c.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, c.id] : selected.filter((id) => id !== c.id))} /></td>
             <td>
               v{c.from} → v{c.to}
             </td>
             <td>
               <Badge kind={c.size}>{c.size === 'major' ? '큰 변경' : '작은 변경'}</Badge>
             </td>
-            <td>{c.summary}</td>
+            <td>{c.summary}<div className="row"><RunButton sources={[{ kind: 'change', id: c.id, title: c.summary }]} /><SourceRuns source={{ kind: 'change', id: c.id, title: c.summary }} /></div></td>
             <td className="small">{c.changed.join(', ') || '전체'}</td>
             <td>{c.source}</td>
             <td className="small">{new Date(c.created).toLocaleString()}</td>
           </tr>
         ))}
       </tbody>
-    </table>
+    </table></>
   )
 }
 

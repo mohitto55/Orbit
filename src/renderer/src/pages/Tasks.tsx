@@ -7,6 +7,7 @@ import { Badge, Empty, Modal, errorToast, offerUndo, toast, useLoad } from '../u
 import { TaskChecklist } from '../TaskChecklist'
 import { setChecklistChecked, type ChecklistItem } from '../checklistMarkdown'
 import { MdEditor } from '../Markdown'
+import { RunButton, SourceRuns } from '../Automation'
 
 const PRIO_RANK: Record<string, number> = { 높음: 0, 보통: 1, 낮음: 2 }
 const isClosed = (t: Task) => t.status === '완료' || t.status === '취소'
@@ -30,6 +31,8 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
   const [group, setGroup] = useState<'horizon' | 'type' | 'priority'>('horizon')
   const [view, setView] = useState<'list' | 'timeline'>('list')
   const [showDone, setShowDone] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
   const [completing, setCompleting] = useState<Task | null>(null)
   const [editing, setEditing] = useState<Task | null>(null)
   const [creating, setCreating] = useState<{ inbox?: InboxItem; title?: string } | null>(null)
@@ -170,6 +173,8 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
       <div className="row between">
         <h3>Task</h3>
         <div className="row">
+          <button onClick={() => { setSelecting(!selecting); setSelected([]); setView('list') }}>{selecting ? '선택 종료' : '여러 항목 선택'}</button>
+          {selecting && <><label className="small"><input type="checkbox" aria-label="보이는 할일 전체 선택" checked={visible.length > 0 && visible.every((t) => selected.includes(t.id))} onChange={(e) => setSelected(e.target.checked ? visible.map((t) => t.id) : [])} />전체 선택</label><RunButton sources={visible.filter((t) => selected.includes(t.id)).map((t) => ({ kind: 'task', id: t.id, title: t.title }))} label={`선택 ${visible.filter((t) => selected.includes(t.id)).length}개 그래프로 실행`} /></>}
           <div className="seg small">
             <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
               목록
@@ -205,14 +210,15 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
             <TaskGroup key={k} title={k} list={list} onReorder={reorder}>
               {(t, bind) => (
                 <tr key={t.id} {...bind} className={`todo ${bind.className} ${isClosed(t) ? 'closed' : ''} ${focus === t.id ? 'focus' : ''} ${dueIds.has(t.id) ? 'due' : ''}`}>
-                  <td className="todo-check">
+                  {selecting && <td className="todo-check"><input type="checkbox" aria-label={`${t.title} 실행 대상 선택`} checked={selected.includes(t.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, t.id] : selected.filter((id) => id !== t.id))} /></td>}
+                  {!selecting && <td className="todo-check">
                     <input
                       type="checkbox"
                       checked={t.status === '완료'}
                       onChange={(e) => setStatus(t, e.target.checked ? '완료' : '대기')}
                       title={t.status === '완료' ? '완료 취소' : '완료로 표시'}
                     />
-                  </td>
+                  </td>}
                   <td>
                     <button className="link todo-title" onClick={() => setEditing(t)} title="눌러서 수정">
                       {t.title}
@@ -222,6 +228,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
                       {t.links.length > 0 && ` · ${t.links.join(', ')}`}
                     </div>
                     <InlineTaskChecklist task={t} track={track} onReload={reloadTasks} />
+                    <div className="row"><RunButton sources={[{ kind: 'task', id: t.id, title: t.title }]} /><SourceRuns source={{ kind: 'task', id: t.id, title: t.title }} /></div>
                   </td>
                   <td style={{ width: 84 }}>
                     <select className={`prio prio-${t.priority}`} value={t.priority} onChange={(e) => setPriority(t, e.target.value as Priority)} title="중요도">
