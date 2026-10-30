@@ -89,7 +89,6 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
     void Promise.all([api.listPipelines(), api.pipelineSources(), api.termLayout()]).then(([list, data, layout]) => {
       if (!alive) return
       setGraphs(list); setSources(data); setTabs(layout.tabs)
-      setTerminalIds(layout.tabs.filter((t) => t.exited === undefined).map((t) => t.id))
       if (!selection.pipelineId) setGraphId(list.find(compatible)?.id ?? '')
     }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)) }).finally(() => { if (alive) setLoading(false) })
     const off = on('term-info', (tab: TerminalInfo) => setTabs((all) => all.map((t) => t.id === tab.id ? { ...t, ...tab } : t)))
@@ -137,12 +136,12 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
             : <textarea id={`run-${param.id}`} rows={2} value={value(param.id, param.type)} placeholder={param.type === 'list' ? '한 줄에 한 항목' : '입력값'} onChange={(e) => setValues({ ...values, [param.id]: e.target.value })} />}
         </div>
       })}
-      {graph && <details className="run-environment" open={tabs.length === 0 || undefined}><summary>실행 환경 · 기존 터미널 {terminalIds.length}개 사용</summary>
+      {graph && <details className="run-environment" open={tabs.length === 0 || undefined}><summary>실행 환경 · {terminalIds.length ? `추가 터미널 ${terminalIds.length}개 선택` : '추가 터미널 선택 안 함'}</summary>
         <div className="field"><label htmlFor="run-concurrency">동시 터미널 작업 수</label><input id="run-concurrency" type="number" min={1} max={64} value={maxConcurrent} placeholder="가용 터미널 수에 맞춤" onChange={(e) => setMaxConcurrent(e.target.value)} /></div>
-        <p className="small muted">노드에 연결한 터미널·세션을 우선합니다. 자동 배정은 아래 선택한 세션만 사용합니다. 같은 폴더를 수정하는 작업은 작업 공간을 확인하세요.</p>
+        <p className="small muted">노드에 연결한 터미널·세션은 그대로 사용합니다. 터미널이 지정되지 않은 노드에 자동 배정할 세션만 추가로 선택하세요.</p>
         {tabs.filter((t) => t.exited === undefined).map((tab) => <label className="run-terminal" key={tab.id}><input type="checkbox" checked={terminalIds.includes(tab.id)} onChange={(e) => setTerminalIds(e.target.checked ? [...terminalIds, tab.id] : terminalIds.filter((id) => id !== tab.id))} /><span>{tab.title}<small>{tab.kind} · {tab.model || '세션 기본 모델'} · {tab.effort || '기본 effort'}{tab.activity === 'working' ? ' · 사용 중' : ''}</small></span></label>)}
         <label className="run-terminal"><input type="checkbox" checked={allowNew} onChange={(e) => setAllowNew(e.target.checked)} />사용할 세션이 없을 때 새 터미널 허용</label>
-        {!terminalIds.length && !allowNew && <p className="small muted">터미널 작업이 있다면 사용할 세션을 지정하거나 새 터미널을 허용하세요.</p>}
+        {!terminalIds.length && !allowNew && <p className="small muted">노드에 터미널이 지정되어 있다면 추가 선택은 필요 없습니다.</p>}
       </details>}
       {error && <p role="alert" className="pipe-value-error">{error}</p>}
       <footer className="row between"><button onClick={onClose} disabled={busy}>취소</button><button className="primary" disabled={busy || !graph || (!!kind && !target)} onClick={() => void start()}>{busy ? '실행 준비 중…' : `${count}건 실행`}</button></footer>

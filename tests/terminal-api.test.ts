@@ -50,6 +50,25 @@ describe('작업 그래프 세션 재사용', () => {
     })
   }
 
+  it('실행 환경을 생략하면 열린 세션을 자동 선택하지 않고 명시한 세션만 사용한다', async () => {
+    const { api } = await setup()
+    try {
+      const target = await api.termCreate('codex'), other = await api.termCreate('codex')
+      const targetPty = ptys.find((pty) => pty.pid === target.pid)!
+      const otherPty = ptys.find((pty) => pty.pid === other.pid)!
+      const graph = await saveGraph(api, 'codex', '')
+      await expect(api.runPipeline(graph.id)).rejects.toThrow('터미널을 선택')
+      await expect(api.runPipelineBatch({ pipelineId: graph.id })).rejects.toThrow('터미널을 선택')
+      expect(api.pipelineRuns()).toEqual([])
+      expect(targetPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
+      const [run] = await api.runPipelineBatch({ pipelineId: graph.id, terminalIds: [target.id] })
+      await vi.waitFor(() => expect(targetPty.write).toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업')))
+      expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
+      expect(ptys).toHaveLength(2)
+      expect(api.markNodeDone(run.runId, 'work')?.status).toBe('done')
+    } finally { api.killAllTerminals() }
+  })
+
   it.each(['claude', 'codex'] as const)('[DM-F02-AC15] %s 터미널 입력·출력은 이름을 바꿔도 선택한 실제 탭에만 연속 전송한다', async (kind) => {
     const { api } = await setup()
     try {

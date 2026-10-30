@@ -215,7 +215,7 @@ export function createApi(deps: ApiDeps) {
     const env = await executionEnvironment(c, snapshotIds, library)
     const workspace = await terms()
     env.terminals = workspace.layout().tabs.map((t) => workspace.get(t.id) ?? t)
-    const prepared = prepareExecutions(graph, env, { ...request, terminalIds: request.terminalIds ?? env.terminals.filter((t) => t.exited === undefined).map((t) => t.id), allowNew: request.allowNew ?? false })
+    const prepared = prepareExecutions(graph, env, { ...request, terminalIds: request.terminalIds ?? [], allowNew: request.allowNew ?? false })
     if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
     return prepared.map(({ pipe, options }) => pipes.start(pipe, true, options))
   }
