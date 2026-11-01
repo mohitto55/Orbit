@@ -189,7 +189,7 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function executionEnvironment(c: ws.Ctx, snapshotIds = new Set<string>(), graphs?: Pipeline[]): Promise<Env & { sources: PipelineSource[] }> {
-    const [tasks, specs, changes, library, skills] = await Promise.all([tk.listTasks(c), sp.listSpecs(c), listChanges(c), graphs ?? pl.listPipelines(c), sk.listSkills(c.projectDir)])
+    const [tasks, specs, changes, library, skills, designs] = await Promise.all([tk.listTasks(c), sp.listSpecs(c), listChanges(c), graphs ?? pl.listPipelines(c), sk.listSkills(c.projectDir), ds.listDesigns(c)])
     const sources: PipelineSource[] = [
       ...tasks.map((t): PipelineSource => ({ kind: 'task', id: t.id, title: t.title, text: taskText(t), version: createHash('sha256').update(JSON.stringify(t)).digest('hex'), location: { page: 'tasks', focus: t.id } })),
       ...specs.flatMap((s): PipelineSource[] => [
@@ -203,7 +203,7 @@ export function createApi(deps: ApiDeps) {
           location: { page: 'reviews', focus: `change:${change.id}` } }
       }))
     ]
-    return { tasks, specs, sources, library, skills: skills.map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body })) }
+    return { tasks, specs, sources, library, skills: skills.map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body })), designs: designs.map((d) => ({ id: d.id, title: d.title, system: d.system, content: d.content })) }
   }
 
   async function runGraphs(request: PipelineRunRequest) {

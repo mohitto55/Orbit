@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import edgehandles from 'cytoscape-edgehandles'
 import { api, on } from '../api'
-import type { DataShape, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task, TerminalInfo } from '../types'
+import type { DataShape, Design, FunctionParam, InnerValue, NodeKind, PipeEdge, PipeNode, Pipeline, RunState, Spec, Task, TerminalInfo } from '../types'
 import {
   IF_PORT, COMPARE_OPS, isLogic, isExecPort, defaultValue,
   KIND_NAME,
@@ -60,7 +60,7 @@ const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort
 const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
 const isPortNode = (n: PipeNode) => isAgent(n) || n.kind === 'template' || n.kind === 'foreach' || n.kind === 'add' || n.kind === 'if' || n.kind === 'print' || isLogic(n) || isFunctionBoundary(n)
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
-type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[]; terminals: TerminalInfo[] }
+type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[]; designs: Design[]; terminals: TerminalInfo[] }
 
 const KIND_LABEL = KIND_NAME
 const SPEC_KINDS: NodeKind[] = ['spec', 'feature', 'ac']
@@ -89,8 +89,11 @@ const KIND_COLOR: Record<NodeKind, string> = {
   item: '#8a63d2',
   join: '#8a63d2',
   task: '#b98a2e',
-  skill: '#2f9a8a'
+  skill: '#2f9a8a',
+  design: '#6b7fa8'
 }
+/** 설계 노드에 보일 설계 이름 (시스템 공통 설계는 "공통 설계"로) */
+const designLabel = (d: Pick<Design, 'title' | 'system'>) => (d.system ? `공통 설계 · ${d.title}` : d.title)
 const AGENT_KINDS: NodeKind[] = ['claude', 'codex', 'shell']
 const STATUS_LABEL: Record<string, string> = { waiting: '대기', starting: '여는 중', running: '실행 중', done: '완료', failed: '실패', skipped: '건너뜀' }
 const RUN_LABEL: Record<RunState['status'], string> = { running: '실행 중', done: '완료', failed: '실패', stopped: '중지됨' }
@@ -327,6 +330,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const [tasks, setTasks] = useState<Task[]>([])
   const [skills, setSkills] = useState<SkillItem[]>([])
   const [specs, setSpecs] = useState<Spec[]>([])
+  const [designs, setDesigns] = useState<Design[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
   const [sel, setSel] = useState<Sel>(null)
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
@@ -337,11 +341,12 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
 
   const toDraft = (p: Pipeline): Draft => ({ id: p.id, title: p.title, template: p.template, nodes: p.nodes, edges: p.edges })
   const reload = async (pick?: string) => {
-    const [l, t, s, sp] = await Promise.all([api.listPipelines(), api.listTasks(), api.listSkills().catch(() => []), api.listSpecs().catch(() => [])])
+    const [l, t, s, sp, ds] = await Promise.all([api.listPipelines(), api.listTasks(), api.listSkills().catch(() => []), api.listSpecs().catch(() => []), api.listDesigns().catch(() => [])])
     setList(l)
     setTasks(t)
     setSkills(s)
     setSpecs(sp)
+    setDesigns(ds)
     const p = l.find((x) => x.id === (pick ?? draft?.id)) ?? l[0]
     if (p && (pick || !draft)) setDraft(toDraft(p))
     if (!p) setDraft(null)
@@ -352,6 +357,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     return on('files-changed', () => {
       void api.listTasks().then(setTasks).catch(() => {})
       void api.listSpecs().then(setSpecs).catch(() => {})
+      void api.listDesigns().then(setDesigns).catch(() => {})
       void api.listSkills().then(setSkills).catch(() => {})
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -514,8 +520,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
 
   // 지금 고치는 그래프는 저장 전이라도 지금 내용으로 검사한다
   const env: Env = useMemo(
-    () => ({ library: (list ?? []).map((p) => (draft && p.id === draft.id ? { ...p, ...draft } : p)), tasks, skills, specs, terminals: tabs }),
-    [list, draft, tasks, skills, specs, tabs]
+    () => ({ library: (list ?? []).map((p) => (draft && p.id === draft.id ? { ...p, ...draft } : p)), tasks, skills, specs, designs, terminals: tabs }),
+    [list, draft, tasks, skills, specs, designs, tabs]
   )
   const problems = useMemo(() => (draft ? pipelineProblems(draft, env, { requireStart: !draft.template }) : []), [draft, env])
   // 시작 노드가 있을 때, 시작에서 닿지 않아 실행되지 않는 노드
@@ -690,6 +696,14 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
                 </option>
               ))}
             </select>
+            <select value="" disabled={!designs.length} onChange={(e) => e.target.value && addNode('design', { ref: e.target.value })}>
+              <option value="">{designs.length ? '+ 설계' : '설계 없음'}</option>
+              {designs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {designLabel(d)}
+                </option>
+              ))}
+            </select>
           </div>
           {run && (
             <div className="small">
@@ -845,7 +859,8 @@ const KIND_WORDS: Record<NodeKind, string> = {
   skill: 'skill 스킬 claude 절차 규칙',
   spec: 'spec 기능명세 기능 명세 도메인 domain 명세서',
   feature: 'feature 기능',
-  ac: 'ac 수용기준 수용 기준 acceptance'
+  ac: 'ac 수용기준 수용 기준 acceptance',
+  design: 'design 설계 공통설계 공통 설계 시스템 규칙 공통규칙'
 }
 
 /** 검색 메뉴에 보일 노드. 핀을 끌어 놓은 경우에는 그 핀에 이을 수 있는 것만 */
@@ -884,7 +899,8 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
       words: `${KIND_WORDS.skill} ${s.name} ${s.description}`,
       extra: { ref: s.id }
     })),
-    ...env.specs.map((s) => ({ key: `spec:${s.id}`, kind: 'spec' as NodeKind, label: s.title, group: '기능 명세', words: `${KIND_WORDS.spec} ${s.title}`, extra: { ref: s.id } }))
+    ...env.specs.map((s) => ({ key: `spec:${s.id}`, kind: 'spec' as NodeKind, label: s.title, group: '기능 명세', words: `${KIND_WORDS.spec} ${s.title}`, extra: { ref: s.id } })),
+    ...env.designs.map((d) => ({ key: `design:${d.id}`, kind: 'design' as NodeKind, label: designLabel(d), group: '설계', words: `${KIND_WORDS.design} ${d.title}`, extra: { ref: d.id } }))
   ]
   const src = from ? draft.nodes.find((n) => n.id === from) : undefined
   if (!src) return items
@@ -1494,6 +1510,21 @@ function NodePanel({
         </div>
       )}
 
+      {node.kind === 'design' && (
+        <div className="field">
+          <label>설계 (실행할 때마다 설계 문서의 지금 본문을 내보냅니다)</label>
+          <select value={node.ref ?? ''} disabled={locked} onChange={(e) => onPatch({ ref: e.target.value || undefined })}>
+            {!env.designs.some((d) => d.id === node.ref) && <option value="">골라 주세요</option>}
+            {env.designs.map((d) => (
+              <option key={d.id} value={d.id}>
+                {designLabel(d)}
+              </option>
+            ))}
+          </select>
+          {node.ref && !env.designs.some((d) => d.id === node.ref) && <div className="small" style={{ color: 'var(--bad)' }}>설계를 찾을 수 없습니다 ({node.ref})</div>}
+        </div>
+      )}
+
       {SPEC_KINDS.includes(node.kind) && (
         <div className="field">
           <label>{node.kind === 'spec' ? '기능 명세 (실행할 때마다 명세의 지금 내용을 내보냅니다)' : node.kind === 'feature' ? '기능' : '수용 기준'}</label>
@@ -1911,6 +1942,10 @@ function nodeLabel(n: PipeNode, env: Env, draft: Draft): string {
     const t = env.tasks.find((x) => x.id === n.ref)
     body = t ? `${t.id} ${t.title}` : n.kind === 'complete' ? '이어진 할 일' : '(할 일 없음)'
   } else if (n.kind === 'skill') body = env.skills.find((s) => s.id === n.ref)?.name ?? '(스킬 없음)'
+  else if (n.kind === 'design') {
+    const d = env.designs.find((x) => x.id === n.ref)
+    body = d ? designLabel(d) : '(설계 없음)'
+  }
   else if (n.kind === 'item') {
     try { body = `[${n.index ?? 0}] ${dataValue(draft, n.id, env)}` }
     catch { body = `[${n.index ?? 0}] 원본 리스트 확인` }

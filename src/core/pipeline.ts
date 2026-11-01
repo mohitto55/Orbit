@@ -22,11 +22,12 @@ import { fillSelections, fromPointer, isObject, parseJson, readOutputSchema, sch
  * list: 글 여러 개를 담는 리스트 데이터 노드 (적어 둔 항목, 또는 들어온 데이터를 항목으로 모은다)
  * spec·feature·ac: 도메인의 기능 명세 / 그 안의 기능 하나 / 기능의 수용 기준 하나 (실행할 때마다 명세의 지금 내용을 읽는다).
  *   명세 노드에서 기능 노드를, 기능 노드에서 수용 기준 노드를, 리스트 노드에서 항목을 텍스트 노드로 꺼낼 수 있다 (innerValues).
+ * design: 설계 문서 하나 (시스템 공통 설계 또는 기능별 설계). 실행할 때마다 문서의 지금 본문을 내보낸다.
  */
-export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'foreach', 'if', 'print', 'compare', 'and', 'or', 'not', 'boolean', 'number', 'complete', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac'] as const
+export const NODE_KINDS = ['start', 'claude', 'codex', 'shell', 'template', 'function-input', 'function-output', 'foreach', 'if', 'print', 'compare', 'and', 'or', 'not', 'boolean', 'number', 'complete', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac', 'design'] as const
 export type NodeKind = (typeof NODE_KINDS)[number]
 
-export const DATA_KINDS: NodeKind[] = ['compare', 'and', 'or', 'not', 'boolean', 'number', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac']
+export const DATA_KINDS: NodeKind[] = ['compare', 'and', 'or', 'not', 'boolean', 'number', 'terminal', 'schema', 'dictionary', 'property', 'text', 'add', 'list', 'item', 'join', 'task', 'skill', 'spec', 'feature', 'ac', 'design']
 export const isData = (n: Pick<PipeNode, 'kind'>) => DATA_KINDS.includes(n.kind)
 export const isAgent = (n: Pick<PipeNode, 'kind'>) => n.kind === 'claude' || n.kind === 'codex'
 
@@ -101,6 +102,7 @@ export interface PipeNode {
   model?: string
   /**
    * 템플릿 노드: 작업 그래프 id (실행할 때마다 지금 내용을 읽는다). 할 일·할 일 완료 노드: Task id.
+   * 설계 노드: 설계 id (시스템 공통 설계는 system-design).
    * 명세 노드: 명세 id, 기능 노드: "명세 id#기능 ID", 수용 기준 노드: "명세 id#AC ID" (예: spec-x#DM-F02-AC1)
    * 터미널 데이터 노드: Orbit 터미널 탭 id (AI가 바꾸는 세션 이름과 무관).
    */
@@ -139,6 +141,8 @@ export interface Env {
   skills?: { id: string; name: string; body: string }[]
   /** 도메인의 기능·규칙 명세 */
   specs?: EnvSpec[]
+  /** 설계 문서 (시스템 공통 설계 + 기능별 설계) */
+  designs?: EnvDesign[]
   terminals?: Pick<TerminalInfo, 'id' | 'title' | 'kind' | 'exited' | 'activity'>[]
   sources?: PipelineSource[]
 }
@@ -148,6 +152,13 @@ export interface EnvFeature {
   name: string
   purpose: string
   acs: { id: string; num: number; text: string }[]
+}
+export interface EnvDesign {
+  id: string
+  title: string
+  /** 시스템 공통 설계인가 */
+  system: boolean
+  content: string
 }
 export interface EnvSpec {
   id: string
@@ -480,6 +491,7 @@ export function dataValue(p: Graph, id: string, env: Env = {}, seen: string[] = 
     return t ? taskText(t) : ''
   }
   if (n.kind === 'skill') return env.skills?.find((x) => x.id === n.ref)?.body ?? ''
+  if (n.kind === 'design') return env.designs?.find((x) => x.id === n.ref)?.content.trim() ?? ''
   if (n.kind === 'spec' || n.kind === 'feature' || n.kind === 'ac') {
     const { spec, feature, ac } = specTarget(n, env)
     if (n.kind === 'spec') return spec ? specText(spec) : ''
@@ -522,7 +534,7 @@ export function dataItems(p: Graph, id: string, env: Env = {}, seen: string[] = 
 }
 
 /** 입력 핀이 있는 노드인지 (시작·할 일·스킬·명세 계열 노드는 출력만 있다) */
-export const hasInput = (n: Pick<PipeNode, 'kind'>) => !['schema', 'terminal', 'task', 'start', 'skill', 'spec', 'function-input'].includes(n.kind)
+export const hasInput = (n: Pick<PipeNode, 'kind'>) => !['schema', 'terminal', 'task', 'start', 'skill', 'spec', 'design', 'function-input'].includes(n.kind)
 
 /**
  * 실행되는 노드: 시작 노드가 있으면 시작에서 실행 선을 따라 닿는 노드만, 없으면 모든 실행 노드.
@@ -656,7 +668,8 @@ export const KIND_NAME: Record<NodeKind, string> = {
   skill: '스킬',
   spec: '기능 명세',
   feature: '기능',
-  ac: '수용 기준'
+  ac: '수용 기준',
+  design: '설계'
 }
 
 /** 실행 노드가 실제로 쓰는 글: 노드에 적은 글 + 들어오는 데이터 선의 글 (빈 줄로 잇는다) */
@@ -1076,6 +1089,8 @@ export function pipelineProblems(p: Graph, env: Env = {}, opts: { requireStart?:
     if (n.kind === 'task' && n.ref && env.tasks && !env.tasks.some((t) => t.id === n.ref)) out.push(`${who}: 할 일을 찾을 수 없습니다 (${n.ref})`)
     if (n.kind === 'skill' && !n.ref) out.push(`${who}: 가져올 스킬을 고르세요`)
     if (n.kind === 'skill' && n.ref && env.skills && !env.skills.some((s) => s.id === n.ref)) out.push(`${who}: 스킬을 찾을 수 없습니다 (${n.ref})`)
+    if (n.kind === 'design' && !n.ref) out.push(`${who}: 가져올 설계를 고르세요`)
+    if (n.kind === 'design' && n.ref && env.designs && !env.designs.some((d) => d.id === n.ref)) out.push(`${who}: 설계를 찾을 수 없습니다 (${n.ref})`)
     if ((n.kind === 'spec' || n.kind === 'feature' || n.kind === 'ac') && !n.ref) out.push(`${who}: 가져올 ${KIND_NAME[n.kind]}을(를) 고르세요`)
     else if ((n.kind === 'spec' || n.kind === 'feature' || n.kind === 'ac') && env.specs) {
       const t = specTarget(n, env)

@@ -437,6 +437,19 @@ describe('터미널 그래프 · 노드 이름과 기능 명세 데이터 노드
     ])
   })
 
+  it('설계 노드는 고른 설계(시스템 공통 설계 포함)의 지금 본문을 실행 노드에 넘기고, 없는 설계는 실행 전에 알려준다', () => {
+    const env = { designs: [{ id: 'system-design', title: '시스템 공통 설계', system: true, content: '# 시스템 공통 설계\n\n## S1. 규칙\n' }] }
+    const g = pipe(
+      [node('s', 'start'), { ...node('d', 'design'), ref: 'system-design' }, { ...node('c'), text: '이 규칙을 지켜' }],
+      [['s', 'c'], ['d', 'c']]
+    )
+    expect(dataValue(g, 'd', env)).toBe('# 시스템 공통 설계\n\n## S1. 규칙')
+    expect(expandPipeline(g, env).nodes[0].text).toBe('이 규칙을 지켜\n\n# 시스템 공통 설계\n\n## S1. 규칙')
+    expect(edgeProblem(g, 'c', 'd')).not.toBeNull()
+    const bad = pipe([node('s', 'start'), { ...node('d', 'design'), name: '설계', ref: 'design-x' }, node('c')], [['s', 'c'], ['d', 'c']])
+    expect(pipelineProblems(bad, env)).toContain('설계: 설계를 찾을 수 없습니다 (design-x)')
+  })
+
   it('[DM-F02-AC2] 데이터 노드는 단일 또는 리스트이고, 리스트는 실행 노드에 항목을 한 번에 이어 붙인다', () => {
     expect(dataShape({ kind: 'text' })).toBe('single')
     expect(dataShape({ kind: 'list' })).toBe('list')

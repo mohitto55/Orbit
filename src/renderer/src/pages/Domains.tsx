@@ -120,6 +120,9 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
               <button className="small ghost" onClick={() => setView('doc')}>
                 문서로
               </button>
+              <button className="small ghost" onClick={() => { setSystemDesign(true); setView('doc') }}>
+                공통 설계
+              </button>
               <button className="small" onClick={() => setCreating(true)}>
                 + 새 도메인
               </button>
@@ -271,6 +274,10 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             >
               그래프로
             </button>
+            {/* 공통 설계는 도메인 목록이 길어도 보이도록 목록 밖에 따로 둔다 */}
+            <button className={`small ${systemDesign ? 'primary' : 'ghost'}`} onClick={() => setSystemDesign(true)}>
+              공통 설계
+            </button>
             <button className="small" onClick={() => setCreating(true)}>
               + 새 도메인
             </button>
@@ -278,10 +285,6 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
         </div>
         {domains.length === 0 && <Empty>도메인이 없습니다</Empty>}
         <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
-        <div className="tree-sep" />
-        <button className={`tree-item ${systemDesign ? 'on' : ''}`} onClick={() => setSystemDesign(true)}>
-          시스템 공통 설계
-        </button>
       </div>
       <div className="pane-main">
         {systemDesign ? (
