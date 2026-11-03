@@ -106,6 +106,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
   )
 
   const visible = (tasks ?? []).filter((t) => showDone || !isClosed(t)).sort(byPriority)
+  const runnable = visible.filter((t) => !isClosed(t))
   const keys: string[] = group === 'horizon' ? [...HORIZONS] : group === 'type' ? [...TASK_TYPES] : [...PRIORITIES]
   const groupOf = (t: Task) => (group === 'horizon' ? t.horizon : group === 'type' ? t.type : t.priority)
   const dueIds = new Set((due ?? []).map((t) => t.id))
@@ -174,7 +175,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
         <h3>Task</h3>
         <div className="row">
           <button onClick={() => { setSelecting(!selecting); setSelected([]); setView('list') }}>{selecting ? '선택 종료' : '여러 항목 선택'}</button>
-          {selecting && <><label className="small"><input type="checkbox" aria-label="보이는 할일 전체 선택" checked={visible.length > 0 && visible.every((t) => selected.includes(t.id))} onChange={(e) => setSelected(e.target.checked ? visible.map((t) => t.id) : [])} />전체 선택</label><RunButton sources={visible.filter((t) => selected.includes(t.id)).map((t) => ({ kind: 'task', id: t.id, title: t.title }))} label={`선택 ${visible.filter((t) => selected.includes(t.id)).length}개 그래프로 실행`} /></>}
+          {selecting && <><label className="small"><input type="checkbox" aria-label="보이는 할일 전체 선택" checked={runnable.length > 0 && runnable.every((t) => selected.includes(t.id))} onChange={(e) => setSelected(e.target.checked ? runnable.map((t) => t.id) : [])} />전체 선택</label><RunButton sources={runnable.filter((t) => selected.includes(t.id)).map((t) => ({ kind: 'task', id: t.id, title: t.title }))} label={`선택 ${runnable.filter((t) => selected.includes(t.id)).length}개 그래프로 실행`} /></>}
           <div className="seg small">
             <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>
               목록
@@ -210,7 +211,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
             <TaskGroup key={k} title={k} list={list} onReorder={reorder}>
               {(t, bind) => (
                 <tr key={t.id} {...bind} className={`todo ${bind.className} ${isClosed(t) ? 'closed' : ''} ${focus === t.id ? 'focus' : ''} ${dueIds.has(t.id) ? 'due' : ''}`}>
-                  {selecting && <td className="todo-check"><input type="checkbox" aria-label={`${t.title} 실행 대상 선택`} checked={selected.includes(t.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, t.id] : selected.filter((id) => id !== t.id))} /></td>}
+                  {selecting && <td className="todo-check"><input type="checkbox" aria-label={`${t.title} 실행 대상 선택`} disabled={isClosed(t)} checked={!isClosed(t) && selected.includes(t.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, t.id] : selected.filter((id) => id !== t.id))} /></td>}
                   {!selecting && <td className="todo-check">
                     <input
                       type="checkbox"
@@ -228,7 +229,7 @@ export default function Tasks({ refreshKey, reloadBadges, focus }: PageProps) {
                       {t.links.length > 0 && ` · ${t.links.join(', ')}`}
                     </div>
                     <InlineTaskChecklist task={t} track={track} onReload={reloadTasks} />
-                    <div className="row"><RunButton sources={[{ kind: 'task', id: t.id, title: t.title }]} /><SourceRuns source={{ kind: 'task', id: t.id, title: t.title }} /></div>
+                    <div className="row"><RunButton sources={[{ kind: 'task', id: t.id, title: t.title }]} disabled={isClosed(t)} /><SourceRuns source={{ kind: 'task', id: t.id, title: t.title }} /></div>
                   </td>
                   <td style={{ width: 84 }}>
                     <select className={`prio prio-${t.priority}`} value={t.priority} onChange={(e) => setPriority(t, e.target.value as Priority)} title="중요도">

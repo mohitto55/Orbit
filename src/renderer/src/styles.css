@@ -329,8 +329,11 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .start-actions { display: flex; gap: 8px; margin-bottom: 36px; }
 .start-actions button { padding: 8px 16px; font-size: 14px; }
 .recent { list-style: none; padding: 0; margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.recent li { display: flex; align-items: center; }
 .recent li + li { border-top: 1px solid var(--line-soft); }
 .recent button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 10px 14px; border: none; border-radius: 0; background: none; text-align: left; }
+.recent .recent-open { flex: 1; min-width: 0; }
+.recent .recent-remove { flex: none; width: 32px; height: 32px; padding: 0; margin-right: 8px; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted); font-size: 20px; }
 .recent button:hover:not(:disabled) { background: var(--sunken); }
 .recent-name { font-weight: 650; font-size: 14px; }
 .recent button:hover .recent-name { color: var(--accent); }
@@ -712,6 +715,17 @@ textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-h
 .pipe-layout { flex: 1; display: grid; grid-template-columns: min(var(--pipe-list-width, 190px), 28%) 8px minmax(0, 1fr); gap: 4px; min-height: 0; }
 .pipe-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
 .pipe-list .tree-item { cursor: pointer; }
+.pipe-list .pipe-order-item { display: flex; align-items: center; gap: 6px; text-align: left; margin: 0; position: relative; }
+.pipe-order-item > span:nth-child(2) { min-width: 0; overflow-wrap: anywhere; }
+.pipe-grip { flex: none; color: var(--muted); cursor: grab; }
+.pipe-order-item.drop-before::before, .pipe-order-item.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; background: var(--accent); border-radius: 2px; }
+.pipe-order-item.drop-before::before { top: -3px; }
+.pipe-order-item.drop-after::after { bottom: -3px; }
+.pipe-skill-row { display: flex; align-items: center; min-width: 0; }
+.pipe-skill-row .tree-item { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.pipe-skill-row small { display: block; color: var(--muted); font-weight: normal; }
+.pipe-skill-row > .ghost { flex: none; padding: 4px 8px; }
+.skill-body { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
 .pipe-list > button { margin-bottom: 6px; }
 .pipe-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
 .pipe-title { font-size: 15px; font-weight: 600; min-width: 220px; flex: 1; max-width: 420px; }
@@ -806,6 +820,16 @@ ol.pipe-list-items { padding-left: 20px; display: block; }
 .run-terminal { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
 .run-terminal small { display: block; color: var(--muted); margin-top: 3px; }
 .run-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; padding: 12px; background: var(--sunken); border-radius: 6px; }
+.source-picker, .spec-search { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.source-picker > input, .source-picker > select, .spec-search > input { width: 100%; box-sizing: border-box; }
+.source-selected { display: flex; flex-wrap: wrap; gap: 6px; }
+.source-selected button { white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.source-options, .spec-search-results { max-height: 240px; overflow: auto; }
+.source-options label { display: flex; align-items: flex-start; gap: 8px; padding: 8px; cursor: pointer; }
+.source-options span { min-width: 0; overflow-wrap: anywhere; }
+.source-options small, .spec-search-result small { display: block; color: var(--muted); margin-top: 3px; }
+.spec-search { margin: 12px 0; }
+.spec-search-result { display: block; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; margin-bottom: 6px; }
 .run-node-list { display: flex; flex-direction: column; max-height: 280px; overflow: auto; margin: 12px 0; gap: 5px; }
 .run-node-list button { display: flex; text-align: left; justify-content: space-between; gap: 14px; }
 .run-node-list small { color: var(--muted); }

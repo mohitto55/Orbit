@@ -11,6 +11,7 @@ import ModelPanel from './ModelPanel'
 import DomainGraph from './DomainGraph'
 import SpecSummary from './FeatureRollup'
 import { MdContent } from '../Markdown'
+import { matchesSearch } from '../SourcePicker'
 import type { DomainMap as MapData } from '../types'
 import { DEFAULT_GRAPH_FILTERS, RELATION_LABELS, filterDomainScope, relationKind, type DomainGraphFilters, type RelationKind } from '../domainGraphView'
 
@@ -50,6 +51,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
   const [systemDesign, setSystemDesign] = useState(false)
   const [graphFilters, setGraphFilters] = useState<DomainGraphFilters>(DEFAULT_GRAPH_FILTERS)
   const [showRelationLabels, setShowRelationLabels] = useState(true)
+  const [specQuery, setSpecQuery] = useState('')
   const visibleScope = useMemo(() => scope ? filterDomainScope(scope, graphFilters) : null, [scope, graphFilters])
 
   useEffect(() => {
@@ -97,6 +99,17 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
     if (t) setTab(t)
     setView('doc')
   }
+  const foundSpecs = specQuery.trim() ? (specs ?? []).filter((s) => matchesSearch(specQuery, s.id, s.title, domainLabel(domains, s.domainId), s.content, ...s.features.flatMap((f) => [f.id, f.name, f.purpose, ...f.acs.map((a) => `${a.id} ${a.text}`)]))) : []
+  const specSearch = <div className="spec-search">
+    <input type="search" aria-label="기능명세서 검색" placeholder="명세·기능·수용 기준 검색" value={specQuery} onChange={(e) => setSpecQuery(e.target.value)} />
+    {specQuery.trim() && <>
+      <div className="small muted" role="status">{specs ? `명세 검색 결과 ${foundSpecs.length}개` : '명세를 불러오는 중…'}</div>
+      <div className="spec-search-results">{foundSpecs.map((s) => <button key={s.id} className="spec-search-result" onClick={() => openDoc(s.domainId, 'spec')}>
+        <b>{s.title}</b><small>{domainLabel(domains, s.domainId)} · {s.id}</small>
+        <small>{s.features.filter((f) => matchesSearch(specQuery, f.id, f.name, f.purpose, ...f.acs.map((a) => `${a.id} ${a.text}`))).slice(0, 3).map((f) => f.name).join(' · ')}</small>
+      </button>)}</div>
+    </>}
+  </div>
 
   if (view === 'map') {
     const roots = domains
@@ -129,6 +142,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             </div>
           </div>
           <div className="muted small">도메인을 고르면 그 도메인의 하위 도메인과 개념 관계만 그래프로 봅니다.</div>
+          {specSearch}
           {roots.map((r) => {
             const subs = under(r.id)
             const feats = map?.nodes.filter((n) => n.id === r.id || subs.some((x) => x.id === n.id)).reduce((a, n) => a + n.features, 0) ?? 0
@@ -283,6 +297,7 @@ export default function Domains({ refreshKey, focus, reloadBadges, go }: PagePro
             </button>
           </div>
         </div>
+        {specSearch}
         {domains.length === 0 && <Empty>도메인이 없습니다</Empty>}
         <Tree domains={domains} parent={undefined} depth={0} selected={systemDesign ? null : selected} onSelect={(id) => { setSelected(id); setSystemDesign(false) }} requests={pendingReq.map((r) => r.domain)} />
       </div>

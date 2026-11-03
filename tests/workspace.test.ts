@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { createProject, openProject, readSettings, saveSettings, SUBDIRS, resolveDataRoot } from '../src/core/workspace'
+import { createApi } from '../src/main/api'
 import { tempDir } from './helpers'
 
 describe('Workspace', () => {
@@ -59,5 +60,26 @@ describe('Workspace', () => {
     const raw = await fs.readFile(path.join(ctx.dataRoot, 'project.md'), 'utf8')
     expect(raw).toContain('testCommand: npm test')
     expect((await readSettings(ctx)).driftIntervalDays).toBe(3)
+  })
+
+  it('최근 목록에서 제거해도 프로젝트 파일은 보존하며 다시 열면 목록에 추가한다', async () => {
+    const dir = await tempDir('orbit-recents-'), recentFile = path.join(dir, 'recent.json')
+    const first = await createProject(path.join(dir, 'first')), second = await createProject(path.join(dir, 'second'))
+    const document = path.join(first.dataRoot, 'project.md'), original = await fs.readFile(document, 'utf8')
+    const source = path.join(first.projectDir, 'source.txt')
+    await fs.writeFile(source, '보존할 프로젝트 파일')
+    await fs.writeFile(recentFile, JSON.stringify([first.projectDir, first.projectDir.replace(/\\/g, '/').toUpperCase(), second.projectDir]))
+    const deps = { send() {}, pickFolder: async () => null, recentFile, onProjectOpened() {} }
+    const api = createApi(deps)
+    await api.removeRecentProject(first.projectDir)
+    expect(JSON.parse(await fs.readFile(recentFile, 'utf8'))).toEqual([second.projectDir])
+    expect(await fs.readFile(document, 'utf8')).toBe(original)
+    expect(await fs.readFile(source, 'utf8')).toBe('보존할 프로젝트 파일')
+    const restarted = createApi(deps)
+    try {
+      expect(await restarted.recentProjects()).toEqual([second.projectDir])
+      await restarted.openProject(first.projectDir)
+      expect(await restarted.recentProjects()).toEqual([first.projectDir, second.projectDir])
+    } finally { restarted.closeProject() }
   })
 })

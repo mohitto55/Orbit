@@ -117,7 +117,7 @@ export default function App() {
             return (
               <Fragment key={n.id}>
                 {n.group && <div className="nav-group">{n.group}</div>}
-                <button className={page === n.id ? 'on' : ''} onClick={() => go(n.id)}>
+                <button className={page === n.id ? 'on' : ''} onClick={() => go(n.id, n.id === 'automation' ? 'runs' : undefined)}>
                   {n.label}
                   {count > 0 && <span className="count">{count}</span>}
                 </button>

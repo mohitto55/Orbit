@@ -1,6 +1,6 @@
 import { promises as fs, mkdirSync, renameSync, writeFileSync } from 'fs'
 import path from 'path'
-import { bindPipelineInputs, expandPipeline, isAgent, isListShape, newNodeId, pipelineProblems, sourceKind, type Env, type Pipeline, type PipelineExecution, type RunOptions, type PipelineRunSummary, type RunFilter, summarizeRun, type SourceRef } from './pipeline'
+import { bindPipelineInputs, expandPipeline, isAgent, isListShape, isOpenTask, newNodeId, pipelineProblems, sourceKind, type Env, type Pipeline, type PipelineExecution, type RunOptions, type PipelineRunSummary, type RunFilter, summarizeRun, type SourceRef } from './pipeline'
 
 export interface PipelineRunRequest {
   pipelineId: string
@@ -35,6 +35,8 @@ export function prepareExecutions(graph: Pipeline, env: Env, request: PipelineRu
         for (const id of ids) {
           const source = env.sources?.find((s) => s.kind === kind && s.id === id)
           if (!source) throw new Error(`${param.name}: 원본을 찾을 수 없습니다 (${id})`)
+          const task = kind === 'task' && env.tasks?.find((t) => t.id === id)
+          if (task && !isOpenTask(task)) throw new Error(`${param.name}: 완료·취소된 할일은 선택할 수 없습니다 (${task.title})`)
           const { text: _t, version: _v, ...ref } = source
           refs.push(ref)
         }

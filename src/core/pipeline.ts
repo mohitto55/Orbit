@@ -38,6 +38,7 @@ export interface SourceRef { kind: SourceKind; id: string; title: string; locati
 export interface PipelineSource extends SourceRef { text: string; version?: string }
 export type DataShape = 'single' | 'list' | 'terminal' | 'json' | 'schema' | 'boolean' | 'number' | SourceKind | `${SourceKind}[]`
 export const sourceKind = (shape: string): SourceKind | undefined => SOURCE_KINDS.find((kind) => shape === kind || shape === `${kind}[]`)
+export const isOpenTask = (task: { status: string }) => task.status === '대기' || task.status === '진행'
 export const isListShape = (shape: string) => shape === 'list' || shape.endsWith('[]')
 export const isLogic = (n: Pick<PipeNode, 'kind'>) => ['compare', 'and', 'or', 'not'].includes(n.kind)
 export const dataShape = (n: Pick<PipeNode, 'kind'>): DataShape => n.kind === 'boolean' || isLogic(n) ? 'boolean' : n.kind === 'number' ? 'number' : n.kind === 'terminal' ? 'terminal' : n.kind === 'task' ? 'task' : n.kind === 'schema' ? 'schema' : n.kind === 'dictionary' || n.kind === 'property' ? 'json' : n.kind === 'list' || n.kind === 'spec' ? 'list' : 'single'

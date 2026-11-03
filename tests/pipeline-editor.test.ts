@@ -74,9 +74,87 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('함수와 리스트 항목 편집 화면', () => {
+  it('그래프·함수를 드래그로 독립 정렬하고 편집 내용과 현재 선택을 유지한다', async () => {
+    saved = ['g1', 'g2', 'f1', 'f2'].map((id) => ({ id, title: id, file: '', template: id.startsWith('f'), nodes: [], edges: [] }))
+    const invoke = window.orbit.invoke, moved = vi.fn()
+    window.orbit.invoke = async (name, ...args) => {
+      if (name !== 'reorderPipeline') return invoke(name, ...args)
+      moved(...args)
+      const [id, target, position] = args as [string, string, 'before' | 'after']
+      const source = saved.find((p) => p.id === id)!
+      saved = saved.filter((p) => p.id !== id)
+      saved.splice(saved.findIndex((p) => p.id === target) + (position === 'after' ? 1 : 0), 0, source)
+      return saved
+    }
+    await mount()
+    await change(host.querySelector<HTMLInputElement>('.pipe-title')!, '편집한 그래프')
+    const drag = async (from: string, to: string) => {
+      const source = host.querySelector(`[data-pipeline-id="${from}"]`)!, target = host.querySelector(`[data-pipeline-id="${to}"]`)!
+      const dataTransfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' }
+      await act(async () => {
+        for (const [element, type] of [[source, 'dragstart'], [target, 'dragover'], [target, 'drop'], [source, 'dragend']] as const) {
+          const event = new Event(type, { bubbles: true, cancelable: true })
+          Object.assign(event, { dataTransfer, clientY: -1 }); element.dispatchEvent(event)
+        }
+      })
+    }
+    await drag('g2', 'g1'); await drag('f2', 'f1')
+    expect(moved.mock.calls).toEqual([['g2', 'g1', 'before'], ['f2', 'f1', 'before']])
+    expect([...host.querySelectorAll('[data-pipeline-id]')].map((e) => e.getAttribute('data-pipeline-id'))).toEqual(['g2', 'g1', 'f2', 'f1'])
+    expect(host.querySelector<HTMLInputElement>('.pipe-title')!.value).toBe('편집한 그래프')
+    expect(saved.find((p) => p.id === 'g1')!.title).toBe('편집한 그래프')
+    await drag('g1', 'f1'); expect(moved).toHaveBeenCalledTimes(2)
+    await act(async () => root.unmount()); root = createRoot(host); await mount()
+    expect([...host.querySelectorAll('[data-pipeline-id]')].map((e) => e.getAttribute('data-pipeline-id'))).toEqual(['g2', 'g1', 'f2', 'f1'])
+  })
+
+  it('Markdown 스킬을 작성·수정하고 노드로 추가하면 본문을 String 값으로 보여준다', async () => {
+    const invoke = window.orbit.invoke
+    const skills: { id: string; scope: 'project' | 'user'; name: string; description: string; body: string; file: string }[] = []
+    window.orbit.invoke = async (name, ...args) => {
+      if (name === 'listSkills') return [...skills]
+      if (name === 'saveSkill') {
+        const input = args[0] as Omit<typeof skills[number], 'file' | 'id'> & { id?: string }
+        const skill = { ...input, id: input.id ?? `${input.scope}:${input.name}`, file: `/project/.claude/skills/${input.name}/SKILL.md` }
+        const i = skills.findIndex((s) => s.id === skill.id)
+        if (i < 0) skills.push(skill); else skills[i] = skill
+        return skill
+      }
+      return invoke(name, ...args)
+    }
+    await mount()
+    await act(async () => host.querySelector<HTMLButtonElement>('[title="새 스킬"]')!.click())
+    await change(host.querySelector<HTMLInputElement>('#skill-name')!, 'review-feature')
+    await change(host.querySelector<HTMLInputElement>('#skill-description')!, '기능을 검토하는 절차')
+    const body = '# 검토\n\n- [ ] 입력 확인\n한 줄 더\n\n```txt\n원문\n```'
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!, body)
+    await click('미리보기')
+    expect(host.querySelector('.run-drawer h1')!.textContent).toBe('검토')
+    await click('저장하고 노드 추가')
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    const skillNode = saved[0].nodes.find((n) => n.kind === 'skill')!
+    expect(skillNode.ref).toBe('project:review-feature')
+    await select(skillNode.id)
+    expect(host.querySelector('.pipe-value')?.textContent).toContain('String')
+    expect(host.textContent).toContain('입력 확인')
+    await act(async () => host.querySelector<HTMLButtonElement>('.pipe-skill-row .tree-item')!.click())
+    expect(host.querySelector<HTMLInputElement>('#skill-name')!.disabled).toBe(true)
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!.value).toBe(body)
+    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!, '# 수정한 스킬\n새 본문')
+    await click('저장')
+    expect(host.querySelector('.pipe-value')?.textContent).toContain('새 본문')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="review-feature 노드 추가"]')!.click())
+    await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+    expect(saved[0].nodes.filter((n) => n.kind === 'skill')).toHaveLength(2)
+  })
+
   it('[DM-F02-AC24] Task 기본값을 할 일 목록에서 선택·저장하고 함수 변수의 Task 타입을 편집한다', async () => {
     const invoke = window.orbit.invoke
-    window.orbit.invoke = async (name, ...args) => name === 'listTasks' ? [{ id: 'task-1', title: '로그인 수정', body: '세션 유지', status: '진행' }] : invoke(name, ...args)
+    window.orbit.invoke = async (name, ...args) => name === 'listTasks' ? [
+      { id: 'task-1', title: '로그인 수정', body: '세션 유지', status: '진행' },
+      { id: 'task-done', title: '완료한 로그인', body: '', status: '완료' },
+      { id: 'task-cancelled', title: '취소한 로그인', body: '', status: '취소' }
+    ] : invoke(name, ...args)
     saved[0].nodes = [node('call', 'template', { ref: 'fn' })]
     saved.push({ id: 'fn', title: '할 일 함수', file: '', template: true, nodes: [
       node('in', 'function-input', { params: [{ id: 'job', name: '대상', type: 'task' }] }),
@@ -85,6 +163,7 @@ describe('함수와 리스트 항목 편집 화면', () => {
     await mount(); await select('call')
     const field = host.querySelector<HTMLSelectElement>('[aria-label="대상 기본값"]')!
     expect(field.options[1].textContent).toContain('로그인 수정')
+    expect([...field.options].map((o) => o.value)).toEqual(['', 'task-1'])
     await change(field, 'task-1')
     await act(async () => { await vi.advanceTimersByTimeAsync(550) })
     expect(saved.find((p) => p.id === 'g')!.nodes[0].values).toEqual({ job: 'task-1' })

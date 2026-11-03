@@ -25,7 +25,7 @@ import { readSessionTitle } from '../core/sessionTitles'
 import { agentModels } from '../core/agentModels'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
-import { PipelineRunner, featureText, taskText, newNodeId, type Env, type Pipeline, type PipelineSource, type PipeEdge, type PipeNode } from '../core/pipeline'
+import { PipelineRunner, featureText, taskText, newNodeId, isOpenTask, type Env, type Pipeline, type PipelineSource, type PipeEdge, type PipeNode } from '../core/pipeline'
 import { PipelineHistory, prepareExecutions, type PipelineRunRequest, type RunFilter } from '../core/pipelineExecution'
 
 export interface ApiDeps {
@@ -226,6 +226,13 @@ export function createApi(deps: ApiDeps) {
       const out: string[] = []
       for (const d of await readRecent()) if (await exists(d)) out.push(d)
       return out
+    },
+    async removeRecentProject(dir: string) {
+      const recent = await readRecent()
+      const key = dir.replace(/\\/g, '/').toLowerCase()
+      const remaining = recent.filter((d) => d.replace(/\\/g, '/').toLowerCase() !== key)
+      if (remaining.length === recent.length) return
+      await fs.writeFile(deps.recentFile, JSON.stringify(remaining), 'utf8')
     },
     pickFolder: () => deps.pickFolder(),
     async createProject(dir: string, name?: string) {
@@ -571,6 +578,7 @@ export function createApi(deps: ApiDeps) {
 
     // 연동: 터미널 작업 그래프 (IN-F11)
     listPipelines: () => pl.listPipelines(need()),
+    reorderPipeline: (id: string, targetId: string, position: 'before' | 'after') => pl.reorderPipeline(need(), id, targetId, position),
     savePipeline: (input: { id?: string; title: string; template?: boolean; nodes: PipeNode[]; edges: PipeEdge[] }) => pl.savePipeline(need(), input),
     deletePipeline: (id: string) => pl.deletePipeline(need(), id),
     agentModels,
@@ -586,7 +594,11 @@ export function createApi(deps: ApiDeps) {
     },
     async runPipeline(id: string) { return (await runGraphs({ pipelineId: id }))[0] },
     runPipelineBatch: runGraphs,
-    async pipelineSources() { return (await executionEnvironment(need())).sources.map(({ text: _t, version: _v, ...source }) => source) },
+    async pipelineSources() {
+      const env = await executionEnvironment(need())
+      const openTasks = new Set(env.tasks?.filter(isOpenTask).map((t) => t.id))
+      return env.sources.filter((s) => s.kind !== 'task' || openTasks.has(s.id)).map(({ text: _t, version: _v, ...source }) => source)
+    },
     listPipelineRuns: (filter?: RunFilter) => history?.list(filter) ?? { runs: [], total: 0, counts: { running: 0, waiting: 0, done: 0, failed: 0, stopped: 0 } },
     async pipelineExecution(id: string) {
       const live = pipes.execution(id)
@@ -623,6 +635,11 @@ export function createApi(deps: ApiDeps) {
     /** 스킬 노드에서 고를 Claude Code 스킬 (프로젝트·내 홈) */
     async listSkills() {
       return (await sk.listSkills(need().projectDir)).map((s) => ({ ...s, id: sk.skillId(s) }))
+    },
+    async saveSkill(input: sk.SkillInput) {
+      const skill = await sk.saveSkill(need().projectDir, input)
+      deps.send('skills-changed', null)
+      return { ...skill, id: sk.skillId(skill) }
     },
     pipelineRuns: () => pipes.list(),
     /** 응답 끝 신호를 놓쳤을 때 사람이 직접 "이 노드는 끝났다"고 넘긴다 */

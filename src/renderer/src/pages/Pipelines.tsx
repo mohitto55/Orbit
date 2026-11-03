@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import cytoscape, { type Core, type NodeSingular } from 'cytoscape'
 import edgehandles from 'cytoscape-edgehandles'
 import { api, on } from '../api'
@@ -47,7 +47,9 @@ import { AgentOptionsFields } from '../AgentOptionsFields'
 import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 import { useAutomation } from '../Automation'
-import { isListShape } from '../../../core/pipeline'
+import { isListShape, isOpenTask, sourceKind } from '../../../core/pipeline'
+import { SourcePicker, type SourceOption } from '../SourcePicker'
+import { SkillEditor } from '../SkillEditor'
 
 cytoscape.use(edgehandles)
 
@@ -329,6 +331,10 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const [list, setList] = useState<Pipeline[] | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
   const [skills, setSkills] = useState<SkillItem[]>([])
+  const [editingSkill, setEditingSkill] = useState<SkillItem | 'new' | null>(null)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
+  const dragged = useRef<string | null>(null), reordering = useRef(false)
   const [specs, setSpecs] = useState<Spec[]>([])
   const [designs, setDesigns] = useState<Design[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -354,12 +360,14 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   useEffect(() => {
     void reload().catch(errorToast)
     // 할 일·명세는 다른 화면에서 바뀔 수 있다 (스킬은 데이터 폴더 밖이라 감시하지 않으므로 이때 같이 다시 읽는다)
-    return on('files-changed', () => {
+    const off = on('files-changed', () => {
       void api.listTasks().then(setTasks).catch(() => {})
       void api.listSpecs().then(setSpecs).catch(() => {})
       void api.listDesigns().then(setDesigns).catch(() => {})
       void api.listSkills().then(setSkills).catch(() => {})
     })
+    const offSkills = on('skills-changed', () => { void api.listSkills().then(setSkills).catch(errorToast) })
+    return () => { off(); offSkills() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -393,6 +401,31 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     setSel(null)
     setConnectFrom(null)
   }
+  const reorder = async (id: string, targetId: string, position: 'before' | 'after') => {
+    if (reordering.current) return
+    reordering.current = true
+    try {
+      if (draft) await flush(draft)
+      setList(await api.reorderPipeline(id, targetId, position))
+    } catch (e) { errorToast(e) }
+    finally { reordering.current = false }
+  }
+  const dropAt = (event: DragEvent<HTMLElement>, target: Pipeline) => {
+    const source = list?.find((p) => p.id === dragged.current)
+    if (reordering.current || !source || source.id === target.id || !!source.template !== !!target.template) return null
+    const rect = event.currentTarget.getBoundingClientRect()
+    return { id: target.id, position: event.clientY < rect.top + rect.height / 2 ? 'before' as const : 'after' as const }
+  }
+  const graphItem = (p: Pipeline, group: Pipeline[]) => <button type="button" key={p.id} data-pipeline-id={p.id} className={`tree-item pipe-order-item ${draft?.id === p.id ? 'on' : ''}${dropTarget?.id === p.id ? ` drop-${dropTarget.position}` : ''}`} draggable
+    title="끌어서 순서 변경 · Alt+↑/↓로 이동" onClick={() => void switchTo(p.id)}
+    onDragStart={(event) => { if (reordering.current) { event.preventDefault(); return }; dragged.current = p.id; event.dataTransfer.setData('application/x-orbit-pipeline', p.id); event.dataTransfer.effectAllowed = 'move' }}
+    onDragEnd={() => { dragged.current = null; setDropTarget(null) }}
+    onDragOver={(event) => { const target = dropAt(event, p); setDropTarget(target); if (target) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' } }}
+    onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropTarget(null) }}
+    onDrop={(event) => { const id = dragged.current, target = dropAt(event, p); dragged.current = null; setDropTarget(null); if (id && target) { event.preventDefault(); void reorder(id, target.id, target.position) } }}
+    onKeyDown={(event) => { if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const up = event.key === 'ArrowUp', target = group[group.indexOf(p) + (up ? -1 : 1)]; if (target) void reorder(p.id, target.id, up ? 'before' : 'after') }}>
+    <span className="pipe-grip" aria-hidden="true">⠿</span><span>{p.title}</span>{[...runs.values()].some((r) => r.pipelineId === p.id && r.status === 'running') && <span title="실행 중"> ⟳</span>}
+  </button>
 
   const create = async (template: boolean) => {
     try {
@@ -553,7 +586,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   // Delete 키로 고른 노드·선을 지운다 (입력 중일 때는 제외)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' || root.current?.closest('[hidden]')) return
+      if (e.key !== 'Delete' || editingSkill || root.current?.closest('[hidden]')) return
       const t = e.target as HTMLElement
       if (t.closest('input, textarea, select')) return
       if (selNode) removeNode(selNode.id)
@@ -576,12 +609,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
             +
           </button>
         </div>
-        {graphs.map((p) => (
-          <div key={p.id} className={`tree-item ${draft?.id === p.id ? 'on' : ''}`} onClick={() => void switchTo(p.id)}>
-            {p.title}
-            {[...runs.values()].some((r) => r.pipelineId === p.id && r.status === 'running') && <span title="실행 중"> ⟳</span>}
-          </div>
-        ))}
+        {graphs.map((p) => graphItem(p, graphs))}
         <div className="pipe-list-head">
           함수
           <button className="ghost" title="새 함수" onClick={() => create(true)}>
@@ -589,12 +617,20 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
           </button>
         </div>
         {templates.length === 0 && <div className="small muted">입·출력 변수가 있는 함수를 만들어 다른 그래프에서 호출할 수 있습니다</div>}
-        {templates.map((p) => (
-          <div key={p.id} className={`tree-item ${draft?.id === p.id ? 'on' : ''}`} onClick={() => void switchTo(p.id)}>
-            {p.title}
-          </div>
-        ))}
+        {templates.map((p) => graphItem(p, templates))}
+        <div className="pipe-list-head">스킬<button className="ghost" title="새 스킬" onClick={() => setEditingSkill('new')}>+</button></div>
+        <input type="search" aria-label="스킬 검색" placeholder="스킬 검색" value={skillQuery} onChange={(e) => setSkillQuery(e.target.value)} />
+        {!skills.length && <div className="small muted">스킬을 만들고 String 출력으로 본문을 전달하세요.</div>}
+        {skills.filter((s) => `${s.name} ${s.description}`.toLocaleLowerCase().includes(skillQuery.trim().toLocaleLowerCase())).map((s) => <div className="pipe-skill-row" key={s.id}>
+          <button className="tree-item" title={s.description || s.name} onClick={() => setEditingSkill(s)}><span>{s.name}</span><small>{s.scope === 'user' ? '내 스킬' : '프로젝트'}</small></button>
+          <button className="ghost" disabled={!draft} aria-label={`${s.name} 노드 추가`} title="스킬 노드 추가" onClick={() => addNode('skill', { ref: s.id })}>+</button>
+        </div>)}
       </div>
+      {editingSkill && <SkillEditor skill={editingSkill === 'new' ? undefined : editingSkill} canAdd={!!draft} onClose={() => setEditingSkill(null)} onSaved={(skill, add) => {
+        setSkills((all) => [...all.filter((s) => s.id !== skill.id), skill].sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name)))
+        setEditingSkill(null)
+        if (add) addNode('skill', { ref: skill.id })
+      }} />}
 
       <PaneDivider side="before" value={layout.sizes.list} min={140} max={480} initial={190} label="그래프 목록 너비" onChange={(size) => layout.resize('list', size)} />
       {!draft && <Empty>작업 그래프가 없습니다. 왼쪽 "+"로 만드세요.</Empty>}
@@ -889,7 +925,7 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
       .filter((p) => p.template && p.id !== draft.id)
       .map((p) => ({ key: `tpl:${p.id}`, kind: 'template' as NodeKind, label: p.title, group: '함수', words: `${KIND_WORDS.template} ${p.title}`, extra: { ref: p.id } })),
     ...env.tasks
-      .filter((t) => t.status === '대기' || t.status === '진행')
+      .filter(isOpenTask)
       .map((t) => ({ key: `task:${t.id}`, kind: 'task' as NodeKind, label: `${t.id} ${t.title}`, group: '할 일', words: `${KIND_WORDS.task} ${t.id} ${t.title}`, extra: { ref: t.id } })),
     ...env.skills.map((s) => ({
       key: `skill:${s.id}`,
@@ -1128,15 +1164,15 @@ function TerminalField({ terminals, value, disabled, label = '사용할 터미�
 function FunctionValues({ node, params, draft, env, locked, onPatch }: { node: PipeNode; params: FunctionParam[]; draft: Draft; env: Env; locked: boolean; onPatch: (patch: Partial<PipeNode>) => void }) {
   return <>{params.map((param, index) => {
     const linked = draft.edges.some((e) => e.to === node.id && isDataEdge(draft, e) && (e.toPort ?? params[0]?.id) === param.id)
+    const kind = sourceKind(param.type)
+    const options = kind === 'task' ? env.tasks.filter(isOpenTask).map((t) => ({ id: t.id, title: t.title, detail: `${t.id} · ${t.status}`, search: t.body }))
+      : kind === 'spec' ? env.specs.map((s) => ({ id: s.id, title: s.title, search: s.content }))
+      : kind === 'feature' ? env.specs.flatMap((s) => s.features.map((f) => ({ id: `${s.id}#${f.id}`, title: f.name, detail: `${s.title} · ${f.id}`, search: `${f.purpose} ${f.acs.map((a) => a.text).join(' ')}` }))) : null
     return <div className="field" key={param.id}>
       <label>{param.name} · {PARAM_TYPE_NAME[param.type]}{linked ? ' (핀으로 연결됨)' : ''}</label>
       {param.type === 'terminal'
         ? linked ? <div className="small muted">연결된 터미널을 사용합니다.</div> : <TerminalField terminals={env.terminals} label={`${param.name} 기본값`} disabled={locked} value={node.values?.[param.id]} onChange={(id) => onPatch({ values: { ...node.values, [param.id]: id } })} />
-        : param.type === 'task' ? <select aria-label={`${param.name} 기본값`} disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? ''} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })}>
-          <option value="">{linked ? '연결된 할 일을 사용합니다' : '할 일을 고르거나 Task 핀을 연결하세요'}</option>
-          {!linked && node.values?.[param.id] && !env.tasks.some((t) => t.id === node.values?.[param.id]) && <option value={node.values[param.id]}>찾을 수 없는 할 일 · 다시 선택하세요</option>}
-          {env.tasks.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.title} ({t.status})</option>)}
-        </select>
+        : options ? linked ? <div className="small muted">연결된 {PARAM_TYPE_NAME[param.type]} 값을 사용합니다.</div> : <SourcePicker key={`${node.id}:${param.id}:${param.type}`} label={`${param.name} 기본값`} options={options} multiple={isListShape(param.type)} disabled={locked} value={node.values?.[param.id] ?? ''} onChange={(value) => onPatch({ values: { ...node.values, [param.id]: value } })} />
         : param.type === 'boolean' ? <select aria-label={`${param.name} 기본값`} disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? 'false'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })}>{linked ? <option value="">연결된 Bool 값을 사용합니다</option> : <><option value="false">False (거짓)</option><option value="true">True (참)</option></>}</select>
         : param.type === 'number' ? <input aria-label={`${param.name} 기본값`} type="number" step="any" disabled={locked || linked} value={linked ? '' : node.values?.[param.id] ?? '0'} placeholder={linked ? '연결된 숫자 값을 사용합니다' : ''} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />
         : <textarea aria-label={`${param.name} 기본값`} rows={2} disabled={locked || linked} value={node.values?.[param.id] ?? (node.kind === 'template' && index === 0 ? node.text : '')} placeholder={linked ? '연결된 노드의 값을 사용합니다' : param.type === 'list' ? '한 줄에 한 항목' : '핀을 연결하거나 기본값을 입력하세요'} onChange={(e) => onPatch({ values: { ...node.values, [param.id]: e.target.value } })} />}
@@ -1471,14 +1507,7 @@ function NodePanel({
       {(node.kind === 'task' || node.kind === 'complete') && (
         <div className="field">
           <label>{node.kind === 'task' ? '가져올 할 일' : '완료할 할 일 (이어진 할 일 노드도 완료합니다)'}</label>
-          <select value={node.ref ?? ''} disabled={locked} onChange={(e) => onPatch({ ref: e.target.value || undefined })}>
-            <option value="">{node.kind === 'task' ? '골라 주세요' : '이어진 할 일 노드만'}</option>
-            {env.tasks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.id} · {t.title} ({t.status})
-              </option>
-            ))}
-          </select>
+          <SourcePicker key={node.id} label={node.kind === 'task' ? '가져올 할 일' : '완료할 할 일'} options={env.tasks.filter(isOpenTask).map((t) => ({ id: t.id, title: t.title, detail: `${t.id} · ${t.status}`, search: t.body }))} value={node.ref ?? ''} disabled={locked} onChange={(value) => onPatch({ ref: value || undefined })} />
           {node.ref && !task && <div className="small" style={{ color: 'var(--bad)' }}>할 일을 찾을 수 없습니다 ({node.ref})</div>}
           {linkedTasks.length > 0 && <div className="small muted">이어진 할 일: {linkedTasks.map((n) => n.kind === 'task' ? `${n.ref} · ${env.tasks.find((t) => t.id === n.ref)?.title ?? nodeName(n)}` : `${nodeName(n)} (Task)`).join(', ')}</div>}
         </div>
@@ -1528,36 +1557,11 @@ function NodePanel({
       {SPEC_KINDS.includes(node.kind) && (
         <div className="field">
           <label>{node.kind === 'spec' ? '기능 명세 (실행할 때마다 명세의 지금 내용을 내보냅니다)' : node.kind === 'feature' ? '기능' : '수용 기준'}</label>
-          <select
-            value={node.ref ?? ''}
-            disabled={locked}
-            onChange={(e) => onPatch({ ref: e.target.value || undefined })}
-          >
-            {!(node.kind === 'spec' ? target.spec : node.kind === 'feature' ? target.feature : target.ac) && <option value="">골라 주세요</option>}
-            {env.specs.map((s) =>
-              node.kind === 'spec' ? (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ) : (
-                <optgroup key={s.id} label={s.title}>
-                  {s.features.flatMap((f) =>
-                    node.kind === 'feature'
-                      ? [
-                          <option key={f.id} value={`${s.id}#${f.id}`}>
-                            {f.id} {f.name}
-                          </option>
-                        ]
-                      : f.acs.map((a) => (
-                          <option key={a.id} value={`${s.id}#${a.id}`}>
-                            {f.id} AC{a.num} {short(a.text, 40)}
-                          </option>
-                        ))
-                  )}
-                </optgroup>
-              )
-            )}
-          </select>
+          <SourcePicker key={node.id} label={KIND_LABEL[node.kind]} value={node.ref ?? ''} disabled={locked} onChange={(value) => onPatch({ ref: value || undefined })} options={env.specs.flatMap<SourceOption>((s) => node.kind === 'spec'
+            ? [{ id: s.id, title: s.title, search: s.content }]
+            : s.features.flatMap((f) => node.kind === 'feature'
+              ? [{ id: `${s.id}#${f.id}`, title: f.name, detail: `${s.title} · ${f.id}`, search: `${f.purpose} ${f.acs.map((a) => a.text).join(' ')}` }]
+              : f.acs.map((a) => ({ id: `${s.id}#${a.id}`, title: a.text, detail: `${s.title} · ${f.name} · AC${a.num}` }))))} />
           {node.ref && !(node.kind === 'spec' ? target.spec : node.kind === 'feature' ? target.feature : target.ac) && (
             <div className="small" style={{ color: 'var(--bad)' }}>
               {KIND_LABEL[node.kind]}을(를) 찾을 수 없습니다 ({node.ref})

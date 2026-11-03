@@ -62,7 +62,28 @@ export async function listPipelines(ctx: Ctx): Promise<Pipeline[]> {
     const graph = data.template ? withFunctionBoundary({ nodes, edges }, id) : { nodes, edges }
     out.push({ id, title: data.title ?? '', ...(data.template ? { template: true } : {}), ...graph, updated: data.updated, file })
   }
-  return out
+  let order: unknown = []
+  try { order = JSON.parse(await fs.readFile(path.join(dir(ctx), 'order.json'), 'utf8')) }
+  catch (error) { if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  const ranks = new Map((Array.isArray(order) ? order.filter((id): id is string => typeof id === 'string') : []).map((id, i) => [id, i]))
+  return out.sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity))
+}
+
+/** 목록 순서는 그래프 본문과 따로 저장해 편집 자동 저장과 서로 덮어쓰지 않는다. */
+export async function reorderPipeline(ctx: Ctx, id: string, targetId: string, position: 'before' | 'after'): Promise<Pipeline[]> {
+  if (position !== 'before' && position !== 'after') throw new Error('이동 위치가 올바르지 않습니다')
+  const all = await listPipelines(ctx), source = all.find((p) => p.id === id), target = all.find((p) => p.id === targetId)
+  if (!source || !target) throw new Error('이동할 그래프를 찾을 수 없습니다')
+  if (!!source.template !== !!target.template) throw new Error('작업 그래프와 함수는 각 목록 안에서 정렬하세요')
+  if (id === targetId) return all
+  const next = all.filter((p) => p.id !== id)
+  next.splice(next.findIndex((p) => p.id === targetId) + (position === 'after' ? 1 : 0), 0, source)
+  const file = path.join(dir(ctx), 'order.json'), temp = `${file}.${stamp()}.tmp`
+  try {
+    await fs.writeFile(temp, JSON.stringify(next.map((p) => p.id)), 'utf8')
+    await fs.rename(temp, file)
+  } finally { await fs.rm(temp, { force: true }) }
+  return next
 }
 
 export async function savePipeline(

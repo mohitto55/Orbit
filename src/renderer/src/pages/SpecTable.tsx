@@ -4,6 +4,7 @@ import type { Domain, Feature, FeatureStatus, Spec } from '../types'
 import { AC_LABEL, Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import { History } from './Domains'
 import { RunButton, SourceRuns } from '../Automation'
+import { matchesSearch } from '../SourcePicker'
 
 export default function SpecTable({ domain, refreshKey, onChanged }: { domain: Domain; refreshKey: number; onChanged: () => void }) {
   const [specs, reload] = useLoad(() => api.listSpecs(), [refreshKey])
@@ -16,6 +17,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   const [newName, setNewName] = useState('')
   const [showHistory, setShowHistory] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     if (spec) setRows(spec.features.map((f) => ({ ...f, acs: f.acs.map((a) => ({ ...a })) })))
@@ -40,6 +42,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   }
 
   const dirty = JSON.stringify(rows) !== JSON.stringify(spec.features)
+  const visible = rows.map((f, i) => ({ f, i })).filter(({ f }) => matchesSearch(query, f.id, f.name, f.purpose, ...f.acs.map((a) => `${a.id} ${a.text}`), ...(f.uses ?? [])))
   const update = (i: number, patch: Partial<Feature>) => setRows((r) => r.map((f, j) => (j === i ? { ...f, ...patch } : f)))
 
   const save = async () => {
@@ -133,10 +136,14 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
         <History target={spec.id} />
       ) : (
         <>
+          <div className="row">
+            <input type="search" aria-label="명세 내 기능 검색" placeholder="기능명·ID·목적·수용 기준 검색" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <span className="small muted" role="status">{visible.length} / {rows.length}개</span>
+          </div>
           <table className="table spec">
             <thead>
               <tr>
-                <th><input type="checkbox" aria-label="기능 전체 선택" checked={spec.features.length > 0 && spec.features.every((f) => selected.includes(f.id))} onChange={(e) => setSelected(e.target.checked ? spec.features.map((f) => f.id) : [])} /></th>
+                <th><input type="checkbox" aria-label="보이는 기능 전체 선택" checked={visible.length > 0 && visible.every(({ f }) => selected.includes(f.id))} onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...visible.map(({ f }) => f.id)])] : selected.filter((id) => !visible.some(({ f }) => f.id === id)))} /></th>
                 <th style={{ width: 90 }}>ID</th>
                 <th style={{ width: 140 }}>{noun}</th>
                 <th style={{ width: 150 }}>목적</th>
@@ -147,7 +154,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
               </tr>
             </thead>
             <tbody>
-              {rows.map((f, i) => {
+              {visible.map(({ f, i }) => {
                 const design = ownDesigns.find((d) => d.basedOn.some((b) => b.feature === f.id))
                 return (
                   <tr key={f.id} className={f.status === '폐기' ? 'dim' : ''}>
@@ -236,6 +243,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
               })}
             </tbody>
           </table>
+          {!visible.length && <Empty>{query.trim() ? '검색 결과가 없습니다' : `${noun}이 없습니다`}</Empty>}
           <div className="row between">
             <div className="row">
               <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={`새 ${noun} 이름`} onKeyDown={(e) => e.key === 'Enter' && add()} />

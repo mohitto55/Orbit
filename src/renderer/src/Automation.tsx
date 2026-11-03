@@ -6,6 +6,7 @@ import type { PipelineRunSummary } from '../../core/pipelineExecution'
 import type { TerminalInfo } from './types'
 import { Empty, errorToast, toast } from './ui'
 import { PipelineValue } from './PipelineValue'
+import { SourcePicker } from './SourcePicker'
 
 type Selection = { sources: SourceRef[]; pipelineId?: string }
 interface AutomationActions {
@@ -92,7 +93,8 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
       if (!selection.pipelineId) setGraphId(list.find(compatible)?.id ?? '')
     }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)) }).finally(() => { if (alive) setLoading(false) })
     const off = on('term-info', (tab: TerminalInfo) => setTabs((all) => all.map((t) => t.id === tab.id ? { ...t, ...tab } : t)))
-    return () => { alive = false; off() }
+    const offSources = on('files-changed', () => { void api.pipelineSources().then((data) => { if (alive) setSources(data) }).catch(errorToast) })
+    return () => { alive = false; off(); offSources() }
   }, [])
   const graph = graphs.find((p) => p.id === graphId)
   const entry = graph?.nodes.find((n) => n.kind === 'function-input')
@@ -129,9 +131,7 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
         const sourceType = sourceKind(param.type), multiple = isListShape(param.type)
         const choices = sources.filter((s) => s.kind === sourceType)
         return <div className="field" key={param.id}><label htmlFor={`run-${param.id}`}>{param.name} · {SHAPE_NAME[param.type]}</label>
-          {sourceType ? <select id={`run-${param.id}`} multiple={multiple} value={multiple ? value(param.id, param.type).split('\n') : value(param.id, param.type)} onChange={(e) => setValues({ ...values, [param.id]: [...e.target.selectedOptions].map((o) => o.value).join('\n') })}>
-            {!multiple && <option value="">원본을 고르세요</option>}{choices.map((s) => <option key={s.id} value={s.id}>{s.title} · {s.id}</option>)}
-          </select> : param.type === 'terminal' ? <select id={`run-${param.id}`} value={value(param.id, param.type)} onChange={(e) => setValues({ ...values, [param.id]: e.target.value })}><option value="">터미널 선택</option>{tabs.filter((t) => t.exited === undefined).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
+          {sourceType ? <><SourcePicker id={`run-${param.id}`} label={param.name} options={choices} multiple={multiple} value={value(param.id, param.type)} onChange={(next) => setValues({ ...values, [param.id]: next })} />{sourceType === 'task' && <span className="small muted">대기·진행 중인 할일만 선택할 수 있습니다.</span>}</> : param.type === 'terminal' ? <select id={`run-${param.id}`} value={value(param.id, param.type)} onChange={(e) => setValues({ ...values, [param.id]: e.target.value })}><option value="">터미널 선택</option>{tabs.filter((t) => t.exited === undefined).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
             : param.type === 'boolean' ? <select id={`run-${param.id}`} value={value(param.id, param.type)} onChange={(e) => setValues({ ...values, [param.id]: e.target.value })}><option value="false">False</option><option value="true">True</option></select>
             : <textarea id={`run-${param.id}`} rows={2} value={value(param.id, param.type)} placeholder={param.type === 'list' ? '한 줄에 한 항목' : '입력값'} onChange={(e) => setValues({ ...values, [param.id]: e.target.value })} />}
         </div>

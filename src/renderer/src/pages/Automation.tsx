@@ -32,10 +32,10 @@ export default function Automation({ focus, go }: PageProps) {
   }, [filter, revision])
   useEffect(() => {
     const off = on('pipeline-state', () => {
-      clearTimeout(timer.current)
-      timer.current = setTimeout(() => setRevision((n) => n + 1), 150)
+      if (timer.current !== undefined) return
+      timer.current = setTimeout(() => { timer.current = undefined; setRevision((n) => n + 1) }, 150)
     })
-    return () => { off(); clearTimeout(timer.current) }
+    return () => { off(); clearTimeout(timer.current); timer.current = undefined }
   }, [])
   useEffect(() => {
     if (!opened) return

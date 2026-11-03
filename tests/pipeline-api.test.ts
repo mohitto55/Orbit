@@ -13,6 +13,30 @@ const definition = { title: '원본 검토', nodes: [
 ], edges: [{ from: 'in', to: 'print' }, { from: 'print', to: 'out' }, { from: 'in', to: 'print', pin: 'data' as const, fromPort: 'target' }] }
 
 describe('원본 → 실행 → 기록 API', () => {
+  it('완료·취소된 할일은 입력 후보에서 제외하고 선택 후 완료된 입력도 실행 전에 거절한다', async () => {
+    const dir = await tempDir('orbit-open-task-input-')
+    const api = createApi({ send() {}, pickFolder: async () => null, recentFile: path.join(dir, 'recent.json'), onProjectOpened() {} })
+    await api.createProject(path.join(dir, 'project'))
+    try {
+      const tasks = []
+      for (const status of ['대기', '진행', '완료', '취소'] as const) {
+        const task = await api.createTask({ title: status, type: 'research', horizon: '지금' })
+        tasks.push(await api.updateTask(task.id, { status }))
+      }
+      expect((await api.pipelineSources()).filter((s) => s.kind === 'task').map((s) => s.id).sort()).toEqual(tasks.slice(0, 2).map((t) => t.id).sort())
+      const graph = await api.savePipeline(definition)
+      const [run] = await api.runPipelineBatch({ pipelineId: graph.id, values: { target: tasks[0].id } })
+      await api.updateTask(tasks[0].id, { status: '완료' })
+      await expect(api.runPipelineBatch({ pipelineId: graph.id, values: { target: tasks[0].id } })).rejects.toThrow('완료·취소된 할일')
+      await expect(api.runPipelineBatch({ pipelineId: graph.id, selection: { port: 'target', sources: tasks.slice(1, 3).map((t) => ({ kind: 'task', id: t.id })) } })).rejects.toThrow('완료·취소된 할일')
+      expect(api.listPipelineRuns().total).toBe(1)
+      const list = await api.savePipeline({ ...definition, nodes: definition.nodes.map((n) => n.id === 'in' ? { ...n, params: [{ id: 'target', name: 'target', type: 'task[]' }] } : n) })
+      await expect(api.runPipelineBatch({ pipelineId: list.id, values: { target: tasks.slice(1, 3).map((t) => t.id).join('\n') } })).rejects.toThrow('완료·취소된 할일')
+      // 기록은 당시 입력을 그대로 보존하므로 재실행도 그 스냅샷을 사용한다.
+      expect((await api.retryPipeline(run.runId)).status).toBe('done')
+    } finally { api.closeProject() }
+  })
+
   it('배치 실행·원본 필터·동일 입력 재실행·프로젝트별 재시작 복원을 잇는다', async () => {
     const dir = await tempDir('orbit-execution-api-')
     const deps = { send: vi.fn(), pickFolder: async () => null, recentFile: path.join(dir, 'state/recent.json'), onProjectOpened() {} }
