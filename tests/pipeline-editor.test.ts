@@ -22,6 +22,7 @@ let host: HTMLDivElement
 let root: Root
 let saved: Pipeline[]
 let runs: RunState[]
+const listeners = new Map<string, Set<(payload: unknown) => void>>()
 const graph = () => (window as unknown as { __orbitPipe: Core }).__orbitPipe
 
 beforeEach(() => {
@@ -30,6 +31,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   saved = [{ id: 'g', title: '그래프', file: '', nodes: [node('list', 'list', { items: ['하나', '둘'], x: 0, y: 0 })], edges: [] }]
   runs = []
+  listeners.clear()
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -48,13 +50,17 @@ beforeEach(() => {
       }
       throw new Error(`지원하지 않는 API: ${name}`)
     },
-    on: () => () => {}
+    on(channel, callback) {
+      const set = listeners.get(channel) ?? new Set(); set.add(callback); listeners.set(channel, set)
+      return () => { set.delete(callback) }
+    }
   }
 })
 afterEach(async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(550) })
   await act(async () => root.unmount())
   host.remove()
+  listeners.clear()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -72,6 +78,48 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
     field.dispatchEvent(new Event(field instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
   })
 }
+
+describe('저장된 그래프 목록 조회', () => {
+  it('할 일 조회가 끝나기 전에도 저장된 그래프를 보여준다', async () => {
+    const invoke = window.orbit.invoke
+    let finishTasks!: (tasks: []) => void
+    const pendingTasks = new Promise<[]>((resolve) => { finishTasks = resolve })
+    window.orbit.invoke = (name, ...args) => name === 'listTasks' ? pendingTasks : invoke(name, ...args)
+    await mount()
+    try {
+      expect(host.querySelector('[data-pipeline-id="g"]')?.textContent).toContain('그래프')
+      expect(host.querySelector<HTMLInputElement>('.pipe-title')?.value).toBe('그래프')
+    } finally { await act(async () => finishTasks([])) }
+  })
+
+  it('할 일 조회가 실패해도 저장된 그래프를 보여준다', async () => {
+    const invoke = window.orbit.invoke
+    window.orbit.invoke = (name, ...args) => name === 'listTasks' ? Promise.reject(new Error('할 일 읽기 실패')) : invoke(name, ...args)
+    await mount()
+    expect(host.querySelector('[data-pipeline-id="g"]')?.textContent).toContain('그래프')
+  })
+
+  it('파일 변경으로 추가된 그래프·함수를 표시하고 현재 편집 내용은 유지한다', async () => {
+    await mount()
+    await change(host.querySelector<HTMLInputElement>('.pipe-title')!, '편집 중인 제목')
+    saved = [...saved, ...['g2', 'f2'].map((id): Pipeline => ({ id, title: id, file: '', template: id.startsWith('f'), nodes: [], edges: [] }))]
+    await act(async () => { for (const listener of listeners.get('files-changed') ?? []) listener(null) })
+    expect([...host.querySelectorAll('[data-pipeline-id]')].map((e) => e.getAttribute('data-pipeline-id'))).toEqual(['g', 'g2', 'f2'])
+    expect(host.querySelector<HTMLInputElement>('.pipe-title')!.value).toBe('편집 중인 제목')
+    expect(host.querySelector('[data-pipeline-id="g"]')?.classList.contains('on')).toBe(true)
+  })
+
+  it('조회 실패를 빈 화면으로 숨기지 않고 다시 불러올 수 있다', async () => {
+    const invoke = window.orbit.invoke
+    let failed = true
+    window.orbit.invoke = (name, ...args) => name === 'listPipelines' && failed ? Promise.reject(new Error('그래프 파일 읽기 실패')) : invoke(name, ...args)
+    await mount()
+    expect(host.textContent).toContain('그래프 파일 읽기 실패')
+    failed = false
+    await click('다시 불러오기')
+    expect(host.querySelector('[data-pipeline-id="g"]')?.textContent).toContain('그래프')
+  })
+})
 
 describe('함수와 리스트 항목 편집 화면', () => {
   it('그래프·함수를 드래그로 독립 정렬하고 편집 내용과 현재 선택을 유지한다', async () => {

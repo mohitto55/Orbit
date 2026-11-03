@@ -329,6 +329,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
   const [selectedRun, setSelectedRun] = useState('')
   const layout = usePipelineLayout()
   const [list, setList] = useState<Pipeline[] | null>(null)
+  const [listError, setListError] = useState('')
+  const listRequest = useRef(0)
   const [tasks, setTasks] = useState<Task[]>([])
   const [skills, setSkills] = useState<SkillItem[]>([])
   const [editingSkill, setEditingSkill] = useState<SkillItem | 'new' | null>(null)
@@ -347,27 +349,37 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
 
   const toDraft = (p: Pipeline): Draft => ({ id: p.id, title: p.title, template: p.template, nodes: p.nodes, edges: p.edges })
   const reload = async (pick?: string) => {
-    const [l, t, s, sp, ds] = await Promise.all([api.listPipelines(), api.listTasks(), api.listSkills().catch(() => []), api.listSpecs().catch(() => []), api.listDesigns().catch(() => [])])
-    setList(l)
-    setTasks(t)
-    setSkills(s)
-    setSpecs(sp)
-    setDesigns(ds)
-    const p = l.find((x) => x.id === (pick ?? draft?.id)) ?? l[0]
-    if (p && (pick || !draft)) setDraft(toDraft(p))
-    if (!p) setDraft(null)
+    const request = ++listRequest.current
+    setListError('')
+    try {
+      const all = await api.listPipelines()
+      if (request !== listRequest.current) return
+      setList(all)
+      setDraft((current) => {
+        const p = all.find((x) => x.id === (pick ?? current?.id)) ?? all[0]
+        if (!p) return null
+        return !pick && current?.id === p.id ? current : toDraft(p)
+      })
+    } catch (error) {
+      if (request === listRequest.current) setListError(error instanceof Error ? error.message : String(error))
+    }
   }
   useEffect(() => {
-    void reload().catch(errorToast)
-    // 할 일·명세는 다른 화면에서 바뀔 수 있다 (스킬은 데이터 폴더 밖이라 감시하지 않으므로 이때 같이 다시 읽는다)
-    const off = on('files-changed', () => {
-      void api.listTasks().then(setTasks).catch(() => {})
-      void api.listSpecs().then(setSpecs).catch(() => {})
-      void api.listDesigns().then(setDesigns).catch(() => {})
-      void api.listSkills().then(setSkills).catch(() => {})
-    })
-    const offSkills = on('skills-changed', () => { void api.listSkills().then(setSkills).catch(errorToast) })
-    return () => { off(); offSkills() }
+    let alive = true
+    const loadSkills = () => { void api.listSkills().then((items) => { if (alive) setSkills(items) }).catch(errorToast) }
+    const load = () => {
+      // 그래프 목록은 참조 자료의 조회 지연·실패와 관계없이 표시한다.
+      void reload()
+      void api.listTasks().then((items) => { if (alive) setTasks(items) }).catch(errorToast)
+      void api.listSpecs().then((items) => { if (alive) setSpecs(items) }).catch(() => {})
+      void api.listDesigns().then((items) => { if (alive) setDesigns(items) }).catch(() => {})
+      loadSkills()
+    }
+    load()
+    // 외부에서 저장한 그래프도 반영하되 현재 선택과 편집 중인 내용은 유지한다.
+    const off = on('files-changed', load)
+    const offSkills = on('skills-changed', loadSkills)
+    return () => { alive = false; listRequest.current++; off(); offSkills() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -596,13 +608,14 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  if (!list) return null
+  if (!list) return <Empty>{listError ? <><p role="alert">저장된 그래프를 불러오지 못했습니다: {listError}</p><button onClick={() => void reload()}>다시 불러오기</button></> : '저장된 그래프를 불러오는 중…'}</Empty>
   const graphs = list.filter((p) => !p.template)
   const templates = list.filter((p) => p.template)
   const usableTemplates = templates.filter((t) => t.id !== draft?.id)
   return (
     <div className="pipe-layout" style={layout.style} ref={root}>
       <div className="pipe-list">
+        {listError && <div className="small"><p role="alert">그래프 목록을 갱신하지 못했습니다: {listError}</p><button onClick={() => void reload()}>다시 불러오기</button></div>}
         <div className="pipe-list-head">
           작업 그래프
           <button className="ghost" title="새 작업 그래프" onClick={() => create(false)}>
