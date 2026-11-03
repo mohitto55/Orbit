@@ -4,6 +4,8 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 
 export interface ChecklistItem {
+  /** 원문에서 목록 항목이 시작하는 위치 */
+  start: number
   /** 원문에서 [ ] 또는 [x]의 가운데 글자 위치 */
   offset: number
   text: string
@@ -28,6 +30,7 @@ export function readChecklist(body: string): ChecklistItem[] {
       const marker = start === undefined ? null : body.slice(start).match(/^(?:[-+*]|\d+[.)])[ \t]+\[([ xX])\]/)
       if (start !== undefined && marker) {
         items.push({
+          start,
           offset: start + marker[0].length - 2,
           text: node.children.filter((child) => child.type === 'paragraph').map(labelText).join('\n').trim(),
           checked: node.checked

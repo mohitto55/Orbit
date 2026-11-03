@@ -380,6 +380,8 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .md tbody tr:hover { background: var(--sunken); }
 .md td:first-child code, .md td:first-child { white-space: nowrap; }
 .md input[type='checkbox'] { margin-right: 6px; }
+.md .task-list-item { list-style: none; }
+.md input[type='checkbox']:not(:disabled) { cursor: pointer; accent-color: var(--ok); }
 .md .wikilink { border: none; padding: 0 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 550; cursor: pointer; }
 .md .wikilink:hover { text-decoration: underline; text-underline-offset: 3px; }
 .empty-md { color: var(--muted); font-style: italic; }

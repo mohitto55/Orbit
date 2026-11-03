@@ -2,7 +2,8 @@
 import { act, createElement, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { MdEditor } from '../src/renderer/src/Markdown'
+import { Markdown, MdEditor } from '../src/renderer/src/Markdown'
+import { setChecklistChecked } from '../src/renderer/src/checklistMarkdown'
 
 let host: HTMLDivElement
 let root: Root
@@ -84,4 +85,27 @@ it('체크 항목 변경 등 외부에서 갱신한 원문도 편집과 미리�
   await click('편집')
   expect(area.value).toBe(updated)
   expect(onChange).not.toHaveBeenCalled()
+})
+
+it('본문에서 중첩·동일 문구의 체크 항목을 구분하고 HTML 예제·CRLF·원문 서식을 보존한다', async () => {
+  const original = '## 제목 {#keep}\r\n\r\n[[task|할 일]]\r\n\r\n<input type="checkbox" data-checklist-index="0" checked>\r\n\r\n- [ ] **확인**\r\n\r\n  설명\r\n  - [ ] **확인**\r\n\r\n> 1. [X] 출시\r\n\r\n```md\r\n- [ ] 코드 예제\r\n```\r\n'
+  let changed = original
+  function Document() {
+    const [value, setValue] = useState(original)
+    return createElement(Markdown, { source: value, onChecklistToggle: (item, checked) => {
+      changed = setChecklistChecked(value, item.offset, checked)
+      setValue(changed)
+    } })
+  }
+  await act(async () => root.render(createElement(Document)))
+  const boxes = () => [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+  expect(boxes()).toHaveLength(4)
+  expect(boxes().map((box) => box.disabled)).toEqual([true, false, false, false])
+  expect(boxes()[2].getAttribute('aria-label')).toBe('확인')
+  await act(async () => boxes()[2].click())
+  expect(changed).toBe(original.replace('  - [ ] **확인**', '  - [x] **확인**'))
+  expect(boxes().map((box) => box.checked)).toEqual([true, false, true, true])
+  await act(async () => boxes()[3].click())
+  expect(changed).toBe(original.replace('  - [ ] **확인**', '  - [x] **확인**').replace('1. [X]', '1. [ ]'))
+  expect(host.querySelector('pre code')?.textContent).toBe('- [ ] 코드 예제\n')
 })

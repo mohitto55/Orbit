@@ -3,6 +3,8 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
+import type { Nodes } from 'hast'
+import { readChecklist, type ChecklistItem } from './checklistMarkdown'
 
 // md 안의 <br> 등 기본 HTML은 살리고, 스크립트 같은 위험한 요소는 걸러낸다.
 // wiki: (위키링크), term: (Drift 용어 강조) 링크는 앱 내부 이동용으로 허용한다.
@@ -36,26 +38,53 @@ export interface MarkdownProps {
   onTerm?: (domainId: string) => void
   terms?: { title: string; id: string }[]
   className?: string
+  onChecklistToggle?: (item: ChecklistItem, checked: boolean) => void
 }
 
-export function Markdown({ source, onWiki, onTerm, terms, className = '' }: MarkdownProps) {
+export function Markdown({ source, onWiki, onTerm, terms, className = '', onChecklistToggle }: MarkdownProps) {
   if (!source.trim()) return <div className={`md empty-md ${className}`}>(내용 없음)</div>
   return (
     <div className={`md ${className}`}>
-      <MdContent source={source} onWiki={onWiki} onTerm={onTerm} terms={terms} />
+      <MdContent source={source} onWiki={onWiki} onTerm={onTerm} terms={terms} onChecklistToggle={onChecklistToggle} />
     </div>
   )
 }
 
+/** 마크다운이 만든 체크박스만 연결한다. HTML 예제의 input은 읽기 전용으로 둔다. */
+function bindChecklist(items: ChecklistItem[]) {
+  const indexes = new Map(items.map((item, index) => [item.start, index]))
+  return () => (tree: Nodes) => {
+    const visit = (node: Nodes) => {
+      if (node.type === 'element' && node.tagName === 'li') {
+        const index = indexes.get(node.position?.start.offset ?? -1)
+        const first = node.children.find((child) => child.type === 'element')
+        const input = first?.type === 'element' && first.tagName === 'p' ? first.children.find((child) => child.type === 'element') : first
+        if (index !== undefined && input?.type === 'element' && input.tagName === 'input' && input.properties.type === 'checkbox') input.properties['data-checklist-index'] = index
+      }
+      if ('children' in node) node.children.forEach(visit)
+    }
+    visit(tree)
+  }
+}
+
 /** 감싸는 .md 없이 렌더링만 한다. 블록 단위로 나눠 그릴 때 쓴다. */
-export function MdContent({ source, onWiki, onTerm, terms }: Omit<MarkdownProps, 'className'>) {
+export function MdContent({ source, onWiki, onTerm, terms, onChecklistToggle }: Omit<MarkdownProps, 'className'>) {
+  const rendered = prepare(source, terms)
+  const items = onChecklistToggle ? readChecklist(source) : []
+  const renderedItems = onChecklistToggle ? readChecklist(rendered) : []
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, schema]]}
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, schema], ...(onChecklistToggle ? [bindChecklist(items.length === renderedItems.length ? renderedItems : [])] : [])]}
       urlTransform={(url) => (INTERNAL.test(url) ? url : defaultUrlTransform(url))}
       components={{
-        input: ({ node: _node, checked, ...props }) => <input {...props} checked={checked ?? false} readOnly />,
+        input: ({ node, checked, ...props }) => {
+          const index = node?.properties['data-checklist-index']
+          const item = typeof index === 'number' ? items[index] : undefined
+          return <input {...props} checked={checked ?? false} disabled={item ? false : props.disabled} readOnly={!item}
+            aria-label={item?.text || props['aria-label']}
+            onChange={item ? (event) => onChecklistToggle?.(item, event.target.checked) : undefined} />
+        },
         a: ({ href = '', children }) => {
           if (href.startsWith('wiki:')) {
             const target = decodeURIComponent(href.slice(5))
@@ -81,7 +110,7 @@ export function MdContent({ source, onWiki, onTerm, terms }: Omit<MarkdownProps,
         )
       }}
     >
-      {prepare(source, terms)}
+      {rendered}
     </ReactMarkdown>
   )
 }

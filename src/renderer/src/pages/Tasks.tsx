@@ -6,7 +6,7 @@ import { HORIZONS, PRIORITIES, TASK_STATUSES, TASK_TYPES } from '../types'
 import { Badge, Empty, Modal, errorToast, offerUndo, toast, useLoad } from '../ui'
 import { TaskChecklist } from '../TaskChecklist'
 import { setChecklistChecked, type ChecklistItem } from '../checklistMarkdown'
-import { MdEditor } from '../Markdown'
+import { Markdown } from '../Markdown'
 import { RunButton, SourceRuns } from '../Automation'
 
 const PRIO_RANK: Record<string, number> = { 높음: 0, 보통: 1, 낮음: 2 }
@@ -348,6 +348,8 @@ function TaskEditor({
     links: task?.links.join(', ') ?? ''
   })
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
+  const [editingBody, setEditingBody] = useState(false)
+  const bodyArea = useRef<HTMLTextAreaElement>(null)
   const badRange = !!f.start && !!f.end && f.start > f.end
   const canSave = !!f.title.trim() && !!f.type && !!f.horizon && !badRange
 
@@ -443,10 +445,23 @@ function TaskEditor({
         <label>연결 (쉼표로 구분, 예: 도메인·기능 ID)</label>
         <input value={f.links} onChange={(e) => set('links', e.target.value)} />
       </div>
-      <TaskChecklist body={f.body} onToggle={(item, checked) => setF((current) => ({ ...current, body: setChecklistChecked(current.body, item.offset, checked) }))} />
       <div className="field">
-        <MdEditor label="세부 내용" value={f.body} onChange={(value) => set('body', value)} />
-        <span className="small muted">완료 조건은 - [ ] 항목으로 적으면 위에서 체크할 수 있습니다. 편집 내용은 저장을 누르면 반영됩니다.</span>
+        <div className="md-editor">
+          <div className="row between md-editor-toolbar">
+            <span className="small muted">세부 내용</span>
+            <button type="button" onClick={() => {
+              setEditingBody(!editingBody)
+              if (!editingBody) requestAnimationFrame(() => bodyArea.current?.focus({ preventScroll: true }))
+            }}>{editingBody ? '편집 마치기' : '편집'}</button>
+          </div>
+          <textarea ref={bodyArea} className="md-source" aria-label="세부 내용 Markdown 원문" value={f.body}
+            onChange={(event) => set('body', event.target.value)} rows={16} spellCheck={false} autoCapitalize="off" autoCorrect="off"
+            placeholder="마크다운으로 작성하세요. 완료 조건은 - [ ] 항목으로 추가합니다."
+            style={{ display: editingBody ? undefined : 'none' }} />
+          {!editingBody && <div className="md-scroll"><Markdown source={f.body}
+            onChecklistToggle={(item, checked) => setF((current) => ({ ...current, body: setChecklistChecked(current.body, item.offset, checked) }))} /></div>}
+        </div>
+        <span className="small muted">변경 내용과 완료 조건의 체크는 저장을 누르면 반영됩니다.</span>
       </div>
       <div className="row between">
         {task ? (
