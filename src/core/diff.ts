@@ -1,6 +1,7 @@
 import { diffLines } from 'diff'
 import type { Ctx } from './workspace'
 import { readSnapshot, type ChangeSet } from './changes'
+import { parseSpecTable, type Feature } from './spec'
 
 export type LineType = 'add' | 'del' | 'ctx'
 
@@ -73,6 +74,70 @@ export interface ChangeDiff {
   file: string
   before: string
   after: string
+}
+
+export type Difference = 'added' | 'removed' | 'modified' | 'same'
+export interface TextDifference { id: string; label: string; before?: string; after?: string; kind: Difference }
+export interface FeatureDifference {
+  id: string
+  name: string
+  icon?: string
+  kind: Difference
+  fields: TextDifference[]
+  acs: TextDifference[]
+  acOrder?: { before: string[]; after: string[] }
+}
+export interface SpecDifference {
+  features: FeatureDifference[]
+  order?: { before: string[]; after: string[] }
+  outside: LineDiff
+}
+
+function difference(before: string | undefined, after: string | undefined): Difference {
+  return before === after ? 'same' : before === undefined ? 'added' : after === undefined ? 'removed' : 'modified'
+}
+
+function orderDifference(before: string[], after: string[]) {
+  // 추가·삭제 때문에 밀린 위치는 이동으로 표시하지 않는다.
+  const oldCommon = before.filter((id) => after.includes(id)), newCommon = after.filter((id) => before.includes(id))
+  return oldCommon.join('\n') === newCommon.join('\n') ? undefined : { before: oldCommon, after: newCommon }
+}
+
+/** 마크다운 표의 한 줄 대신 기능 ID·AC ID로 맞춰 읽을 수 있는 변경 항목을 만든다. */
+export function specDifference(before: string, after: string): SpecDifference | undefined {
+  const oldTable = parseSpecTable(before), newTable = parseSpecTable(after)
+  if (oldTable.start < 0 && newTable.start < 0) return undefined
+  // ID가 겹치는 손상된 표는 원문 비교로 남겨 누락을 피한다.
+  for (const table of [oldTable, newTable]) {
+    if (new Set(table.features.map((f) => f.id)).size !== table.features.length || table.features.some((f) => new Set(f.acs.map((a) => a.id)).size !== f.acs.length)) return undefined
+  }
+  const oldById = new Map(oldTable.features.map((f) => [f.id, f])), newById = new Map(newTable.features.map((f) => [f.id, f]))
+  const ids = [...newById.keys(), ...[...oldById.keys()].filter((id) => !newById.has(id))]
+  const fields: { key: keyof Pick<Feature, 'name' | 'purpose' | 'status' | 'icon'>; label: string }[] = [
+    { key: 'name', label: '기능' }, { key: 'purpose', label: '목적' }, { key: 'status', label: '상태' }, { key: 'icon', label: '아이콘' }
+  ]
+  const features = ids.map((id): FeatureDifference => {
+    const old = oldById.get(id), next = newById.get(id)
+    const changedFields = fields.map(({ key, label }): TextDifference => {
+      const before = old?.[key], after = next?.[key]
+      return { id: key, label, before, after, kind: difference(before, after) }
+    }).filter((f) => f.kind !== 'same')
+    const oldAcs = new Map(old?.acs.map((a) => [a.id, a]) ?? []), newAcs = new Map(next?.acs.map((a) => [a.id, a]) ?? [])
+    const acIds = [...newAcs.keys(), ...[...oldAcs.keys()].filter((id) => !newAcs.has(id))]
+    const acs = acIds.map((id): TextDifference => {
+      const before = oldAcs.get(id), after = newAcs.get(id)
+      return { id, label: `AC${(after ?? before)!.num}`, before: before?.text, after: after?.text, kind: difference(before?.text, after?.text) }
+    })
+    const acOrder = orderDifference([...oldAcs.keys()], [...newAcs.keys()])
+    const kind = !old ? 'added' : !next ? 'removed' : changedFields.length || acOrder || acs.some((a) => a.kind !== 'same') ? 'modified' : 'same'
+    return { id, name: (next ?? old)!.name, icon: (next ?? old)!.icon, kind, fields: changedFields, acs, acOrder }
+  })
+  const outside = (text: string, table: ReturnType<typeof parseSpecTable>) => table.start < 0 ? text : text.split('\n').filter((_, index) => index < table.start || index >= table.end).join('\n')
+  return {
+    features,
+    order: orderDifference([...oldById.keys()], [...newById.keys()]),
+    outside: lineDiff(outside(before, oldTable), outside(after, newTable))
+  }
 }
 
 /** 변경 전·후 원문. 저장할 때 남긴 스냅샷만 쓴다. */

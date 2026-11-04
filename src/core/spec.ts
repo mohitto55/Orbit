@@ -3,6 +3,7 @@ import type { Ctx } from './workspace'
 import { exists, readMd, writeMd, nowIso } from './md'
 import { listDomains, descendants, type Domain } from './domain'
 import { readRaw, recordChange, requireChange, majorChangesAfter, type ChangeInput, type ChangeSet } from './changes'
+import { normalizeEmoji } from './emoji'
 
 export type FeatureStatus = '초안' | '활성' | '폐기'
 
@@ -14,6 +15,7 @@ export interface AC {
 
 export interface Feature {
   id: string
+  icon?: string
   name: string
   purpose: string
   acs: AC[]
@@ -96,8 +98,10 @@ export function parseSpecTable(content: string): { features: Feature[]; start: n
     const c = splitRow(lines[i])
     const id = c[col('ID')]
     if (!id) continue
+    const icon = c[col('아이콘')]?.trim()
     features.push({
       id,
+      ...(icon ? { icon } : {}),
       name: c[col('기능')] ?? '',
       purpose: (c[col('목적')] ?? '').replace(/<br\s*\/?>/gi, '\n'),
       acs: parseAcs(id, c[col('수용 기준')] ?? ''),
@@ -108,10 +112,12 @@ export function parseSpecTable(content: string): { features: Feature[]; start: n
 }
 
 export function renderSpecTable(features: Feature[]): string[] {
-  const rows = [`| ${HEADER.join(' | ')} |`, `|${HEADER.map(() => '---').join('|')}|`]
+  const withIcons = features.some((f) => f.icon)
+  const header = withIcons ? [HEADER[0], '아이콘', ...HEADER.slice(1)] : HEADER
+  const rows = [`| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`]
   for (const f of features) {
     const acs = f.acs.map((a) => `AC${a.num}: ${a.text}`).join('<br>')
-    rows.push(`| ${cell(f.id)} | ${cell(f.name)} | ${cell(f.purpose)} | ${cell(acs)} | ${f.status} |`)
+    rows.push(`| ${cell(f.id)} | ${withIcons ? `${cell(f.icon ?? '')} | ` : ''}${cell(f.name)} | ${cell(f.purpose)} | ${cell(acs)} | ${f.status} |`)
   }
   return rows
 }
@@ -218,13 +224,14 @@ async function writeSpecFeatures(ctx: Ctx, spec: Spec, features: Feature[], vers
 }
 
 function sameFeature(a: Feature, b: Feature): boolean {
+  const bAcs = new Map(b.acs.map((ac) => [ac.num, ac.text]))
   return (
     a.name === b.name &&
     a.purpose === b.purpose &&
     a.status === b.status &&
     (a.uses ?? []).join(',') === (b.uses ?? []).join(',') &&
     a.acs.length === b.acs.length &&
-    a.acs.every((x, i) => x.num === b.acs[i].num && x.text === b.acs[i].text)
+    a.acs.every((x) => bAcs.get(x.num) === x.text)
   )
 }
 
@@ -258,6 +265,7 @@ export async function saveFeatures(
   const spec = await getSpec(ctx, specId)
   const acSeq = { ...spec.acSeq }
   const features: Feature[] = input.map((f) => {
+    const icon = normalizeEmoji(f.icon)
     let seq = Math.max(acSeq[f.id] ?? 0, ...f.acs.map((a) => a.num || 0), 0)
     const acs = f.acs
       .filter((a) => a.text.trim())
@@ -267,7 +275,7 @@ export async function saveFeatures(
       })
     acSeq[f.id] = Math.max(seq, ...acs.map((a) => a.num), 0)
     const uses = spec.role === 'feature' ? [...new Set((f.uses ?? []).map((u) => u.trim()).filter(Boolean))] : []
-    return { id: f.id, name: f.name.trim(), purpose: f.purpose.trim(), acs, status: f.status, ...(uses.length ? { uses } : {}) }
+    return { id: f.id, ...(icon ? { icon } : {}), name: f.name.trim(), purpose: f.purpose.trim(), acs, status: f.status, ...(uses.length ? { uses } : {}) }
   })
   // 루트의 기능은 자기 아래 하위 도메인의 규칙만 쓸 수 있다
   const { ruleSpecs, owner } = await rulesUnder(ctx, spec)

@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { api } from '../api'
 import { Empty, useLoad } from '../ui'
 import type { LineDiff } from '../../../core/diff'
+import { SpecDiff } from '../SpecDiff'
 
-/** GitHub식 줄 단위 비교: 줄 번호, 추가(+)·삭제(-) 색, 바뀌지 않은 부분 접기. */
+/** 명세는 기능·AC별로, 일반 문서는 줄 단위로 비교한다. */
 export default function DiffView({ changeId }: { changeId: string }) {
   const [full, setFull] = useState(false)
+  const [raw, setRaw] = useState(false)
   const [data] = useLoad(() => api.changeDiff(changeId, full), [changeId, full])
   if (!data) return null
   if ('unavailable' in data) return <Empty>비교할 수 없습니다: {data.unavailable}</Empty>
@@ -14,10 +16,14 @@ export default function DiffView({ changeId }: { changeId: string }) {
     <div className="diff">
       <div className="diff-head">
         <span className="mono">{data.file}</span>
-        <span className="diff-stat">
+        {(!data.spec || raw) && <span className="diff-stat">
           <span className="plus">+{diff.added}</span> <span className="minus">−{diff.removed}</span>
-        </span>
+        </span>}
         <span className="grow" />
+        {data.spec && <div className="seg small">
+          <button className={!raw ? 'on' : ''} onClick={() => setRaw(false)}>항목별 비교</button>
+          <button className={raw ? 'on' : ''} onClick={() => setRaw(true)}>원문 비교</button>
+        </div>}
         <div className="seg small">
           <button className={!full ? 'on' : ''} onClick={() => setFull(false)}>
             바뀐 곳만
@@ -27,7 +33,13 @@ export default function DiffView({ changeId }: { changeId: string }) {
           </button>
         </div>
       </div>
-      <DiffTable diff={diff} onExpand={() => setFull(true)} />
+      {data.spec && !raw ? <>
+        <SpecDiff diff={data.spec} full={full} />
+        {!!(data.spec.outside.added + data.spec.outside.removed) && <details className="spec-diff-outside">
+          <summary>표 밖의 변경 · 본문·문서 정보 (+{data.spec.outside.added} −{data.spec.outside.removed})</summary>
+          <DiffTable diff={data.spec.outside} onExpand={() => { setRaw(true); setFull(true) }} />
+        </details>}
+      </> : <DiffTable diff={diff} onExpand={() => setFull(true)} />}
     </div>
   )
 }

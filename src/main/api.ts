@@ -388,7 +388,7 @@ export function createApi(deps: ApiDeps) {
       if (!change) throw new Error(`변경 기록을 찾을 수 없습니다: ${changeId}`)
       const r = await df.changeDiff(c, change)
       if ('unavailable' in r) return { change, unavailable: r.unavailable }
-      return { change, file: r.file, diff: df.lineDiff(r.before, r.after, full ? -1 : 3) }
+      return { change, file: r.file, diff: df.lineDiff(r.before, r.after, full ? -1 : 3), spec: df.specDifference(r.before, r.after) }
     },
     /** 문서 id → 이름·종류·현재 버전·기준 (변경 검토에서 원인 → 영향을 보여줄 때 씀) */
     async docIndex() {

@@ -1,10 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { api } from '../api'
 import type { Domain, Feature, FeatureStatus, Spec } from '../types'
 import { AC_LABEL, Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import { History } from './Domains'
 import { RunButton, SourceRuns } from '../Automation'
 import { matchesSearch } from '../SourcePicker'
+import { EmojiPicker } from '../EmojiPicker'
+
+type OrderItem = { featureId: string; acId?: string }
+type DropTarget = OrderItem & { position: 'before' | 'after' }
+const ORDER_DRAG_TYPE = 'application/x-orbit-spec-order'
+
+function moveItem<T extends { id: string }>(items: T[], id: string, targetId: string, position: DropTarget['position']): T[] {
+  const item = items.find((entry) => entry.id === id)
+  if (!item || id === targetId || !items.some((entry) => entry.id === targetId)) return items
+  const next = items.filter((entry) => entry.id !== id)
+  next.splice(next.findIndex((entry) => entry.id === targetId) + (position === 'after' ? 1 : 0), 0, item)
+  return next
+}
 
 export default function SpecTable({ domain, refreshKey, onChanged }: { domain: Domain; refreshKey: number; onChanged: () => void }) {
   const [specs, reload] = useLoad(() => api.listSpecs(), [refreshKey])
@@ -18,9 +31,15 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   const [showHistory, setShowHistory] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [query, setQuery] = useState('')
+  const dragged = useRef<(OrderItem & { specId: string }) | null>(null)
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
+  const nextDraftAc = useRef(0)
+  const [iconFor, setIconFor] = useState<string | null>(null)
 
   useEffect(() => {
     if (spec) setRows(spec.features.map((f) => ({ ...f, acs: f.acs.map((a) => ({ ...a })) })))
+    dragged.current = null
+    setDropTarget(null)
   }, [spec?.id, spec?.version, spec?.content])
 
   if (!specs) return null
@@ -44,6 +63,60 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   const dirty = JSON.stringify(rows) !== JSON.stringify(spec.features)
   const visible = rows.map((f, i) => ({ f, i })).filter(({ f }) => matchesSearch(query, f.id, f.name, f.purpose, ...f.acs.map((a) => `${a.id} ${a.text}`), ...(f.uses ?? [])))
   const update = (i: number, patch: Partial<Feature>) => setRows((r) => r.map((f, j) => (j === i ? { ...f, ...patch } : f)))
+
+  const move = (source: OrderItem, target: DropTarget) => {
+    if (source.acId && target.acId && source.featureId === target.featureId) {
+      setRows((all) => all.map((f) => f.id === source.featureId ? { ...f, acs: moveItem(f.acs, source.acId!, target.acId!, target.position) } : f))
+    } else if (!source.acId && !target.acId) {
+      setRows((all) => moveItem(all, source.featureId, target.featureId, target.position))
+    }
+  }
+  const finishDrag = () => { dragged.current = null; setDropTarget(null) }
+  const dropAt = (event: DragEvent<HTMLElement>, target: OrderItem): DropTarget | null => {
+    const source = dragged.current
+    if (!source || source.specId !== spec.id || (source.acId
+      ? !target.acId || source.featureId !== target.featureId || source.acId === target.acId
+      : !!target.acId || source.featureId === target.featureId)) return null
+    const rect = event.currentTarget.getBoundingClientRect()
+    return { ...target, position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after' }
+  }
+  const dropProps = (item: OrderItem) => ({
+    onDragOver: (event: DragEvent<HTMLElement>) => {
+      const target = dropAt(event, item)
+      if (!target) return
+      event.preventDefault(); event.stopPropagation()
+      event.dataTransfer.dropEffect = 'move'
+      setDropTarget(target)
+    },
+    onDragLeave: (event: DragEvent<HTMLElement>) => {
+      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropTarget(null)
+    },
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      const source = dragged.current, target = dropAt(event, item)
+      if (!source || !target) return
+      event.preventDefault(); event.stopPropagation()
+      if (event.dataTransfer.getData(ORDER_DRAG_TYPE) === spec.id) move(source, target)
+      finishDrag()
+    }
+  })
+  const handleProps = (item: OrderItem) => ({
+    draggable: true,
+    onDragStart: (event: DragEvent<HTMLButtonElement>) => {
+      event.stopPropagation()
+      dragged.current = { ...item, specId: spec.id }
+      event.dataTransfer.setData(ORDER_DRAG_TYPE, spec.id)
+      event.dataTransfer.effectAllowed = 'move'
+    },
+    onDragEnd: finishDrag,
+    onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+      event.preventDefault()
+      const items = item.acId ? rows.find((f) => f.id === item.featureId)?.acs ?? [] : visible.map(({ f }) => f)
+      const up = event.key === 'ArrowUp', target = items[items.findIndex((entry) => entry.id === (item.acId ?? item.featureId)) + (up ? -1 : 1)]
+      if (target) move(item, { featureId: item.acId ? item.featureId : target.id, acId: item.acId ? target.id : undefined, position: up ? 'before' : 'after' })
+    }
+  })
+  const dropClass = (item: OrderItem) => dropTarget?.featureId === item.featureId && dropTarget.acId === item.acId ? ` spec-drop-${dropTarget.position}` : ''
 
   const save = async () => {
     try {
@@ -94,6 +167,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
   }
   const showUses = spec.role === 'feature' && ruleSpecs.length > 0
   const noun = spec.role === 'rule' ? '규칙' : '기능'
+  const iconFeature = rows.find((f) => f.id === iconFor)
 
   return (
     <div>
@@ -139,6 +213,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
           <div className="row">
             <input type="search" aria-label="명세 내 기능 검색" placeholder="기능명·ID·목적·수용 기준 검색" value={query} onChange={(e) => setQuery(e.target.value)} />
             <span className="small muted" role="status">{visible.length} / {rows.length}개</span>
+            <span className="small muted">⠿ 손잡이를 끌어 순서 변경 · 표 저장으로 적용</span>
           </div>
           <table className="table spec">
             <thead>
@@ -157,18 +232,24 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
               {visible.map(({ f, i }) => {
                 const design = ownDesigns.find((d) => d.basedOn.some((b) => b.feature === f.id))
                 return (
-                  <tr key={f.id} className={f.status === '폐기' ? 'dim' : ''}>
+                  <tr key={f.id} data-feature-id={f.id} className={`${f.status === '폐기' ? 'dim' : ''}${dropClass({ featureId: f.id })}`} {...dropProps({ featureId: f.id })}>
                     <td><input type="checkbox" aria-label={`${f.name} 실행 대상 선택`} checked={selected.includes(f.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, f.id] : selected.filter((id) => id !== f.id))} /></td>
-                    <td className="mono small">{f.id}</td>
+                    <td className="mono small"><div className="spec-row-id">
+                      <button type="button" className="spec-drag-handle" aria-label={`${f.id} 순서 변경`} title="끌어서 기능 순서 변경 · Alt+↑/↓" {...handleProps({ featureId: f.id })}>⠿</button>
+                      <span>{f.id}</span>
+                    </div></td>
                     <td>
-                      {/* 긴 이름도 다 보이게 줄바꿈해서 보여준다. 이름은 한 줄이므로 Enter·줄바꿈은 넣지 않는다 */}
-                      <textarea
-                        rows={1}
-                        className="autogrow"
-                        value={f.name}
-                        onChange={(e) => update(i, { name: e.target.value.replace(/\n/g, ' ') })}
-                        onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
-                      />
+                      <div className="spec-feature-name">
+                        <button type="button" className={`spec-feature-icon${f.icon ? '' : ' is-empty'}`} aria-label={`${f.name} 아이콘 설정`} title="이모지 아이콘 설정" onClick={() => setIconFor(f.id)}>{f.icon || '＋'}</button>
+                        {/* 긴 이름도 다 보이게 줄바꿈해서 보여준다. 이름은 한 줄이므로 Enter·줄바꿈은 넣지 않는다 */}
+                        <textarea
+                          rows={1}
+                          className="autogrow"
+                          value={f.name}
+                          onChange={(e) => update(i, { name: e.target.value.replace(/\n/g, ' ') })}
+                          onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
+                        />
+                      </div>
                     </td>
                     <td>
                       <textarea rows={1} className="autogrow" value={f.purpose} onChange={(e) => update(i, { purpose: e.target.value })} />
@@ -177,7 +258,8 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
                       {f.acs.map((a, k) => {
                         const st = a.num > 0 ? status?.acStatus[a.id] : undefined
                         return (
-                          <div key={k} className="ac">
+                          <div key={a.id} data-ac-id={a.id} className={`ac${dropClass({ featureId: f.id, acId: a.id })}`} {...dropProps({ featureId: f.id, acId: a.id })}>
+                            <button type="button" className="spec-drag-handle" aria-label={`${f.id} AC${a.num || '+'} 순서 변경`} title="끌어서 수용 기준 순서 변경 · Alt+↑/↓" {...handleProps({ featureId: f.id, acId: a.id })}>⠿</button>
                             <span className="mono small">AC{a.num || '+'}</span>
                             <textarea
                               rows={1}
@@ -192,7 +274,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
                           </div>
                         )
                       })}
-                      <button className="small ghost" onClick={() => update(i, { acs: [...f.acs, { id: '', num: 0, text: '' }] })}>
+                      <button className="small ghost" onClick={() => update(i, { acs: [...f.acs, { id: `draft-ac-${++nextDraftAc.current}`, num: 0, text: '' }] })}>
                         + AC
                       </button>
                     </td>
@@ -259,7 +341,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
               : showUses
                 ? '기능 명세: 하위 도메인의 규칙을 조정해 이루는 사용자 기능. 쓰는 규칙이 크게 바뀌면 이 기능에 확인 항목이 생깁니다. '
                 : ''}
-            초안 행은 기록 없이 고칠 수 있습니다. 활성 행을 고치면 변경 크기와 요약을 남겨야 하고, 큰 변경이면 그 기능의 설계와 테스트에 확인표시가 뜹니다.</p>
+            초안 행과 순서·아이콘은 기록 없이 고칠 수 있습니다. 활성 행의 내용을 고치면 변경 크기와 요약을 남겨야 하고, 큰 변경이면 그 기능의 설계와 테스트에 확인표시가 뜹니다.</p>
         </>
       )}
       {picking !== null && rows[picking] && (
@@ -274,6 +356,7 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
           }}
         />
       )}
+      {iconFeature && <EmojiPicker key={iconFeature.id} title={`${iconFeature.name} 아이콘`} value={iconFeature.icon} onClose={() => setIconFor(null)} onPick={(icon) => setRows((all) => all.map((f) => f.id === iconFeature.id ? { ...f, icon } : f))} />}
     </div>
   )
 }

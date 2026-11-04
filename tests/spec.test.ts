@@ -54,6 +54,41 @@ describe('Spec', () => {
     expect(s.features[0].acs.map((a) => a.num)).toEqual([1, 3])
   })
 
+  it('[SP-F02-AC5] 이모지 아이콘을 표에 저장·제거하고 복합 이모지와 기존 표를 보존한다', async () => {
+    const { ctx, spec } = await setup()
+    let s = await addFeature(ctx, spec.id, { name: '기능' })
+    s = (await saveFeatures(ctx, spec.id, [{ ...s.features[0], status: '활성', acs: [{ id: '', num: 0, text: '조건' }] }])).spec
+    for (const icon of ['👩🏽‍💻', '🇰🇷', '1️⃣', '❤️']) {
+      const result = await saveFeatures(ctx, spec.id, [{ ...s.features[0], icon }])
+      expect(result.change).toBeNull()
+      expect((await getSpec(ctx, spec.id)).features[0].icon).toBe(icon)
+    }
+    await expect(saveFeatures(ctx, spec.id, [{ ...s.features[0], icon: '✅⭐' }])).rejects.toThrow('이모지 한 개')
+    await saveFeatures(ctx, spec.id, [{ ...s.features[0], icon: '' }])
+    const cleared = await getSpec(ctx, spec.id)
+    expect(cleared.features[0].icon).toBeUndefined()
+    expect(cleared.content).not.toContain('| 아이콘 |')
+    expect(cleared.version).toBe(s.version)
+  })
+
+  it('[SP-F02-AC4] [SP-F03-AC3] 활성 기능·AC 순서만 바꾸면 ID·번호를 유지해 저장하고 변경 기록을 만들지 않는다', async () => {
+    const { ctx, spec } = await setup()
+    await addFeature(ctx, spec.id, { name: '첫 기능' })
+    let s = await addFeature(ctx, spec.id, { name: '둘째 기능' })
+    s = (await saveFeatures(ctx, spec.id, s.features.map((f) => ({ ...f, status: '활성', acs: [1, 2, 3].map((n) => ({ id: '', num: 0, text: `조건 ${n}` })) })))).spec
+    const order = [s.features[1], { ...s.features[0], acs: [s.features[0].acs[2], s.features[0].acs[0], s.features[0].acs[1]] }]
+    const result = await saveFeatures(ctx, spec.id, order)
+    expect(result.change).toBeNull()
+    expect(result.spec.version).toBe(s.version)
+    expect((await getSpec(ctx, spec.id)).features).toEqual(order)
+    expect(await listChanges(ctx)).toHaveLength(0)
+    const changed = order.map((f) => ({ ...f, acs: f.acs.map((a) => ({ ...a })) }))
+    changed[1].acs[0].text = '실제로 바꾼 조건'
+    await expect(saveFeatures(ctx, spec.id, changed)).rejects.toThrow(/요약/)
+    const recorded = await saveFeatures(ctx, spec.id, changed, { size: 'major', summary: '조건 변경' })
+    expect(recorded.change?.changed).toEqual(['TA-F01', 'TA-F01-AC3'])
+  })
+
   it('[SP-F04-AC1] 활성 행을 고치면 변경 크기와 요약을 입력해야 한다', async () => {
     const { ctx, spec } = await setup()
     let s = await addFeature(ctx, spec.id, { name: 'x' })
