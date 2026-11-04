@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { api } from './api'
 import { RunDrawer } from './Automation'
 import { MdEditor } from './Markdown'
-import { toast } from './ui'
+import { errorToast, toast } from './ui'
 
 type Skill = Awaited<ReturnType<typeof api.listSkills>>[number]
 
@@ -14,7 +14,11 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const saving = useRef(false)
   const dirty = name !== (skill?.name ?? '') || scope !== (skill?.scope ?? 'project') || description !== (skill?.description ?? '') || body !== (skill?.body ?? '')
-  const close = () => { if (!saving.current && (!dirty || confirm('저장하지 않은 스킬 편집을 닫을까요?'))) onClose() }
+  const close = async () => {
+    if (saving.current) return
+    try { if (!dirty || await api.confirmAction('저장하지 않은 스킬 편집을 닫을까요?')) onClose() }
+    catch (e) { errorToast(e) }
+  }
   const save = async (addNode: boolean) => {
     if (saving.current) return
     saving.current = true; setBusy(true); setError('')

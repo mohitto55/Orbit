@@ -456,10 +456,11 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     }
   }
   const remove = async () => {
-    if (!draft || !confirm(`"${draft.title}"을(를) 지울까요?`)) return
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    dirty.current = false
+    if (!draft) return
     try {
+      if (!await api.confirmAction(`"${draft.title}"을(를) 지울까요?`)) return
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      dirty.current = false
       await api.deletePipeline(draft.id)
       setDraft(null)
       await reload()

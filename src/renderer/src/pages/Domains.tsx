@@ -459,8 +459,8 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
     }
   }
   const remove = async () => {
-    if (!confirm(`${domain.title} 도메인을 삭제할까요? 폴더가 지워집니다.`)) return
     try {
+      if (!await api.confirmAction(`${domain.title} 도메인을 삭제할까요? 폴더가 지워집니다.`)) return
       await api.deleteDomain(domain.id)
       toast('삭제했습니다')
       onSaved()

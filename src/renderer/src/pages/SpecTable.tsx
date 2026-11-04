@@ -65,8 +65,8 @@ export default function SpecTable({ domain, refreshKey, onChanged }: { domain: D
 
   const add = async () => {
     if (!newName.trim()) return
-    if (dirty && !confirm('저장하지 않은 수정이 사라집니다. 계속할까요?')) return
     try {
+      if (dirty && !await api.confirmAction('저장하지 않은 수정이 사라집니다. 계속할까요?')) return
       await api.addFeature(spec.id, { name: newName })
       setNewName('')
       reload()

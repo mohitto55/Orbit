@@ -80,6 +80,28 @@ async function change(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
 }
 
 describe('저장된 그래프 목록 조회', () => {
+  it('삭제 확인 응답 전과 취소 후에는 그래프를 유지하고 확인한 뒤에만 삭제한다', async () => {
+    const invoke = window.orbit.invoke, deleted = vi.fn()
+    let answer!: (value: boolean) => void
+    window.orbit.invoke = async (name, ...args) => {
+      if (name === 'confirmAction') return new Promise<boolean>((resolve) => { answer = resolve })
+      if (name === 'deletePipeline') { deleted(args[0]); saved = saved.filter((graph) => graph.id !== args[0]); return }
+      return invoke(name, ...args)
+    }
+    await mount()
+    await click('삭제')
+    expect(deleted).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-pipeline-id="g"]')).not.toBeNull()
+    await act(async () => answer(false))
+    expect(deleted).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-pipeline-id="g"]')).not.toBeNull()
+    await click('삭제')
+    await act(async () => answer(true))
+    expect(deleted).toHaveBeenCalledOnce()
+    expect(deleted).toHaveBeenCalledWith('g')
+    expect(host.querySelector('[data-pipeline-id="g"]')).toBeNull()
+  })
+
   it('할 일 조회가 끝나기 전에도 저장된 그래프를 보여준다', async () => {
     const invoke = window.orbit.invoke
     let finishTasks!: (tasks: []) => void

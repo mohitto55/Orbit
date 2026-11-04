@@ -19,7 +19,7 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
       try { onOpen(await api.openProject(target)) }
       catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        if (msg.includes('찾을 수 없습니다') && confirm(`${target}\n\nOrbit 프로젝트가 아닙니다. 이 폴더를 새 프로젝트로 만들까요?`)) {
+        if (msg.includes('찾을 수 없습니다') && await api.confirmAction(`${target}\n\nOrbit 프로젝트가 아닙니다. 이 폴더를 새 프로젝트로 만들까요?`)) {
           onOpen(await api.createProject(target))
         } else throw e
       }

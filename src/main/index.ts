@@ -6,6 +6,7 @@ import { createApi } from './api'
 import { createAiCheckApi } from './aiCheckApi'
 import { createUpdater } from './updater'
 import { createTheme } from './theme'
+import { createDialogApi } from './dialogs'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 
@@ -71,8 +72,9 @@ const aiCheckApi = createAiCheckApi({
 const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion(), beforeInstall: cleanup })
 
 const theme = createTheme({ userData: app.getPath('userData') })
+const dialogs = createDialogApi(() => win)
 
-for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api, ...theme.api })) {
+for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api, ...theme.api, ...dialogs })) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 
