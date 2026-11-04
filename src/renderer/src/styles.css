@@ -404,6 +404,38 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .md-editor { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 8px 0; }
 .md-scroll { overflow: auto; padding: 24px 30px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .md-editor > .md-scroll { flex: 1; }
+.live-markdown { margin: 8px 0; }
+.live-markdown > label { display: block; margin-bottom: 8px; }
+.live-markdown-host { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.live-markdown-host:focus-within { border-color: var(--accent); }
+.live-markdown .cm-editor { color: var(--text); background: var(--panel); font-family: var(--font); }
+.live-markdown .cm-editor.cm-focused { outline: none; }
+.live-markdown .cm-scroller { font: inherit; font-size: 14.5px; line-height: 1.75; max-height: 46vh; min-height: 240px; overflow: auto; }
+.live-markdown .cm-content { padding: 18px 22px; caret-color: var(--text); overflow-wrap: anywhere; }
+.live-markdown .cm-line { padding: 0; }
+.live-markdown .cm-placeholder { color: var(--muted); }
+.live-markdown .cm-md-heading { font-weight: 700; padding: 4px 0; }
+.live-markdown .cm-md-h1 { font-size: 24px; }
+.live-markdown .cm-md-h2 { font-size: 19px; border-bottom: 1px solid var(--line-soft); }
+.live-markdown .cm-md-h3 { font-size: 16px; }
+.live-markdown .cm-md-h4, .live-markdown .cm-md-h5, .live-markdown .cm-md-h6 { font-size: 14.5px; }
+.live-markdown .cm-md-strong { font-weight: 700; }
+.live-markdown .cm-md-em { font-style: italic; }
+.live-markdown .cm-md-strike, .live-markdown .cm-md-checked { text-decoration: line-through; color: var(--muted); }
+.live-markdown .cm-md-inline-code { background: var(--line-soft); border-radius: 4px; font-family: var(--mono); font-size: 13px; }
+.live-markdown .cm-md-code, .live-markdown .cm-md-table-source { background: var(--sunken); font-family: var(--mono); font-size: 13px; padding: 0 10px; }
+.live-markdown .cm-md-fence { color: var(--muted); font-size: 11px; }
+.live-markdown .cm-md-fence-hidden { font-size: 0; line-height: 6px; }
+.live-markdown .cm-md-format { color: var(--muted); font-weight: 400; }
+.live-markdown .cm-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.live-markdown .cm-md-quote { border-left: 3px solid var(--accent-line); padding-left: 12px; color: var(--text-2); }
+.live-markdown .cm-md-bullet { color: var(--muted); }
+.live-markdown input.cm-md-task-box { width: 15px; height: 15px; margin: 0 3px 0 0; vertical-align: -2px; accent-color: var(--ok); cursor: pointer; }
+.live-markdown .cm-md-block { padding: 4px 0; cursor: text; }
+.live-markdown .cm-md-block .md-table { margin: 4px 0; }
+.live-markdown .cm-md-image { display: inline-block; max-width: 100%; cursor: text; }
+.live-markdown .cm-md-image .md, .live-markdown .cm-md-image p { display: inline; margin: 0; }
+.live-markdown .cm-md-image img { max-width: 100%; max-height: 280px; vertical-align: middle; }
 .bordered { border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; background: var(--panel); }
 .md-viewer { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .md-viewer .md-scroll { flex: 1; }
