@@ -32,6 +32,8 @@ export interface TerminalEvents {
   onChange?: (info: TerminalInfo) => void
   /** 에이전트(Claude Code·Codex)가 응답 하나를 끝냈을 때 */
   onAgentDone?: (id: string) => void
+  /** 취소·CLI 종료·실패는 성공한 응답과 구분한다. */
+  onAgentError?: (id: string, message: string) => void
   /** runCommand로 보낸 셸 명령이 끝났을 때 (출력은 시작·끝 표시 사이의 글) */
   onCommandDone?: (id: string, code: number, output: string) => void
 }
@@ -102,6 +104,7 @@ const OUTPUT_MAX = 100_000
 type Spawn = typeof import('node-pty').spawn
 
 interface Term {
+  submitTimer?: NodeJS.Timeout
   pty: IPty
   info: TerminalInfo
   output: string
@@ -151,6 +154,7 @@ export class TerminalManager {
     })
     pty.onExit(({ exitCode }) => {
       if (this.terms.get(id) !== entry) return
+      clearTimeout(entry.submitTimer)
       this.terms.delete(id)
       this.events.onExit(id, exitCode)
     })
@@ -172,7 +176,9 @@ export class TerminalManager {
   }
 
   write(id: string, data: string): void {
-    this.terms.get(id)?.pty.write(data)
+    const term = this.terms.get(id)
+    if (data === '\x03') clearTimeout(term?.submitTimer)
+    term?.pty.write(data)
   }
 
   /** 에이전트 입력창에 글을 붙여 넣고 보낸다. 여러 줄이 한 번에 들어가도록 bracketed paste로 감싼다. */
@@ -183,7 +189,9 @@ export class TerminalManager {
     // Windows Codex는 긴 paste를 개별 키로 받아 마지막 Enter도 줄바꿈으로 삼는다.
     // Ctrl+E는 내용을 바꾸지 않고 paste 버퍼를 확정하고, 뒤의 Enter를 전송으로 구분한다.
     const submit = (kind ?? t.info.kind) === 'codex' ? '\x05\r' : '\r'
-    setTimeout(() => {
+    clearTimeout(t.submitTimer)
+    t.submitTimer = setTimeout(() => {
+      t.submitTimer = undefined
       if (this.terms.get(id) === t) t.pty.write(submit)
     }, 400)
   }
@@ -210,7 +218,7 @@ export class TerminalManager {
 
   /**
    * 입력을 받을 준비가 될 때까지 기다린다: 출력이 잠시 멈추면 준비된 것으로 본다.
-   * 훅을 붙인 Claude Code는 SessionStart 신호를 받은 뒤에 출력이 멈춰야 한다. 너무 오래 걸리면 그냥 넘어간다.
+   * 훅을 붙인 Claude Code는 SessionStart 신호를 받은 뒤에 출력이 멈춰야 한다.
    */
   async whenReady(id: string, quietMs = 1500, maxMs = 30000): Promise<void> {
     const start = this.now()
@@ -220,7 +228,7 @@ export class TerminalManager {
       const quiet = this.now() - t.lastData
       const needsSignal = t.info.kind === 'claude' && t.signals
       if (needsSignal ? t.ready && quiet >= 700 : t.sawData && quiet >= quietMs) return
-      if (this.now() - start > maxMs) return
+      if (this.now() - start > maxMs) throw new Error('터미널 입력 준비를 확인하지 못했습니다. CLI 로그인·승인 화면을 확인하세요')
       await new Promise((r) => setTimeout(r, 100))
     }
   }
@@ -236,6 +244,7 @@ export class TerminalManager {
   kill(id: string): void {
     const t = this.terms.get(id)
     if (!t) return
+    clearTimeout(t.submitTimer)
     this.terms.delete(id)
     t.pty.kill()
   }

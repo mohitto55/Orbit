@@ -9,7 +9,7 @@ export interface CodexMetadata {
   timestamp?: string
 }
 
-export async function* codexMetadataFiles(dir: string, since = 0): AsyncGenerator<string> {
+export async function* codexMetadataFiles(dir: string, since = 0, prefix?: string): AsyncGenerator<string> {
   let entries
   try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return
@@ -17,8 +17,8 @@ export async function* codexMetadataFiles(dir: string, since = 0): AsyncGenerato
   }
   for (const entry of entries) {
     const file = path.join(dir, entry.name)
-    if (entry.isDirectory()) yield* codexMetadataFiles(file, since)
-    else if (entry.name.endsWith('.jsonl')) {
+    if (entry.isDirectory()) yield* codexMetadataFiles(file, since, prefix)
+    else if (entry.name.endsWith('.jsonl') && (!prefix || entry.name.includes(prefix))) {
       try { if ((await fs.stat(file)).mtimeMs >= since - 1000) yield file } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
       }

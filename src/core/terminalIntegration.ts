@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
 import type { TerminalKind } from './terminal'
@@ -29,7 +29,12 @@ function save(state) {
   fs.renameSync(pending, file);
 }
 function promptHash(text) {
-  return require('node:crypto').createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex');
+  return require('node:crypto').createHash('sha256').update(text.replace(/\r\n?/g, '\n').replace(/\n\n<!-- orbit-request:[\w-]+ -->\s*$/, '').replace(/[\p{P}\p{S}]/gu, c => c.codePointAt(0) > 127 ? '' : c).trim()).digest('hex');
+}
+function matchesRequest(text, capture) {
+  if (typeof text !== 'string') return false;
+  const marker = /<!-- orbit-request:([\w-]+) -->\s*$/.exec(text);
+  return (!marker || marker[1] === capture.requestId) && promptHash(text) === capture.promptHash;
 }
 function captureRequest() {
   try {
@@ -51,15 +56,17 @@ function complete(event) {
   // 같은 notify를 물려받은 제목 생성·하위 에이전트·이전 요청의 응답은 수집하지 않는다.
   if (capture) {
     if (codex) {
-      if (!Array.isArray(event['input-messages']) || !event['input-messages'].some(text => typeof text === 'string' && promptHash(text) === capture.promptHash)) return;
+      if (!Array.isArray(event['input-messages']) || !event['input-messages'].some(text => matchesRequest(text, capture))) return;
     } else if (!capture.submitted || sessionId !== capture.submitted) return;
   }
   try {
     const output = event.last_assistant_message ?? event['last-assistant-message'];
-    if (capture && typeof output === 'string' && output.length <= 4 * 1024 * 1024) {
+    if (capture) {
       const target = path.join(dir, 'agent-output.json');
       const pending = target + '.' + process.pid + '.tmp';
-      fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, output }));
+      const result = typeof output === 'string' && output.length <= 4 * 1024 * 1024
+        ? { output } : { error: '응답은 종료됐지만 최종 응답을 수집하지 못했습니다. CLI 출력을 확인하세요' };
+      fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, ...result }));
       fs.renameSync(pending, target);
     }
   } catch {}
@@ -88,7 +95,7 @@ if (action === 'start') {
       if (action === 'prompt') {
         const state = read(), capture = captureRequest();
         if (state?.kind !== 'claude' || !state.running || event.hook_event_name !== 'UserPromptSubmit' || event.agent_id) return;
-        if (capture && typeof event.prompt === 'string' && promptHash(event.prompt) === capture.promptHash && (!capture.sessionId || capture.sessionId === event.session_id)) {
+        if (capture && matchesRequest(event.prompt, capture) && (!capture.sessionId || capture.sessionId === event.session_id)) {
           fs.writeFileSync(path.join(path.dirname(file), 'capture.json'), JSON.stringify({ ...capture, submitted: event.session_id }));
         }
         return;
@@ -259,13 +266,39 @@ const signalFile = (dir: string, signal: AgentSignal) => path.join(dir, `agent.$
 export type AgentSignal = 'ready' | 'working' | 'done' | 'idle'
 const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle']
 
+/** Windows ConPTY가 누락시키는 비 ASCII 기호는 비교에서 제외한다. 요청 ID·세션과 나머지 본문은 함께 검증한다. */
+export function capturePromptHash(text: string): string {
+  return createHash('sha256').update(text.replace(/\r\n?/g, '\n').replace(/\n\n<!-- orbit-request:[\w-]+ -->\s*$/, '').replace(/[\p{P}\p{S}]/gu, (c) => c.codePointAt(0)! > 127 ? '' : c).trim()).digest('hex')
+}
+
 /** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
-export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string): void {
+export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string): string {
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
   endOutputCapture(dir)
-  rmSync(signalFile(dir, 'done'), { force: true })
-  const promptHash = createHash('sha256').update(prompt.replace(/\r\n?/g, '\n').trim()).digest('hex')
-  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId: randomUUID(), promptHash, sessionId, sessionPrefix }))
+  for (const signal of ['working', 'done', 'idle'] as const) rmSync(signalFile(dir, signal), { force: true })
+  const promptHash = capturePromptHash(prompt)
+  const requestId = randomUUID()
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now() }))
+  return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
+}
+export function readAgentError(dir: string): string | undefined {
+  try {
+    const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string }
+    const result = JSON.parse(readFileSync(path.join(dir, 'agent-output.json'), 'utf8')) as { requestId: string; error?: unknown }
+    return result.requestId === capture.requestId && typeof result.error === 'string' ? result.error : undefined
+  } catch { return undefined }
+}
+
+/** notify 누락 시에도 같은 세션·요청·턴의 확정 결과만 복구한다. */
+export function captureCodexResult(dir: string, sessionId: string, promptHash: string, at: number, result: { output?: string; error?: string }, requestId?: string): boolean {
+  try {
+    const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string; sessionId?: string; sessionPrefix?: string; promptHash: string; startedAt: number }
+    if (capture.promptHash !== promptHash || (requestId && capture.requestId !== requestId) || at < capture.startedAt || (capture.sessionId && capture.sessionId !== sessionId) || (capture.sessionPrefix && !sessionId.startsWith(capture.sessionPrefix))) return false
+    const target = path.join(dir, 'agent-output.json'), pending = `${target}.tmp`
+    writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, ...result }))
+    renameSync(pending, target)
+    return true
+  } catch { return false }
 }
 export function readAgentOutput(dir: string): string | undefined {
   try {

@@ -5,10 +5,14 @@ import type { AddressInfo } from 'net'
 import { spawn } from 'node-pty'
 import { expect, it, vi } from 'vitest'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
+import { PipelineRunner } from '../src/core/pipeline'
 import type { TerminalActivity } from '../src/core/terminal'
 import { tempDir } from './helpers'
 
-it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each(['codex', 'claude', 'shell'] as const)('[TE-F03-AC1] 실제 %s 터미널에서 직접 입력한 작업의 시작·종료·읽음 상태를 감지한다', async (kind) => {
+it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each([
+  { kind: 'codex', mode: 'manual' }, { kind: 'claude', mode: 'manual' }, { kind: 'shell', mode: 'manual' },
+  { kind: 'codex', mode: 'automation' }, { kind: 'codex', mode: 'missing-notify' }
+] as const)('[TE-F03-AC1] 실제 $kind 터미널에서 $mode 작업의 시작·종료·읽음 상태를 감지한다', async ({ kind, mode }) => {
   const root = await tempDir(`orbit-activity-${kind}-`)
   const codexHome = path.join(root, 'codex')
   await fs.mkdir(codexHome)
@@ -66,14 +70,29 @@ it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each(['codex', 'claude', 'shell'] a
       if (data.includes('\x1b]11;?')) workspace.write(id, '\x1b]11;rgb:0000/0000/0000\x1b\\')
     },
     onChange(info) { if (info.activity && activity.at(-1) !== info.activity) activity.push(info.activity) },
+    onAgentDone: (id) => runner.agentDone(id),
+    onAgentError: (id, message) => runner.terminalFailed(id, message),
     onExit() {}
+  })
+  const runner = new PipelineRunner({
+    createTerminal: (kind) => workspace.open(kind, settings), hasTerminal: (id) => workspace.has(id), getTerminal: (id) => workspace.get(id),
+    whenReady: (id) => workspace.whenReady(id), submit: (id, text) => workspace.submit(id, text), runCommand: (id, text) => workspace.runCommand(id, text),
+    beginOutputCapture: (id, text) => workspace.beginOutputCapture(id, text), readAgentOutput: (id) => workspace.readAgentOutput(id), endOutputCapture: (id) => workspace.endOutputCapture(id),
+    completeTasks: async () => {}, emit() {}
   })
   try {
     const tab = workspace.create(kind, settings)
     await workspace.whenReady(tab.id)
     expect(workspace.state().tabs[0].activity).toBe('idle')
     activity.length = 0
-    if (kind !== 'shell') {
+    if (mode !== 'manual') {
+      await vi.waitFor(() => expect(output).toContain('orbit-probe'), { timeout: 15000 })
+      if (mode === 'missing-notify') await fs.writeFile(path.join(`${path.join(root, 'workspace.json')}.sessions`, tab.id, process.platform === 'win32' ? 'notify.ps1' : 'notify.sh'), process.platform === 'win32' ? '# notify intentionally omitted\n' : '#!/bin/sh\nexit 0\n')
+      runner.start({ id: 'sequential', title: '연속 실행', file: '', nodes: ['first', 'second'].map((id) => ({ id, kind: 'codex', text: '한글·구현…검증 — 같은 요청', terminal: 'new', terminalInput: { tabId: tab.id } })), edges: [{ from: 'first', to: 'second' }] })
+      await vi.waitFor(() => expect(runner.list()[0].status).toBe('done'), { timeout: 25000 })
+      expect(Object.values(runner.list()[0].nodes).map((n) => n.output)).toEqual(['Orbit activity complete.', 'Orbit activity complete.'])
+      expect(activity).toEqual(['working', 'completed', 'working', 'completed'])
+    } else if (kind !== 'shell') {
       if (kind === 'codex') await vi.waitFor(() => expect(output).toContain('orbit-probe'), { timeout: 15000 })
       workspace.write(tab.id, 'OrbitManualActivityProbe')
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -83,7 +102,7 @@ it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each(['codex', 'claude', 'shell'] a
     }
     await vi.waitFor(() => expect(activity).toContain('working'), { timeout: 15000 })
     await vi.waitFor(() => expect(workspace.state().tabs[0].activity).toBe('completed'), { timeout: 20000 })
-    expect(activity).toEqual(['working', 'completed'])
+    if (mode === 'manual') expect(activity).toEqual(['working', 'completed'])
     workspace.acknowledge(tab.id, workspace.state().tabs[0].activityRevision!)
     workspace.resize(tab.id, 101, 30)
     await new Promise((resolve) => setTimeout(resolve, 600))
@@ -91,6 +110,8 @@ it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each(['codex', 'claude', 'shell'] a
   } finally {
     await fs.writeFile(path.join(root, 'terminal-output.txt'), output)
     await fs.writeFile(path.join(root, 'activity.json'), JSON.stringify(activity))
+    await fs.writeFile(path.join(root, 'runs.json'), JSON.stringify(runner.list()))
+    console.info('Terminal activity diagnostics:', root)
     workspace.suspend()
     vi.unstubAllEnvs()
     server.closeAllConnections()

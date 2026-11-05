@@ -32,7 +32,7 @@ async function setup() {
     ptys.push(pty)
     return pty
   })
-  const events = { onData() {}, onExit() {}, onChange: vi.fn(), onAgentDone: vi.fn(), onCommandDone: vi.fn() }
+  const events = { onData() {}, onExit() {}, onChange: vi.fn(), onAgentDone: vi.fn(), onAgentError: vi.fn(), onCommandDone: vi.fn() }
   const create = () => {
     const workspace = new TerminalWorkspace(file, { projectDir: dir, dataRoot: path.join(dir, 'docs') }, spawn, events)
     workspaces.push(workspace)
@@ -100,6 +100,49 @@ it('[TE-F03-AC1] Claude의 직접 입력과 작업 그래프 요청은 시작·�
   await vi.advanceTimersByTimeAsync(500)
   expect(state(tab.id).activity).toBe('idle')
   expect(events.onAgentDone).toHaveBeenCalledTimes(1)
+  expect(events.onAgentError).toHaveBeenCalledWith(tab.id, expect.stringContaining('실패'))
+})
+
+it('자동화 요청 뒤 늦은 Ready 제목이 와도 최종 응답 전에는 작업 중 색상을 유지한다', async () => {
+  const { workspace, settings, ptys, state } = await setup()
+  const tab = workspace.create('codex', settings)
+  workspace.beginOutputCapture(tab.id, '다음 작업')
+  workspace.submit(tab.id, '다음 작업')
+  ptys[0].emit('\x1b]0;Ready\x07')
+  expect(state(tab.id).activity).toBe('working')
+})
+
+it('전송 대기 중 취소하면 예약된 Enter를 보내지 않는다', async () => {
+  const { workspace, settings, ptys, events } = await setup()
+  const tab = workspace.create('codex', settings)
+  workspace.submit(tab.id, '취소할 작업')
+  workspace.write(tab.id, '\x03')
+  await vi.advanceTimersByTimeAsync(500)
+  expect(ptys[0].write).not.toHaveBeenCalledWith('\x05\r')
+  expect(events.onAgentError).toHaveBeenCalledWith(tab.id, expect.stringContaining('취소'))
+})
+
+it('CLI가 셸로 돌아오면 준비 중·실행 중인 자동화에 종료를 알린다', async () => {
+  const { workspace, settings, file, state, events } = await setup()
+  const tab = workspace.create('codex', settings)
+  workspace.submit(tab.id, '작업')
+  const stateFile = path.join(`${file}.sessions`, tab.id, 'state.json')
+  const launch = JSON.parse(await fs.readFile(stateFile, 'utf8')) as Record<string, unknown>
+  await fs.writeFile(stateFile, JSON.stringify({ ...launch, running: false }))
+  await vi.advanceTimersByTimeAsync(500)
+  expect(state(tab.id)).toMatchObject({ kind: 'shell', activity: 'idle' })
+  expect(events.onAgentError).toHaveBeenCalledWith(tab.id, '에이전트가 종료되었습니다')
+})
+
+it('이전 요청에서 남은 실패 신호가 다음 자동화의 색상·실행을 바꾸지 않는다', async () => {
+  const { workspace, settings, state, signal, events } = await setup()
+  const tab = workspace.create('codex', settings)
+  await signal(tab.id, 'idle')
+  workspace.beginOutputCapture(tab.id, '새 요청')
+  workspace.submit(tab.id, '새 요청')
+  await vi.advanceTimersByTimeAsync(500)
+  expect(state(tab.id).activity).toBe('working')
+  expect(events.onAgentError).not.toHaveBeenCalled()
 })
 
 it.each(['codex', 'claude'] as const)('[TE-F03-AC1] 셸에서 %s를 직접 켠 것만으로 작업 중·완료로 표시하지 않는다', async (kind) => {

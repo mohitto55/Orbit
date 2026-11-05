@@ -50,6 +50,32 @@ describe('작업 그래프 세션 재사용', () => {
     })
   }
 
+  it.each(['취소', '실패', 'CLI 종료'] as const)('터미널의 %s가 실행 기록에도 반영되고 다음 노드를 실행하지 않는다', async (cause) => {
+    const { api, home } = await setup()
+    try {
+      const target = await api.termCreate('codex')
+      const graph = await api.savePipeline({ title: '실패 전파', nodes: [
+        { id: 'start', kind: 'start', text: '', terminal: 'new' },
+        { id: 'work', kind: 'codex', text: '첫 작업', terminal: 'new' },
+        { id: 'next', kind: 'codex', text: '다음 작업', terminal: 'continue' }
+      ], edges: [{ from: 'start', to: 'work' }, { from: 'work', to: 'next' }] })
+      const [run] = await api.runPipelineBatch({ pipelineId: graph.id, terminalIds: [target.id] })
+      await vi.waitFor(() => expect(api.pipelineRuns()[0].nodes.work.status).toBe('running'))
+      const root = path.join(home, 'orbit', 'terminals')
+      const file = (await fs.readdir(root)).find((name) => name.endsWith('.json'))!
+      const dir = path.join(root, `${file}.sessions`, target.id)
+      if (cause === '취소') api.termWrite(target.id, '\x03')
+      else if (cause === '실패') await fs.writeFile(path.join(dir, 'agent.idle'), 'idle')
+      else {
+        const stateFile = path.join(dir, 'state.json'), state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as Record<string, unknown>
+        await fs.writeFile(stateFile, JSON.stringify({ ...state, running: false }))
+      }
+      await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === run.runId)).toMatchObject({ status: 'failed', nodes: { work: { status: 'failed' }, next: { status: 'skipped' } } }))
+      expect(api.listPipelineRuns().runs.find((r) => r.runId === run.runId)?.status).toBe('failed')
+      expect(ptys[0].write).not.toHaveBeenCalledWith(expect.stringContaining('다음 작업'))
+    } finally { api.killAllTerminals() }
+  })
+
   it('실행 환경을 생략하면 열린 세션을 자동 선택하지 않고 명시한 세션만 사용한다', async () => {
     const { api } = await setup()
     try {
@@ -143,7 +169,7 @@ describe('작업 그래프 세션 재사용', () => {
         await vi.waitFor(() => expect(api.pipelineRuns().find((r) => r.runId === run.runId)?.nodes.work).toMatchObject({ status: 'running', termId: target.id }))
         expect((await api.termState()).tabs.find((tab) => tab.id === target.id)?.activity).toBe('working')
         expect(ptys).toHaveLength(2)
-        expect(targetPty.write).toHaveBeenCalledWith('\x1b[200~기존 대화에 보내는 작업\x1b[201~')
+        expect(targetPty.write).toHaveBeenCalledWith(expect.stringMatching(/^\x1b\[200~기존 대화에 보내는 작업\r\r<!-- orbit-request:[\w-]+ -->\x1b\[201~$/))
         await vi.waitFor(() => expect(targetPty.write).toHaveBeenLastCalledWith(kind === 'codex' ? '\x05\r' : '\r'))
         expect(otherPty.write).not.toHaveBeenCalledWith(expect.stringContaining('기존 대화에 보내는 작업'))
         expect(api.markNodeDone(run.runId, 'work')?.status).toBe('done')

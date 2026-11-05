@@ -66,6 +66,7 @@ export function createApi(deps: ApiDeps) {
         onChange: (info) => { deps.send('term-info', info); queueMicrotask(() => pipes.terminalChanged()) },
         onError: (message) => deps.send('term-error', message),
         onAgentDone: (id) => pipes.agentDone(id),
+        onAgentError: (id, message) => pipes.terminalFailed(id, message),
         onCommandDone: (id, code, output) => pipes.commandDone(id, code, output)
       })
       terminals = workspace

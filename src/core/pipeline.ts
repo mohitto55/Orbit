@@ -1243,7 +1243,7 @@ export interface RunnerDeps {
   submit: (termId: string, text: string) => void
   runCommand: (termId: string, command: string) => void
   setModel?: (termId: string, model: string) => Promise<void>
-  beginOutputCapture?: (termId: string, prompt: string) => void
+  beginOutputCapture?: (termId: string, prompt: string) => string | void
   readAgentOutput?: (termId: string) => string | undefined
   endOutputCapture?: (termId: string) => void
   interrupt?: (termId: string) => void
@@ -1463,9 +1463,9 @@ export class PipelineRunner {
       // 새 탭의 준비를 기다리는 동안에도 다른 노드가 같은 터미널에 먼저 입력하지 못하게 한다.
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
       if (needsReady) await this.deps.whenReady(termId)
-      if (run.status !== 'running') return
+      if (run.status !== 'running' || st.status !== 'starting') return
       if (isAgent(node) && node.model?.trim() && this.deps.setModel) await this.deps.setModel(termId, node.model.trim())
-      if (run.status !== 'running') return
+      if (run.status !== 'running' || st.status !== 'starting') return
       const ready = this.deps.getTerminal(termId)
       if (ready && ready.kind !== node.kind) throw new Error('에이전트가 종료되었습니다. 모델과 CLI 실행 설정을 확인하세요')
       st.status = 'running'
@@ -1479,8 +1479,8 @@ export class PipelineRunner {
       if (node.kind === 'shell') this.deps.runCommand(termId, text)
       else {
         const prompt = node.outputSchema ? structuredPrompt(text, node.outputSchema) : text
-        this.deps.beginOutputCapture?.(termId, prompt)
-        this.deps.submit(termId, prompt)
+        const capturedPrompt = this.deps.beginOutputCapture?.(termId, prompt)
+        this.deps.submit(termId, capturedPrompt ?? prompt)
       }
     } catch (e) {
       if (st.termId && this.owner.get(st.termId)?.runId === run.runId && this.owner.get(st.termId)?.nodeId === node.id) {
@@ -1508,10 +1508,10 @@ export class PipelineRunner {
     const st = run.nodes[o.nodeId]
     if (run.status === 'stopped') {
       this.owner.delete(termId)
-      this.terminalChanged(termId)
+      this.terminalChanged(ok ? termId : undefined)
       return null
     }
-    if (st.status !== 'running') return null
+    if (st.status !== 'running' && !(manual && !ok && st.status === 'starting')) return null
     if (!manual && this.now() - (run.sentAt[o.nodeId] ?? 0) < GRACE_MS) return null
     this.deps.endOutputCapture?.(termId)
     this.owner.delete(termId)
@@ -1519,7 +1519,7 @@ export class PipelineRunner {
     if (patch.output !== undefined) this.recordOutput(st, patch.output)
     this.tick(run, ok ? termId : undefined)
     const state = this.publish(run)
-    this.terminalChanged(termId)
+    this.terminalChanged(ok ? termId : undefined)
     return state
   }
 
@@ -1561,7 +1561,11 @@ export class PipelineRunner {
   }
 
   terminalExit(termId: string): RunState | null {
-    const state = this.finish(termId, false, { message: '터미널이 닫혔습니다' }, true)
+    return this.terminalFailed(termId, '터미널이 닫혔습니다')
+  }
+
+  terminalFailed(termId: string, message: string): RunState | null {
+    const state = this.finish(termId, false, { message }, true)
     this.terminalChanged()
     return state
   }
@@ -1582,9 +1586,12 @@ export class PipelineRunner {
     run.status = 'stopped'
     run.finished = new Date(this.now()).toISOString()
     for (const [termId, o] of this.owner) if (o.runId === runId) {
-      this.deps.endOutputCapture?.(termId)
-      if (this.deps.interrupt) this.deps.interrupt(termId)
-      else this.owner.delete(termId)
+      try { this.deps.endOutputCapture?.(termId) }
+      catch (error) { run.message = `중지됨 · 응답 수집 정리 실패: ${error instanceof Error ? error.message : String(error)}` }
+      try {
+        if (this.deps.interrupt) this.deps.interrupt(termId)
+        else this.owner.delete(termId)
+      } catch (error) { run.message = `중지됨 · 터미널 중단 신호 전달 실패: ${error instanceof Error ? error.message : String(error)}` }
     }
     for (const st of Object.values(run.nodes)) if (st.status === 'waiting' || st.status === 'starting' || st.status === 'running') st.status = 'skipped'
     const state = this.publish(run)

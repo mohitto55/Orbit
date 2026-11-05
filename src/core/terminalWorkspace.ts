@@ -5,7 +5,8 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { beginOutputCapture, endOutputCapture, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
+import { beginOutputCapture, captureCodexResult, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
+import { CodexCaptureReader } from './codexCapture'
 import { effortProblem, modelProblem, type AgentOptions } from './agentModel'
 import { agentModels } from './agentModels'
 import type { Ctx, ProjectSettings } from './workspace'
@@ -59,9 +60,11 @@ function reorder<T extends { id: string }>(items: T[], id: string, targetId: str
 }
 /** CLI가 알려 준 ID와 일치하는 헤더만 찾는다. 구버전 저장 상태는 탭 고유 originator로 연결한다. */
 export async function findCodexSession(projectDir: string, tabId: string, root = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), since = 0, prefix?: string): Promise<string | undefined> {
-  let latest: { id: string; created: number } | undefined
-  for await (const file of codexMetadataFiles(path.join(root, 'sessions'), prefix ? 0 : since)) {
-    if (prefix && !path.basename(file).includes(prefix)) continue
+  return (await findCodexSessionFile(projectDir, tabId, root, since, prefix))?.id
+}
+async function findCodexSessionFile(projectDir: string, tabId: string, root = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), since = 0, prefix?: string): Promise<{ id: string; file: string } | undefined> {
+  let latest: { id: string; file: string; created: number } | undefined
+  for await (const file of codexMetadataFiles(path.join(root, 'sessions'), prefix ? 0 : since, prefix)) {
     const meta = await readCodexMetadata(file)
     if (!meta || !sameProjectPath(meta.cwd, projectDir)) continue
     if (prefix ? !meta.id.startsWith(prefix) : meta.originator !== `orbit-${tabId}`) continue
@@ -70,9 +73,9 @@ export async function findCodexSession(projectDir: string, tabId: string, root =
     // 일부 Codex 버전은 제목의 UUID 끝을 줄인다. 유일한 메타데이터일 때만 연결한다.
     if (prefix && latest && latest.id !== meta.id) return
     const created = Date.parse(meta.timestamp ?? '') || statSync(file).birthtimeMs
-    if (!latest || created > latest.created) latest = { id: meta.id, created }
+    if (!latest || created > latest.created) latest = { id: meta.id, file, created }
   }
-  return latest?.id
+  return latest
 }
 /** 탭 배치·이름·세션 ID·최근 터미널 출력을 저장한다. CLI 대화 본문은 가져오지 않는다. */
 export class TerminalWorkspace {
@@ -92,6 +95,9 @@ export class TerminalWorkspace {
   private codexStatusTabs = new Set<string>()
   private shellPastes = new Set<string>()
   private commands = new Set<string>()
+  private codexFiles = new Map<string, { id: string; file: string }>()
+  private captures = new Map<string, { since: number; requestId: string; promptHash: string; reader?: CodexCaptureReader }>()
+  private readingCaptures = false
 
   constructor(private file: string, private ctx: Ctx, spawn: typeof import('node-pty').spawn, private events: TerminalEvents) {
     this.manager = new TerminalManager(spawn, {
@@ -119,7 +125,9 @@ export class TerminalWorkspace {
                 const status = title.match(/(?:^|[|·]\s*)(Working|Thinking|Waiting|Ready)$/)?.[1]
                 if (status) {
                   this.codexStatusTabs.add(id)
-                  if (status === 'Ready') this.finishActivity(tab)
+                  if (status === 'Ready') {
+                    if (!this.captures.has(id) || this.readAgentOutput(id) !== undefined) this.finishActivity(tab)
+                  }
                   else this.setActivity(tab, 'working')
                 }
               }
@@ -161,19 +169,28 @@ export class TerminalWorkspace {
         for (const tab of this.tabs.values()) {
           if (tab.exited !== undefined) continue
           const dir = this.integrationDir(tab.id)
+          const capture = this.captures.get(tab.id)
           for (const signal of takeAgentSignals(dir)) {
+            // 완료 콜백이 다음 노드를 시작하면 이전 요청에서 읽은 나머지 신호는 폐기한다.
+            if (this.captures.get(tab.id) !== capture) break
             if (signal === 'ready') this.manager.markReady(tab.id)
             if (signal === 'working') this.setActivity(tab, 'working')
-            if (signal === 'idle') this.setActivity(tab, 'idle')
+            if (signal === 'idle') {
+              this.setActivity(tab, 'idle')
+              this.events.onAgentError?.(tab.id, '에이전트 작업이 실패하거나 중단되었습니다')
+            }
             if (signal === 'done') {
+              const error = readAgentError(dir)
               // Codex 상태 제목과 notify가 같은 완료를 두 번 알리지 않게 한다.
-              if (this.readAgentOutput(tab.id) !== undefined || tab.kind !== 'codex' || !this.codexStatusTabs.has(tab.id)) this.finishActivity(tab)
-              this.events.onAgentDone?.(tab.id)
+              if (error || this.readAgentOutput(tab.id) !== undefined || (!this.captures.has(tab.id) && (tab.kind !== 'codex' || !this.codexStatusTabs.has(tab.id)))) this.finishActivity(tab)
+              if (error) this.events.onAgentError?.(tab.id, error)
+              else this.events.onAgentDone?.(tab.id)
             }
           }
         }
       } catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
       void this.bindCodex().catch((e: unknown) => this.events.onError?.(`세션 ID 연결 실패: ${String(e)}`))
+      void this.readCaptures().catch((e: unknown) => this.events.onError?.(`자동화 응답 확인 실패: ${String(e)}`))
     }, 500)
     this.monitor.unref()
   }
@@ -253,6 +270,8 @@ export class TerminalWorkspace {
   }
 
   private launch(tab: SavedTab, settings: ProjectSettings, restoring: boolean, sequence = 0): void {
+    this.codexFiles.delete(tab.id)
+    this.captures.delete(tab.id)
     this.codexStatusTabs.delete(tab.id)
     this.shellPastes.delete(tab.id)
     this.commands.delete(tab.id)
@@ -292,20 +311,51 @@ export class TerminalWorkspace {
 
   private integrationDir(id: string): string { return path.join(`${this.file}.sessions`, id) }
 
-  beginOutputCapture(id: string, prompt: string): void {
+  beginOutputCapture(id: string, prompt: string): string {
     if (!this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
     const tab = this.tabs.get(id)!
     this.syncLaunch(tab)
     const sessionId = !tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix) ? tab.sessionId : undefined
-    beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix)
+    const since = Date.now(), tagged = beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix)
+    const file = this.codexFiles.get(id)
+    let reader: CodexCaptureReader | undefined
+    if (file && file.id === sessionId) {
+      try { reader = new CodexCaptureReader(file.file, since, statSync(file.file).size) } catch { /* 다음 세션 조회에서 다시 연결한다. */ }
+    }
+    this.captures.set(id, { since, requestId: /<!-- orbit-request:([\w-]+) -->$/.exec(tagged)![1], promptHash: capturePromptHash(prompt), reader })
+    return tagged
   }
   readAgentOutput(id: string): string | undefined { return readAgentOutput(this.integrationDir(id)) }
-  endOutputCapture(id: string): void { endOutputCapture(this.integrationDir(id)) }
+  endOutputCapture(id: string): void { this.captures.delete(id); endOutputCapture(this.integrationDir(id)) }
+
+  private async readCaptures(): Promise<void> {
+    if (this.readingCaptures || this.stopped) return
+    this.readingCaptures = true
+    try {
+      for (const [id, capture] of this.captures) {
+        const tab = this.tabs.get(id), session = this.codexFiles.get(id)
+        if (!tab || tab.kind !== 'codex' || !session) continue
+        capture.reader ??= new CodexCaptureReader(session.file, capture.since)
+        const events = await capture.reader.read()
+        for (const event of events) {
+          if (this.stopped || this.captures.get(id) !== capture) break
+          if (event.promptHash !== capture.promptHash || (event.requestId && event.requestId !== capture.requestId)) continue
+          if (event.activity === 'working') { this.setActivity(tab, 'working'); continue }
+          if (!captureCodexResult(this.integrationDir(id), session.id, event.promptHash, event.at, { output: event.output, error: event.error }, event.requestId)) continue
+          if (event.activity === 'idle') this.setActivity(tab, 'idle')
+          else this.finishActivity(tab)
+          if (event.error) this.events.onAgentError?.(id, event.error)
+          else this.events.onAgentDone?.(id)
+        }
+      }
+    } finally { this.readingCaptures = false }
+  }
 
   private syncLaunch(tab: SavedTab): void {
     if (tab.exited !== undefined) return
     const launch = readCliLaunch(this.integrationDir(tab.id))
     if (!launch || JSON.stringify(tab.launch) === JSON.stringify(launch)) return
+    const replaced = launch.running && launch.runId !== tab.launch?.runId && this.captures.has(tab.id)
     if (launch.running && launch.runId !== tab.launch?.runId) {
       // 셸에서 CLI를 켠 명령과, CLI에 실제 작업을 요청한 상태를 구분한다.
       if (tab.activity === 'working') this.setActivity(tab, 'idle')
@@ -329,6 +379,7 @@ export class TerminalWorkspace {
     tab.launch = launch
     this.save()
     this.events.onChange?.(this.info(tab))
+    if (!launch.running || replaced) this.events.onAgentError?.(tab.id, replaced ? '터미널의 에이전트 세션이 변경되었습니다' : '에이전트가 종료되었습니다')
   }
 
   private bindCodex(force = false): Promise<void> {
@@ -340,8 +391,10 @@ export class TerminalWorkspace {
     this.binding = (async () => {
       for (const tab of codexTabs) {
         const prefix = tab.codexPrefix
-        if (tab.sessionId && (!prefix || tab.sessionId.startsWith(prefix))) continue
-        const id = await findCodexSession(tab.launch?.cwd ?? this.ctx.projectDir, tab.id, tab.launch?.home, tab.createdAt, prefix)
+        if (tab.sessionId && (!prefix || tab.sessionId.startsWith(prefix)) && this.codexFiles.get(tab.id)?.id === tab.sessionId) continue
+        const session = await findCodexSessionFile(tab.launch?.cwd ?? this.ctx.projectDir, tab.id, tab.launch?.home, tab.createdAt, prefix ?? tab.sessionId)
+        const id = session?.id
+        if (session && prefix === tab.codexPrefix && !this.stopped && this.tabs.has(tab.id)) this.codexFiles.set(tab.id, session)
         if (id && id !== tab.sessionId && prefix === tab.codexPrefix && !this.stopped && this.tabs.has(tab.id)) {
           tab.sessionId = id; this.save(); this.events.onChange?.(this.info(tab))
         }
@@ -533,7 +586,9 @@ export class TerminalWorkspace {
       if (data.includes('\x1b[201~')) this.shellPastes.delete(id)
       if (data === '\x03' && tab.activity === 'working') {
         this.commands.delete(id)
-        this.setActivity(tab, 'idle')
+        this.events.onAgentError?.(id, '터미널에서 작업이 취소되었습니다')
+        // 에이전트의 실제 Ready/실패 신호가 오기 전에는 다른 자동화가 입력하지 않는다.
+        if (tab.kind === 'shell') this.setActivity(tab, 'idle')
       }
     }
     this.manager.write(id, data)
@@ -580,6 +635,8 @@ export class TerminalWorkspace {
     return this.snapshot(tab)
   }
   kill(id: string): void {
+    this.codexFiles.delete(id)
+    this.captures.delete(id)
     this.tabs.delete(id)
     this.titleBuffers.delete(id)
     this.codexStatusTabs.delete(id)

@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { expect, it } from 'vitest'
-import { beginOutputCapture, endOutputCapture, freezeTerminalIntegration, prepareTerminalIntegration, readAgentOutput, takeAgentSignals } from '../src/core/terminalIntegration'
+import { beginOutputCapture, endOutputCapture, freezeTerminalIntegration, prepareTerminalIntegration, readAgentError, readAgentOutput, takeAgentSignals } from '../src/core/terminalIntegration'
 import { tempDir } from './helpers'
 import { AGENT_PORT, expandPipeline, PipelineRunner, type Pipeline } from '../src/core/pipeline'
 
@@ -110,5 +110,31 @@ it('Claude는 요청 프롬프트의 UserPromptSubmit 이후 같은 세션의 St
   expect(takeAgentSignals(dir)).toEqual([])
   send('done', stop)
   expect(readAgentOutput(dir)).toBe(stop.last_assistant_message)
+  expect(takeAgentSignals(dir)).toEqual(['done'])
+})
+
+it.each(['claude', 'codex'] as const)('%s는 Windows에서 기호가 소실돼도 같은 요청을 완료하고 이전 동일 프롬프트의 늦은 완료는 무시한다', async (kind) => {
+  const dir = await tempDir('orbit-request-id-'), sessionId = '11111111-2222-3333-4444-555555555555'
+  const integration = prepareTerminalIntegration(dir, kind, dir), prompt = '구현·검증… 완료'
+  const send = (text: string, output?: string) => {
+    const run = (action: string, event: object) => execFileSync(process.execPath, [integration.env.ORBIT_BRIDGE, action], { env: { ...process.env, ...integration.env }, input: JSON.stringify(event) })
+    if (kind === 'codex') run('notify', { type: 'agent-turn-complete', 'thread-id': sessionId, 'input-messages': [text], 'last-assistant-message': output })
+    else {
+      run('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: text })
+      run('done', { hook_event_name: 'Stop', session_id: sessionId, last_assistant_message: output })
+    }
+  }
+  const first = beginOutputCapture(dir, prompt, sessionId)
+  send(first.replace(/[·…]/g, ''), '첫 결과')
+  expect(readAgentOutput(dir)).toBe('첫 결과')
+  const second = beginOutputCapture(dir, prompt, sessionId)
+  send(first, '첫 결과의 지연 알림')
+  expect(readAgentOutput(dir)).toBeUndefined()
+  expect(takeAgentSignals(dir)).toEqual([])
+  send(second.replace(/[·…]/g, ''), '둘째 결과')
+  expect(readAgentOutput(dir)).toBe('둘째 결과')
+  const third = beginOutputCapture(dir, prompt, sessionId)
+  send(third)
+  expect(readAgentError(dir)).toContain('최종 응답')
   expect(takeAgentSignals(dir)).toEqual(['done'])
 })

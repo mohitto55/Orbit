@@ -62,6 +62,27 @@ function setup(overrides: Partial<RunnerDeps> = {}) {
 }
 
 describe('연동 · 터미널 작업 그래프', () => {
+  it('중단 신호 전달에 실패해도 자동화 상태를 마감하고 다음 노드는 보내지 않는다', async () => {
+    const { runner, state, settle, sent } = setup({ interrupt: () => { throw new Error('프로세스가 응답하지 않습니다') } })
+    const run = runner.start(pipe([node('a'), node('b')], [['a', 'b']]))
+    await settle()
+    expect(() => runner.stop(run.runId)).not.toThrow()
+    expect(state()).toMatchObject({ status: 'stopped', message: expect.stringContaining('중단 신호'), nodes: { a: { status: 'skipped' }, b: { status: 'skipped' } } })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('준비 중 터미널이 종료되면 자동화도 실패하고 늦은 준비 완료로 재전송하지 않는다', async () => {
+    let ready: () => void = () => {}
+    const { runner, sent, settle } = setup({ whenReady: () => new Promise<void>((resolve) => { ready = resolve }) })
+    runner.start(pipe([node('a', 'codex')], []))
+    await settle()
+    runner.terminalExit('term-1')
+    expect(runner.list()[0]).toMatchObject({ status: 'failed', nodes: { a: { status: 'failed' } } })
+    ready()
+    await settle()
+    expect(sent).toEqual([])
+  })
+
   it('[DM-F02-AC4] 새 탭 준비 중에는 중복 입력을 막고, 이후 재사용할 때는 준비를 다시 기다리지 않는다', async () => {
     let ready: () => void = () => {}
     let opened = false
