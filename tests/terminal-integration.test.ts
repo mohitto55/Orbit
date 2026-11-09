@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { expect, it } from 'vitest'
-import { freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals } from '../src/core/terminalIntegration'
+import { MCP_SERVER_NAME, MCP_SUBMIT_TOOL, beginOutputCapture, freezeTerminalIntegration, prepareTerminalIntegration, readAgentError, readAgentOutput, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals } from '../src/core/terminalIntegration'
 import { tempDir } from './helpers'
 
 it('[TE-F01-AC8] 수동 CLI 실행 인자와 Claude SessionStart의 ID만 기록하고 앱 종료 후 늦게 오는 종료 신호는 무시한다', async () => {
@@ -59,4 +59,47 @@ it('[TE-F03-AC1] 한 번의 폴링 사이에 끝난 작업과 다음 작업의 �
   await fs.utimes(path.join(dir, 'agent.working'), 2, 2)
   expect(takeAgentSignals(dir)).toEqual(['done', 'working'])
   expect(takeAgentSignals(dir)).toEqual([])
+})
+
+it('그래프 출력 구조는 orbit MCP 서버의 submit_output으로 받고, 틀린 제출은 고칠 곳을 돌려준다', async () => {
+  const dir = await tempDir('orbit-mcp-')
+  const integration = prepareTerminalIntegration(dir, 'claude', dir)
+  const config = JSON.parse(await fs.readFile(integration.claudeMcp, 'utf8'))
+  const server = config.mcpServers[MCP_SERVER_NAME]
+  expect(JSON.parse(await fs.readFile(integration.claudeSettings, 'utf8')).permissions.allow).toEqual([`mcp__${MCP_SERVER_NAME}__${MCP_SUBMIT_TOOL}`])
+  expect(integration.codexMcp).toMatch(/^mcp_servers\.orbit=\{command=".+",args=\[".+mcp\.cjs",".+"\],env=\{ELECTRON_RUN_AS_NODE="1"\}\}$/)
+  const schema = JSON.stringify({ type: 'object', properties: { title: { type: 'string', description: '' }, count: { type: 'number', description: '' } }, required: ['title', 'count'], additionalProperties: false })
+  const call = (id: number, result: unknown) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: MCP_SUBMIT_TOOL, arguments: { result } } })
+  const rpc = (messages: object[]) => execFileSync(process.execPath, server.args, { env: { ...process.env, ...server.env }, input: messages.map((m) => JSON.stringify(m)).join('\n') + '\n', encoding: 'utf8' })
+    .trim().split('\n').map((line) => JSON.parse(line))
+
+  // 수집 중인 요청이 없으면 제출을 받지 않는다
+  expect(rpc([call(1, { title: 'a', count: 1 })])[0].result.isError).toBe(true)
+  beginOutputCapture(dir, '할 일', undefined, undefined, schema)
+  const [init, list, wrong, extra, ok] = rpc([
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    call(3, { title: 'a', count: '1' }),
+    call(4, { title: 'a', count: 1, more: true }),
+    call(5, JSON.stringify({ title: '완료', count: 2 }))
+  ])
+  expect(init.result.capabilities.tools).toEqual({})
+  expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([MCP_SUBMIT_TOOL])
+  expect(wrong.result).toMatchObject({ isError: true })
+  expect(wrong.result.content[0].text).toContain('필드 "count": Number이 필요하지만 String입니다')
+  expect(extra.result.content[0].text).toContain('정의하지 않은 필드 "more"')
+  expect(ok.result.isError).toBeUndefined()
+
+  // 턴이 끝나기 전에는 넘기지 않고, 끝나면 최종 메시지 대신 제출한 값을 쓴다
+  expect(readAgentOutput(dir)).toBeUndefined()
+  const { requestId } = JSON.parse(await fs.readFile(path.join(dir, 'capture.json'), 'utf8'))
+  await fs.writeFile(path.join(dir, 'agent-output.json'), JSON.stringify({ requestId, error: '최종 응답을 수집하지 못했습니다' }))
+  expect(readAgentError(dir)).toBeUndefined()
+  expect(JSON.parse(readAgentOutput(dir)!)).toEqual({ title: '완료', count: 2 })
+  // 다음 요청에는 지난 제출이 남지 않는다
+  beginOutputCapture(dir, '다음', undefined, undefined, schema)
+  const next = JSON.parse(await fs.readFile(path.join(dir, 'capture.json'), 'utf8')).requestId
+  await fs.writeFile(path.join(dir, 'agent-output.json'), JSON.stringify({ requestId: next, output: '{"title":"b","count":3}' }))
+  expect(readAgentOutput(dir)).toBe('{"title":"b","count":3}')
 })

@@ -297,8 +297,9 @@ export class TerminalWorkspace {
     if (command && tab.launch) command += resumeOptions(tab.launch.args, command).map((arg) => ` ${shellQuote(arg)}`).join('')
     // 공유 데몬의 환경·저장 위치가 다른 탭에 섞이지 않도록 각 TUI를 독립 실행한다.
     if (tab.kind === 'codex' && command && !/(^|\s)--no-daemon(?:\s|$)/.test(command)) command += ' --no-daemon'
-    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id','status']")} -c ${shellQuote(integration.codexNotify)}`
-    if (tab.kind === 'claude' && command) command += ` --settings ${shellQuote(integration.claudeSettings)}`
+    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id','status']")} -c ${shellQuote(integration.codexNotify)} -c ${shellQuote(integration.codexMcp)}`
+    // 그래프의 출력 구조는 orbit MCP 서버의 submit_output 도구로 받는다
+    if (tab.kind === 'claude' && command) command += ` --settings ${shellQuote(integration.claudeSettings)} --mcp-config ${shellQuote(integration.claudeMcp)}`
     // 새 셸의 준비 상태가 기존 launch 인자를 지우지 않도록 시작 이벤트 전에는 비교만 한다.
     const previousLaunch = tab.launch
     tab.launch = readCliLaunch(this.integrationDir(tab.id))
@@ -311,12 +312,12 @@ export class TerminalWorkspace {
 
   private integrationDir(id: string): string { return path.join(`${this.file}.sessions`, id) }
 
-  beginOutputCapture(id: string, prompt: string): string {
+  beginOutputCapture(id: string, prompt: string, schema?: string): string {
     if (!this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
     const tab = this.tabs.get(id)!
     this.syncLaunch(tab)
     const sessionId = !tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix) ? tab.sessionId : undefined
-    const since = Date.now(), tagged = beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix)
+    const since = Date.now(), tagged = beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix, schema)
     const file = this.codexFiles.get(id)
     let reader: CodexCaptureReader | undefined
     if (file && file.id === sessionId) {

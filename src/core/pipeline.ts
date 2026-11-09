@@ -101,6 +101,8 @@ export interface PipeNode {
   session?: string
   /** 이 작업을 실행할 모델. 비우면 기존 세션/CLI 설정을 유지한다. */
   model?: string
+  /** 새 탭으로 실행할 때 위 탭에 보일 이름. 비우면 "종류 · 노드 이름". */
+  tabTitle?: string
   /**
    * 템플릿 노드: 작업 그래프 id (실행할 때마다 지금 내용을 읽는다). 할 일·할 일 완료 노드: Task id.
    * 설계 노드: 설계 id (시스템 공통 설계는 system-design).
@@ -1236,14 +1238,16 @@ export interface RunFilter { source?: Pick<SourceRef, 'kind' | 'id'>; status?: R
 
 export interface RunnerDeps {
   /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
-  createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string) => Promise<TerminalInfo & { reused?: boolean }>
+  /** title: 노드에 정한 탭 이름. 있으면 label 대신 그대로 탭 이름으로 쓴다. */
+  createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string, title?: string) => Promise<TerminalInfo & { reused?: boolean }>
   hasTerminal: (termId: string) => boolean
   getTerminal: (termId: string) => TerminalInfo | undefined
   whenReady: (termId: string) => Promise<void>
   submit: (termId: string, text: string) => void
   runCommand: (termId: string, command: string) => void
   setModel?: (termId: string, model: string) => Promise<void>
-  beginOutputCapture?: (termId: string, prompt: string) => string | void
+  /** schema: 출력 구조가 있으면 MCP 도구로 제출받을 때 검사할 구조 */
+  beginOutputCapture?: (termId: string, prompt: string, schema?: string) => string | void
   readAgentOutput?: (termId: string) => string | undefined
   endOutputCapture?: (termId: string) => void
   interrupt?: (termId: string) => void
@@ -1443,9 +1447,12 @@ export class PipelineRunner {
           return
         } else {
         const model = isAgent(node) ? node.model?.trim() || undefined : undefined
-        const terminal = model
-          ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model)
-          : await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
+        const tabTitle = node.tabTitle?.trim() || undefined
+        const terminal = tabTitle
+          ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model, tabTitle)
+          : model
+            ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model)
+            : await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session)
         termId = terminal.id
         needsReady = !terminal.reused
         }
@@ -1479,7 +1486,7 @@ export class PipelineRunner {
       if (node.kind === 'shell') this.deps.runCommand(termId, text)
       else {
         const prompt = node.outputSchema ? structuredPrompt(text, node.outputSchema) : text
-        const capturedPrompt = this.deps.beginOutputCapture?.(termId, prompt)
+        const capturedPrompt = this.deps.beginOutputCapture?.(termId, prompt, node.outputSchema)
         this.deps.submit(termId, capturedPrompt ?? prompt)
       }
     } catch (e) {

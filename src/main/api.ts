@@ -82,12 +82,12 @@ export function createApi(deps: ApiDeps) {
 
   /** IN-F11: 터미널 작업 그래프를 실행한다. 노드가 끝나면 이어진 다음 노드를 연다. */
   const pipes = new PipelineRunner({
-    createTerminal: async (kind, label, session, model) => {
+    createTerminal: async (kind, label, session, model, tabTitle) => {
       const c = need()
       const settings = await ws.readSettings(c)
       const workspace = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
-      const title = `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`.slice(0, 100)
+      const title = (tabTitle || `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`).slice(0, 100)
       const { reused, ...info } = await workspace.open(kind, settings, { title, resume: session, model })
       deps.send('term-created', info)
       return { ...info, reused }
@@ -101,7 +101,7 @@ export function createApi(deps: ApiDeps) {
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       await workspace.setModel(id, model, settings)
     },
-    beginOutputCapture: (id, prompt) => terminals?.beginOutputCapture(id, prompt),
+    beginOutputCapture: (id, prompt, schema) => terminals?.beginOutputCapture(id, prompt, schema),
     readAgentOutput: (id) => terminals?.readAgentOutput(id),
     endOutputCapture: (id) => terminals?.endOutputCapture(id),
     interrupt: (id) => terminals?.write(id, '\x03'),

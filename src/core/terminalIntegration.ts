@@ -110,6 +110,84 @@ if (action === 'start') {
 }
 `
 
+/**
+ * 그래프의 출력 구조를 도구 호출로 받는 MCP 서버 (stdio, 줄 단위 JSON-RPC).
+ * 에이전트가 submit_output을 부르면 지금 수집 중인 요청의 출력 구조로 검사해 틀린 곳을 바로 돌려준다.
+ * 통과한 값만 mcp-output.json에 남긴다. 최종 판정은 앱이 다시 한다 (validateOutput).
+ */
+export const MCP_SERVER_NAME = 'orbit'
+export const MCP_SUBMIT_TOOL = 'submit_output'
+const mcpServer = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = process.argv[2];
+const TOOL = 'submit_output';
+const NAMES = { string: 'String', number: 'Number', boolean: 'Boolean', object: 'Object', array: 'Array', null: 'Null' };
+function send(message) { process.stdout.write(JSON.stringify(message) + '\n'); }
+function typeOf(value) { return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value; }
+function check(value, schema, at) {
+  if (!schema || !schema.type) return;
+  const actual = typeOf(value);
+  if (actual !== schema.type) throw new Error('필드 "' + at + '": ' + NAMES[schema.type] + '이 필요하지만 ' + (NAMES[actual] || actual) + '입니다');
+  if (actual === 'array' && schema.items) value.forEach((item, i) => check(item, schema.items, at + '[' + i + ']'));
+  if (actual === 'object' && schema.properties) {
+    const child = key => at ? at + '.' + key : key;
+    for (const key of schema.required || []) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) throw new Error('필드 "' + child(key) + '"가 없습니다');
+      check(value[key], schema.properties[key], child(key));
+    }
+    for (const key of Object.keys(value)) if (!Object.prototype.hasOwnProperty.call(schema.properties, key)) throw new Error('정의하지 않은 필드 "' + child(key) + '"가 있습니다');
+  }
+}
+function capture() {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'capture.json'), 'utf8')); } catch { return null; }
+}
+function submit(args) {
+  const request = capture();
+  if (!request || !request.schema) throw new Error('지금은 Orbit 작업 그래프가 결과를 기다리지 않습니다. 이 도구를 부르지 말고 평소대로 응답하세요');
+  let result = args && args.result;
+  if (typeof result === 'string') { try { result = JSON.parse(result); } catch { throw new Error('result는 JSON 객체여야 합니다'); } }
+  if (typeOf(result) !== 'object') throw new Error('result는 JSON 객체(Dictionary)여야 합니다');
+  const schema = JSON.parse(request.schema);
+  try { check(result, schema, ''); }
+  catch (error) { throw new Error(error.message + '\n\n고쳐서 다시 제출하세요. 출력 구조:\n' + request.schema); }
+  const target = path.join(dir, 'mcp-output.json');
+  const pending = target + '.' + process.pid + '.tmp';
+  fs.writeFileSync(pending, JSON.stringify({ requestId: request.requestId, output: JSON.stringify(result) }));
+  fs.renameSync(pending, target);
+}
+function handle(message) {
+  const { id, method, params } = message;
+  if (id === undefined || id === null) return;
+  if (method === 'initialize') return send({ jsonrpc: '2.0', id, result: { protocolVersion: (params && params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'orbit', version: '1.0.0' } } });
+  if (method === 'ping') return send({ jsonrpc: '2.0', id, result: {} });
+  if (method === 'tools/list') return send({ jsonrpc: '2.0', id, result: { tools: [{
+    name: TOOL,
+    description: 'Orbit 작업 그래프가 요청한 결과를 제출한다. 프롬프트에 [출력 형식]이 있을 때만, 작업을 마친 뒤 한 번 부른다. 출력 구조에 맞지 않으면 틀린 곳을 알려 주므로 고쳐서 다시 부른다.',
+    inputSchema: { type: 'object', properties: { result: { type: 'object', description: '프롬프트의 출력 구조(JSON Schema)를 따르는 결과 객체' } }, required: ['result'] },
+    annotations: { title: 'Orbit 결과 제출', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  }] } });
+  if (method === 'tools/call') {
+    if (!params || params.name !== TOOL) return send({ jsonrpc: '2.0', id, error: { code: -32602, message: '알 수 없는 도구입니다' } });
+    try { submit(params.arguments); return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: '제출했습니다. 결과를 다시 출력하지 말고 응답을 마치세요.' }] } }); }
+    catch (error) { return send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: error.message }] } }); }
+  }
+  send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
+}
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  buffer += chunk;
+  let at;
+  while ((at = buffer.indexOf('\n')) >= 0) {
+    const line = buffer.slice(0, at).trim();
+    buffer = buffer.slice(at + 1);
+    if (!line) continue;
+    try { handle(JSON.parse(line)); } catch {}
+  }
+});
+`
+
 export function shellQuote(value: string, platform = process.platform): string {
   return platform === 'win32' ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`
 }
@@ -272,18 +350,21 @@ export function capturePromptHash(text: string): string {
 }
 
 /** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
-export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string): string {
+/** schema: 출력 구조가 있으면 MCP 서버(submit_output)가 이 구조로 제출을 검사한다. */
+export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string, schema?: string): string {
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
   endOutputCapture(dir)
   for (const signal of ['working', 'done', 'idle'] as const) rmSync(signalFile(dir, signal), { force: true })
   const promptHash = capturePromptHash(prompt)
   const requestId = randomUUID()
-  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now() }))
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}) }))
   return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
 }
 export function readAgentError(dir: string): string | undefined {
   try {
     const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string }
+    // 마지막 메시지를 못 읽어도 도구로 제출한 결과가 있으면 실패가 아니다.
+    if (readMcpOutput(dir, capture.requestId) !== undefined) return undefined
     const result = JSON.parse(readFileSync(path.join(dir, 'agent-output.json'), 'utf8')) as { requestId: string; error?: unknown }
     return result.requestId === capture.requestId && typeof result.error === 'string' ? result.error : undefined
   } catch { return undefined }
@@ -305,12 +386,24 @@ export function readAgentOutput(dir: string): string | undefined {
     const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string }
     const file = path.join(dir, 'agent-output.json')
     if (statSync(file).size > 32 * 1024 * 1024) return undefined
+    const result = JSON.parse(readFileSync(file, 'utf8')) as { requestId: string; output?: unknown; error?: unknown }
+    if (result.requestId !== capture.requestId) return undefined
+    // 턴이 끝난 뒤에만 넘긴다. 도구로 제출한 결과가 있으면 최종 메시지보다 그것을 쓴다.
+    const submitted = readMcpOutput(dir, capture.requestId)
+    if (submitted !== undefined) return submitted
+    return typeof result.output === 'string' ? result.output : undefined
+  } catch { return undefined }
+}
+function readMcpOutput(dir: string, requestId: string): string | undefined {
+  try {
+    const file = path.join(dir, 'mcp-output.json')
+    if (statSync(file).size > 32 * 1024 * 1024) return undefined
     const result = JSON.parse(readFileSync(file, 'utf8')) as { requestId: string; output?: unknown }
-    return result.requestId === capture.requestId && typeof result.output === 'string' ? result.output : undefined
+    return result.requestId === requestId && typeof result.output === 'string' ? result.output : undefined
   } catch { return undefined }
 }
 export function endOutputCapture(dir: string): void {
-  for (const name of ['capture.json', 'agent-output.json']) rmSync(path.join(dir, name), { force: true })
+  for (const name of ['capture.json', 'agent-output.json', 'mcp-output.json']) rmSync(path.join(dir, name), { force: true })
 }
 
 /** 신호 파일이 있으면 지우고 true를 돌려준다. */
@@ -334,7 +427,7 @@ export function takeAgentSignals(dir: string): AgentSignal[] {
 }
 
 /** 앱이 만든 셸에만 적용한다. 사용자의 CLI 전역 설정·셸 프로필은 수정하지 않는다. */
-export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string, platform = process.platform): { init: string; env: Record<string, string>; claudeSettings: string; codexNotify: string } {
+export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string, platform = process.platform): { init: string; env: Record<string, string>; claudeSettings: string; codexNotify: string; claudeMcp: string; codexMcp: string } {
   mkdirSync(dir, { recursive: true })
   const helper = path.join(dir, 'bridge.cjs')
   const state = path.join(dir, 'state.json')
@@ -342,6 +435,13 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   const init = path.join(dir, platform === 'win32' ? 'init.ps1' : 'init.sh')
   const generation = randomUUID()
   writeFileSync(helper, bridge)
+  const mcp = path.join(dir, 'mcp.cjs')
+  writeFileSync(mcp, mcpServer)
+  const server = { command: process.execPath, args: [slash(mcp), slash(dir)], env: { ELECTRON_RUN_AS_NODE: '1' } }
+  const claudeMcp = path.join(dir, 'claude-mcp.json')
+  writeFileSync(claudeMcp, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'stdio', ...server } } }))
+  // Codex -c 값은 TOML이다. JSON 문자열·배열은 TOML 기본 문자열·배열로도 읽힌다.
+  const codexMcp = `mcp_servers.${MCP_SERVER_NAME}={command=${JSON.stringify(slash(server.command))},args=${JSON.stringify(server.args)},env={ELECTRON_RUN_AS_NODE="1"}}`
   writeFileSync(init, platform === 'win32' ? powershellInit : path.basename(process.env.SHELL ?? '') === 'fish' ? fishInit : posixInit)
   writeFileSync(state, JSON.stringify({ generation, runId: generation, kind, cwd, args: [], running: kind !== 'shell' }))
   const hookCommand = (action: string) => platform === 'win32'
@@ -352,7 +452,8 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   endOutputCapture(dir)
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
-  writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  // 결과 제출 도구는 묻지 않고 쓰게 한다 (그래프 실행이 권한 확인에서 멈추지 않도록)
+  writeFileSync(settings, JSON.stringify({ permissions: { allow: [`mcp__${MCP_SERVER_NAME}__${MCP_SUBMIT_TOOL}`] }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
   const notify = path.join(dir, `notify.${win ? 'ps1' : 'sh'}`)
@@ -365,6 +466,8 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
     init: `. ${shellQuote(init)}`,
     claudeSettings: settings,
     codexNotify,
+    claudeMcp,
+    codexMcp,
     env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings, ORBIT_CODEX_NOTIFY: codexNotify }
   }
 }

@@ -126,8 +126,12 @@ function validateValue(value: JsonValue, schema: OutputValueSchema, path: string
   }
 }
 
+/**
+ * 결과는 orbit MCP 서버의 submit_output 도구로 받는다. 도구가 구조를 바로 검사해 틀리면 에이전트가 고쳐 다시 낸다.
+ * 도구가 없는 터미널(사용자가 직접 띄운 CLI 등)에서는 예전처럼 최종 응답의 JSON을 읽는다.
+ */
 export function structuredPrompt(prompt: string, schema: string): string {
-  return `${prompt}\n\n[출력 형식]\n최종 응답은 아래 JSON Schema를 따르는 JSON 객체 하나로 작성하세요. 각 필드의 description에 적힌 작성 규칙을 따르세요. 코드 블록이나 JSON 밖의 설명은 쓰지 마세요.\n${schema}`
+  return `${prompt}\n\n[출력 형식]\n작업을 마치면 결과를 orbit MCP 서버의 submit_output 도구로 제출하세요. result 인자는 아래 JSON Schema를 따르는 JSON 객체이며, 각 필드의 description에 적힌 작성 규칙을 따르세요. 도구가 오류를 돌려주면 고쳐서 다시 제출하세요.\nsubmit_output 도구를 쓸 수 없을 때만 최종 응답을 이 JSON 객체 하나로 작성하세요 (코드 블록이나 JSON 밖의 설명 없이).\n${schema}`
 }
 
 // 기존 출력 토큰과 함께 중첩되는 JSON 선택식을 보관한다. 실행 시에만 실제 값을 읽는다.

@@ -65,6 +65,15 @@ describe('작업 그래프 터미널 입출력', () => {
     expect(h.runner.list()[0].nodes.ai.message).toContain('모델을 적용')
   })
 
+  it('노드에 정한 탭 이름으로 새 탭을 열고, 저장·복원한다', async () => {
+    const p: Pipeline = { ...graph(), nodes: [node('ai', 'claude', { text: '작업', tabTitle: ' 리뷰 담당 ' })], edges: [] }, h = runnerHarness([])
+    h.start(p)
+    await vi.waitFor(() => expect(h.submit).toHaveBeenCalledTimes(1))
+    expect(h.createTerminal).toHaveBeenCalledWith('claude', 'ai', undefined, undefined, '리뷰 담당')
+    const saved = await savePipeline(await newProject(), p)
+    expect(saved.nodes[0].tabTitle).toBe('리뷰 담당')
+  })
+
   it('[DM-F02-AC22] 모델을 저장·복원하고 함수 안의 노드에도 유지하며 잘못된 값은 실행 전에 알린다', async () => {
     const ctx = await newProject(), definition = fn()
     definition.nodes[1].model = ' custom/model:v2 '

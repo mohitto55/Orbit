@@ -1404,6 +1404,20 @@ function NodePanel({
           {(node.kind === 'claude' || node.kind === 'codex') && node.terminal === 'new' && !linkedTerminal && (
             <SessionField kind={node.kind} value={node.session} disabled={locked} onChange={(session) => onPatch({ session })} />
           )}
+          {node.terminal === 'new' && !linkedTerminal && (
+            <div className="field">
+              <label>탭 이름</label>
+              <input
+                aria-label="탭 이름"
+                value={node.tabTitle ?? ''}
+                maxLength={100}
+                disabled={locked}
+                placeholder={`${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[node.kind as 'shell' | 'claude' | 'codex']} · ${node.name || node.id}`}
+                onChange={(e) => onPatch({ tabTitle: e.target.value || undefined })}
+              />
+              <div className="small muted">새 탭으로 열 때 위 탭에 보일 이름이에요. 비우면 종류와 노드 이름을 씁니다.{node.session ? ' 선택한 세션의 탭이 이미 열려 있으면 그 탭을 그대로 써요.' : ''}</div>
+            </div>
+          )}
           {(node.kind === 'claude' || node.kind === 'codex') && <AgentOptionsFields kind={node.kind} value={{ model: node.model }} showEffort={false} disabled={locked} onChange={onPatch} />}
           <div className="field">
             <label>{node.kind === 'shell' ? '명령 (여러 줄이면 차례로 실행)' : '프롬프트'}</label>
