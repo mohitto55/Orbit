@@ -29,7 +29,7 @@ it('재개 명령은 사용자 실행 옵션을 보존하되 프롬프트·이�
   expect(resumeOptions(['--yolo', '--model', 'old-model'], 'codex --yolo --model new-model resume id')).toEqual([])
 })
 
-it.skipIf(process.platform !== 'win32').each(['plain', "한글 폴더's"])('[DM-F02-AC15] Windows PowerShell에서 %s 경로의 notify 배열을 큰따옴표 손실 없이 전달한다', async (folder) => {
+it.skipIf(process.platform !== 'win32').each(['plain', "한글 폴더's"])('[DM-F02-AC15] Windows PowerShell에서 %s 경로의 notify와 Orbit MCP 설정을 큰따옴표 손실 없이 전달한다', async (folder) => {
   const root = await tempDir('orbit-codex-arguments-')
   const dir = path.join(root, folder), bin = path.join(root, 'bin')
   await fs.mkdir(bin)
@@ -40,11 +40,12 @@ it.skipIf(process.platform !== 'win32').each(['plain', "한글 폴더's"])('[DM-
   await fs.writeFile(path.join(bin, 'codex.ps1'), '& $env:ORBIT_NODE $env:ORBIT_ARG_CAPTURE @args')
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
   const env = { ...process.env, ...integration.env, [pathKey]: `${bin}${path.delimiter}${process.env[pathKey] ?? ''}`, ORBIT_ARG_CAPTURE: capture, ORBIT_ARG_RESULT: result }
-  const script = `${integration.init}\ncodex --no-daemon -c ${shellQuote(integration.codexNotify)}`
+  const script = `${integration.init}\ncodex --no-daemon -c ${shellQuote(integration.codexNotify)} -c ${shellQuote(integration.codexMcp)}`
   // Windows CI에서 첫 PowerShell 기동은 기본 테스트 제한(5초)보다 오래 걸릴 수 있다.
   execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: root, stdio: 'pipe', timeout: 15000 })
   const args = JSON.parse(await fs.readFile(result, 'utf8')) as string[]
   expect(args.filter((arg) => arg.startsWith('notify='))).toEqual([integration.codexNotify, integration.codexNotify])
+  expect(args.find((arg) => arg.startsWith('mcp_servers.orbit='))).toBe(integration.codexMcp)
 }, 20000)
 
 it('[TE-F03-AC1] 한 번의 폴링 사이에 끝난 작업과 다음 작업의 시작 신호를 시간순으로 받는다', async () => {

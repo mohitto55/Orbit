@@ -220,9 +220,9 @@ if ($global:OrbitCodexCommand) {
     Invoke-OrbitBridge start codex @args
     $orbitExtra = @('-c', "tui.terminal_title=['session-id','status']", '-c', $env:ORBIT_CODEX_NOTIFY)
     $orbitArgs = @($args)
-    # Windows PowerShell은 네이티브 인자의 큰따옴표를 제거하므로 notify의 TOML 문자열을 보존한다.
+    # Windows PowerShell은 네이티브 인자의 큰따옴표를 제거하므로 notify와 Orbit MCP의 TOML 문자열을 보존한다.
     if ($PSVersionTable.PSVersion -lt [version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') {
-      $orbitArgs = @($orbitArgs | ForEach-Object { if ([string]$_ -like 'notify=*') { ([string]$_).Replace('"', '"""') } else { $_ } })
+      $orbitArgs = @($orbitArgs | ForEach-Object { if ([string]$_ -match '^(notify|mcp_servers\.orbit)=') { ([string]$_).Replace('"', '"""') } else { $_ } })
       $orbitExtra[3] = $orbitExtra[3].Replace('"', '"""')
     }
     if ($args -notcontains '--no-daemon') { $orbitExtra += '--no-daemon' }
