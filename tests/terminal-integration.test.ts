@@ -46,6 +46,9 @@ it.skipIf(process.platform !== 'win32').each(['plain', "한글 폴더's"])('[DM-
   const args = JSON.parse(await fs.readFile(result, 'utf8')) as string[]
   expect(args.filter((arg) => arg.startsWith('notify='))).toEqual([integration.codexNotify, integration.codexNotify])
   expect(args.find((arg) => arg.startsWith('mcp_servers.orbit='))).toBe(integration.codexMcp)
+  const manual = `${integration.init}\ncodex --no-daemon`
+  execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(manual, 'utf16le').toString('base64')], { env, cwd: root, stdio: 'pipe', timeout: 15000 })
+  expect(JSON.parse(await fs.readFile(result, 'utf8'))).toContain(integration.codexMcp)
 }, 20000)
 
 it('[TE-F03-AC1] 한 번의 폴링 사이에 끝난 작업과 다음 작업의 시작 신호를 시간순으로 받는다', async () => {
@@ -67,7 +70,7 @@ it('그래프 출력 구조는 orbit MCP 서버의 submit_output으로 받고, �
   const integration = prepareTerminalIntegration(dir, 'claude', dir)
   const config = JSON.parse(await fs.readFile(integration.claudeMcp, 'utf8'))
   const server = config.mcpServers[MCP_SERVER_NAME]
-  expect(JSON.parse(await fs.readFile(integration.claudeSettings, 'utf8')).permissions.allow).toEqual([`mcp__${MCP_SERVER_NAME}__${MCP_SUBMIT_TOOL}`])
+  expect(JSON.parse(await fs.readFile(integration.claudeSettings, 'utf8')).permissions.allow).toEqual(['submit_output', 'list_peers', 'send_message', 'receive_messages'].map((tool) => `mcp__${MCP_SERVER_NAME}__${tool}`))
   expect(integration.codexMcp).toMatch(/^mcp_servers\.orbit=\{command=".+",args=\[".+mcp\.cjs",".+"\],env=\{ELECTRON_RUN_AS_NODE="1"\}\}$/)
   const schema = JSON.stringify({ type: 'object', properties: { title: { type: 'string', description: '' }, count: { type: 'number', description: '' } }, required: ['title', 'count'], additionalProperties: false })
   const call = (id: number, result: unknown) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: MCP_SUBMIT_TOOL, arguments: { result } } })
@@ -86,7 +89,7 @@ it('그래프 출력 구조는 orbit MCP 서버의 submit_output으로 받고, �
     call(5, JSON.stringify({ title: '완료', count: 2 }))
   ])
   expect(init.result.capabilities.tools).toEqual({})
-  expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([MCP_SUBMIT_TOOL])
+  expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([MCP_SUBMIT_TOOL, 'list_peers', 'send_message', 'receive_messages'])
   expect(wrong.result).toMatchObject({ isError: true })
   expect(wrong.result.content[0].text).toContain('필드 "count": Number이 필요하지만 String입니다')
   expect(extra.result.content[0].text).toContain('정의하지 않은 필드 "more"')

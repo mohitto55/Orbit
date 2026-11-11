@@ -919,3 +919,6 @@ ol.pipe-list-items { padding-left: 20px; display: block; }
 .automation-editor .pipe-layout { flex: 1; min-height: 450px; }
 .run-table td { vertical-align: top; }
 .run-table td:first-child { width: 32%; overflow-wrap: anywhere; }
+.pipe-message-peers { min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+.pipe-message-peers > label { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.pipe-message-peers input[type="checkbox"] { width: auto; }

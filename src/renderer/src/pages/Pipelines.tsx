@@ -47,7 +47,7 @@ import { AgentOptionsFields } from '../AgentOptionsFields'
 import { PaneDivider, usePipelineLayout } from '../PipelineLayout'
 import { parseJson, structuredPrompt, toPointer } from '../../../core/structuredData'
 import { useAutomation } from '../Automation'
-import { isListShape, isOpenTask, sourceKind } from '../../../core/pipeline'
+import { isListShape, isOpenTask, sourceKind, messagePeers, withMessagePeers } from '../../../core/pipeline'
 import { SourcePicker, type SourceOption } from '../SourcePicker'
 import { SkillEditor } from '../SkillEditor'
 
@@ -515,14 +515,14 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     const removed = new Set((d.nodes.find((n) => n.id === id)?.params ?? []).filter((p) => patch.params && !patch.params.some((v) => v.id === p.id)).map((p) => p.id))
     return {
       ...d,
-      nodes: d.nodes.map((n) => n.id === id ? { ...n, ...patch } : n),
+      nodes: (patch.peers ? withMessagePeers(d.nodes, id, patch.peers) : d.nodes).map((n) => n.id === id ? { ...n, ...patch } : n),
       edges: d.edges.filter((e) => !(e.from === id && removed.has(e.fromPort ?? '')) && !(e.to === id && removed.has(e.toPort ?? '')))
     }
   })
   const nm = (id: string) => nodeName(draft?.nodes.find((n) => n.id === id) ?? { id })
   const removeNode = (id: string) => {
     if (draft?.nodes.some((n) => n.id === id && isFunctionBoundary(n))) return toast('함수 Input·Output은 고정 노드입니다')
-    update((d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== id), edges: d.edges.filter((e) => e.from !== id && e.to !== id) }))
+    update((d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== id).map((n) => n.peers ? { ...n, peers: n.peers.filter((peer) => peer !== id) } : n), edges: d.edges.filter((e) => e.from !== id && e.to !== id) }))
     setSel(null)
   }
   const canConnect = (d: Draft, from: string, to: string, pin?: OutPin, toPort?: string) => {
@@ -1419,6 +1419,16 @@ function NodePanel({
             </div>
           )}
           {(node.kind === 'claude' || node.kind === 'codex') && <AgentOptionsFields kind={node.kind} value={{ model: node.model }} showEffort={false} disabled={locked} onChange={onPatch} />}
+          {isAgent(node) && <fieldset className="field pipe-message-peers">
+            <legend>대화 연결</legend>
+            <div className="small muted">선택한 상대와 같은 실행 안에서 메시지를 주고받습니다. 실행 순서는 바뀌지 않습니다. 동시에 협업하려면 시작에서 각 노드로 실행 선을 연결하세요.</div>
+            {draft.nodes.filter((peer) => isAgent(peer) && peer.id !== node.id).map((peer) => {
+              const selected = messagePeers(draft, node.id).map((n) => n.id)
+              return <label key={peer.id} className="small"><input type="checkbox" checked={selected.includes(peer.id)} disabled={locked} onChange={(e) => onPatch({ peers: e.target.checked ? [...selected, peer.id] : selected.filter((id) => id !== peer.id) })} /> {nodeName(peer)} · {KIND_LABEL[peer.kind]}</label>
+            })}
+            {!draft.nodes.some((peer) => isAgent(peer) && peer.id !== node.id) && <div className="small muted">연결할 Claude 또는 Codex 노드를 추가하세요.</div>}
+            <div className="small muted">작업 중 수신 도구로 메시지를 확인하며, 수신 대기 중에는 도착 즉시 전달됩니다. 작업 완료·중지 시 연결이 닫힙니다.</div>
+          </fieldset>}
           <div className="field">
             <label>{node.kind === 'shell' ? '명령 (여러 줄이면 차례로 실행)' : '프롬프트'}</label>
             <textarea
@@ -1759,6 +1769,7 @@ function Canvas({
         { selector: 'edge.task', style: { 'line-color': KIND_COLOR.task, width: 2 } },
         { selector: 'edge.boolean', style: { 'line-color': BOOL_COLOR, width: 2 } },
         { selector: 'edge.number', style: { 'line-color': NUMBER_COLOR, width: 2 } },
+        { selector: 'edge.message', style: { 'line-color': '#9b6ac4', 'line-style': 'dashed', 'curve-style': 'bezier', 'source-endpoint': 'outside-to-node', 'target-endpoint': 'outside-to-node', 'source-arrow-shape': 'triangle', 'target-arrow-shape': 'triangle', 'source-arrow-color': '#9b6ac4', 'target-arrow-color': '#9b6ac4', label: '대화', 'font-size': 10, color: dark ? '#d0a9ef' : '#7840a4', width: 1.5 } },
         { selector: 'edge.sel, edge.hover', style: { 'line-color': accent, width: 3.4 } },
         { selector: '.eh-ghost-edge, edge.eh-preview', style: { 'line-color': '#d0702a', 'line-style': 'dashed', width: 2 } },
         { selector: '.eh-ghost-edge.eh-preview-active', style: { opacity: 0 } }
@@ -1867,6 +1878,7 @@ function Canvas({
     instance.on('tap', 'node', (e) => h.current.onTapNode(e.target.id()))
     instance.on('dbltap', 'node', (e) => h.current.onOpenNode(e.target.id()))
     instance.on('tap', 'edge', (e) => {
+      if (e.target.hasClass('message')) { h.current.onTapNode(e.target.data('source')); return }
       h.current.onTapEdge(edgeOf(e.target.data('source'), e.target.data('target'), e.target.data('fromPort') ?? e.target.data('pin'), e.target.data('toPort')))
     })
     instance.on('tap', (e) => e.target === instance && h.current.onTapBackground())
@@ -1918,7 +1930,8 @@ function Canvas({
         const selected = !!sel && 'node' in sel && sel.node === n.id
         el.classes([...el.classes().filter((name) => name.startsWith('eh-')), st ?? '', selected ? 'sel' : '', connectFrom === n.id ? 'source' : ''].filter(Boolean))
       }
-      const want = new Set(draft.edges.map(edgeKey))
+      const messages = draft.nodes.flatMap((n) => messagePeers(draft, n.id).filter((peer) => n.id < peer.id).map((peer) => ({ id: `message:${JSON.stringify([n.id, peer.id])}`, source: n.id, target: peer.id })))
+      const want = new Set([...draft.edges.map(edgeKey), ...messages.map((edge) => edge.id)])
       c.edges().not('.eh-ghost, .eh-preview').forEach((e) => void (want.has(e.id()) || e.remove()))
       for (const e of draft.edges) {
         const id = edgeKey(e)
@@ -1927,6 +1940,7 @@ function Canvas({
         const s = !!sel && 'edge' in sel && sameEdge(sel.edge, e)
         el.classes([...(isDataEdge(draft, e) ? ['data', edgeShape(draft, e, env)] : []), ...(s ? ['sel'] : [])])
       }
+      for (const edge of messages) if (c.getElementById(edge.id).empty()) c.add({ group: 'edges', data: edge, classes: 'message' })
     })
     c.style().update()
     const ext = c.extent()

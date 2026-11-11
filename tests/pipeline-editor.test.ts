@@ -66,6 +66,25 @@ afterEach(async () => {
 })
 const mount = (tabs: TerminalInfo[] = []) => act(async () => root.render(createElement(PipelineEditor, { tabs, onShowTerminal: () => {} })))
 const select = (id: string) => act(async () => { graph().getElementById(id).emit('tap') })
+
+it('대화 상대를 선택·재열기·상대에서 해제하고 점선은 실행 선으로 저장하지 않는다', async () => {
+  saved[0].nodes = [node('구현', 'codex', { text: '구현', x: 0, y: 0 }), node('검증', 'claude', { text: '검증', x: 400, y: 0 }), node('별도', 'codex', { text: '별도', x: 0, y: 200 })]
+  await mount(); await select('구현')
+  const checkbox = [...host.querySelectorAll<HTMLInputElement>('.pipe-message-peers input')].find((input) => input.parentElement?.textContent?.includes('검증'))!
+  await act(async () => checkbox.click())
+  await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+  expect(saved[0].nodes.find((n) => n.id === '구현')?.peers).toEqual(['검증'])
+  expect(saved[0].nodes.find((n) => n.id === '검증')?.peers).toEqual(['구현'])
+  expect(saved[0].edges).toEqual([])
+  expect(graph().edges('.message')).toHaveLength(1)
+  await select('검증')
+  const reverse = [...host.querySelectorAll<HTMLInputElement>('.pipe-message-peers input')].find((input) => input.parentElement?.textContent?.includes('구현'))!
+  expect(reverse.checked).toBe(true)
+  await act(async () => reverse.click())
+  await act(async () => { await vi.advanceTimersByTimeAsync(550) })
+  expect(graph().edges('.message')).toHaveLength(0)
+  expect(saved[0].nodes.find((n) => n.id === '구현')?.peers).toEqual([])
+})
 async function click(text: string) {
   const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === text)
   if (!button) throw new Error(`버튼 없음: ${text}`)

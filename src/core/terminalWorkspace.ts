@@ -6,6 +6,7 @@ import { TerminalManager, terminalCommand, validateSessionId, type TerminalActiv
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
 import { beginOutputCapture, captureCodexResult, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
+import { messageRoot, readMessageLog, writeMessageScope, type MessageBinding, type MessageScope } from './sessionMessages'
 import { CodexCaptureReader } from './codexCapture'
 import { effortProblem, modelProblem, type AgentOptions } from './agentModel'
 import { agentModels } from './agentModels'
@@ -312,12 +313,15 @@ export class TerminalWorkspace {
 
   private integrationDir(id: string): string { return path.join(`${this.file}.sessions`, id) }
 
-  beginOutputCapture(id: string, prompt: string, schema?: string): string {
+  syncMessageRun(runId: string, scope: MessageScope): void { writeMessageScope(messageRoot(this.file, runId), scope) }
+  messageLog(runId: string) { return readMessageLog(messageRoot(this.file, runId)) }
+
+  beginOutputCapture(id: string, prompt: string, schema?: string, messages?: MessageBinding): string {
     if (!this.manager.has(id)) throw new Error('터미널이 닫혔습니다')
     const tab = this.tabs.get(id)!
     this.syncLaunch(tab)
     const sessionId = !tab.codexPrefix || tab.sessionId?.startsWith(tab.codexPrefix) ? tab.sessionId : undefined
-    const since = Date.now(), tagged = beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix, schema)
+    const since = Date.now(), tagged = beginOutputCapture(this.integrationDir(id), prompt, sessionId, tab.codexPrefix, schema, messages && { root: messageRoot(this.file, messages.runId), nodeId: messages.nodeId })
     const file = this.codexFiles.get(id)
     let reader: CodexCaptureReader | undefined
     if (file && file.id === sessionId) {

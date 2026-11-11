@@ -33,6 +33,7 @@ function readNodes(v: unknown): PipeNode[] {
       ...(typeof n.session === 'string' && n.session && (n.kind === 'claude' || n.kind === 'codex') ? { session: n.session } : {}),
       ...(typeof n.model === 'string' && n.model.trim() && (n.kind === 'claude' || n.kind === 'codex') ? { model: n.model.trim() } : {}),
       ...(typeof n.tabTitle === 'string' && n.tabTitle.trim() && ['claude', 'codex', 'shell'].includes(n.kind) ? { tabTitle: n.tabTitle.trim().slice(0, 100) } : {}),
+      ...(Array.isArray(n.peers) && ['claude', 'codex'].includes(n.kind) ? { peers: [...new Set(n.peers.filter((id: unknown): id is string => typeof id === 'string' && id !== n.id && v.some((peer) => peer?.id === id && ['claude', 'codex'].includes(peer.kind))))] } : {}),
       ...(typeof n.ref === 'string' && n.ref ? { ref: n.ref } : {}),
       ...(typeof n.x === 'number' ? { x: n.x } : {}),
       ...(typeof n.y === 'number' ? { y: n.y } : {})

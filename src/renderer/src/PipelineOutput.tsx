@@ -3,11 +3,14 @@ import type { PipeNode, RunState } from './types'
 import { KIND_NAME } from './types'
 import { errorToast, toast } from './ui'
 import { PaneDivider } from './PipelineLayout'
+import { PipelineMessages } from './PipelineMessages'
 
 /** 실제 실행 결과만 표시한다. 편집 중 미리 보기 값과 섞지 않는다. */
 export function PipelineOutput({ run, nodes, onSelect, height, onResize }: { run?: RunState; nodes: PipeNode[]; onSelect: (id: string) => void; height: number; onResize: (height: number) => void }) {
   const [open, setOpen] = useState(true)
   const [onlyPrint, setOnlyPrint] = useState(false)
+  const [showMessages, setShowMessages] = useState(false)
+  const hasMessages = run?.messaging || nodes.some((node) => node.peers?.length)
   const [limit, setLimit] = useState(100)
   const scroll = useRef<HTMLDivElement>(null), follow = useRef(true)
   const entries = Object.entries(run?.nodes ?? {}).filter(([, state]) => state.output !== undefined && (!onlyPrint || state.kind === 'print'))
@@ -25,11 +28,13 @@ export function PipelineOutput({ run, nodes, onSelect, height, onResize }: { run
     <div className="row between pipe-console-toolbar">
       <button className="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'} 출력 로그 <span className="muted">{entries.length}</span></button>
       <label className="small"><input type="checkbox" checked={onlyPrint} onChange={(event) => setOnlyPrint(event.target.checked)} /> Print만</label>
+      {hasMessages && <button className={showMessages ? 'on' : 'ghost'} aria-pressed={showMessages} onClick={() => setShowMessages(!showMessages)}>세션 대화</button>}
     </div>
     {open && <div ref={scroll} className="pipe-console-entries" onScroll={(event) => {
       const el = event.currentTarget
       follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
     }}>
+      {showMessages && hasMessages ? <PipelineMessages run={run} /> : <>
       {!entries.length && <p className="small muted">{run?.status === 'running' ? '출력을 기다리고 있습니다…' : 'Print에 값을 연결하고 실행하면 중간값을 볼 수 있습니다. Claude·Codex 응답과 셸 출력도 여기에 표시됩니다.'}</p>}
       {entries.length > limit && <button className="ghost" onClick={() => { follow.current = false; setLimit(limit + 100) }}>이전 출력 더 보기 ({entries.length - limit})</button>}
       {entries.slice(-limit).map(([id, state]) => {
@@ -45,6 +50,7 @@ export function PipelineOutput({ run, nodes, onSelect, height, onResize }: { run
           <pre>{state.output === '' ? <span className="muted">(빈 문자열)</span> : state.output}</pre>
         </article>
       })}
+      </>}
     </div>}
   </section></>
 }

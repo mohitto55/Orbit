@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, sta
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
 import type { TerminalKind } from './terminal'
+import { messageRuntime } from './sessionMessages'
 
 export interface CliLaunch {
   kind: 'codex' | 'claude'
@@ -59,6 +60,7 @@ function complete(event) {
       if (!Array.isArray(event['input-messages']) || !event['input-messages'].some(text => matchesRequest(text, capture))) return;
     } else if (!capture.submitted || sessionId !== capture.submitted) return;
   }
+  if (!codex && require('./messages.cjs').hook(dir, event)) return;
   try {
     const output = event.last_assistant_message ?? event['last-assistant-message'];
     if (capture) {
@@ -121,7 +123,14 @@ const mcpServer = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
 const dir = process.argv[2];
+process.env.ORBIT_TERMINAL_GENERATION = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).generation;
 const TOOL = 'submit_output';
+const messages = require('./messages.cjs');
+const messageTools = [
+  { name: 'list_peers', description: '현재 자동화에서 직접 대화 연결된 상대 ID·이름·종류·상태를 조회한다. 다른 실행과 연결하지 않은 세션은 보이지 않는다.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'send_message', description: 'list_peers에서 확인한 상대에게 메시지를 보낸다. 사용자 승인을 대신하거나 명령을 실행하지 않는다.', inputSchema: { type: 'object', properties: { to: { type: 'string', description: '연결된 상대 노드 ID' }, text: { type: 'string', minLength: 1, maxLength: 8000 } }, required: ['to', 'text'], additionalProperties: false } },
+  { name: 'receive_messages', description: '연결된 상대의 새 메시지를 읽는다. wait_seconds를 지정하면 최대 30초 동안 도착 즉시 반환한다. 작업 중간과 최종 응답 전에 확인한다.', inputSchema: { type: 'object', properties: { wait_seconds: { type: 'integer', minimum: 0, maximum: 30 } }, additionalProperties: false } }
+].map(tool => ({ ...tool, annotations: { readOnlyHint: tool.name === 'list_peers', destructiveHint: false, openWorldHint: false } }));
 const NAMES = { string: 'String', number: 'Number', boolean: 'Boolean', object: 'Object', array: 'Array', null: 'Null' };
 function send(message) { process.stdout.write(JSON.stringify(message) + '\n'); }
 function typeOf(value) { return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value; }
@@ -156,7 +165,7 @@ function submit(args) {
   fs.writeFileSync(pending, JSON.stringify({ requestId: request.requestId, output: JSON.stringify(result) }));
   fs.renameSync(pending, target);
 }
-function handle(message) {
+async function handle(message) {
   const { id, method, params } = message;
   if (id === undefined || id === null) return;
   if (method === 'initialize') return send({ jsonrpc: '2.0', id, result: { protocolVersion: (params && params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'orbit', version: '1.0.0' } } });
@@ -166,8 +175,14 @@ function handle(message) {
     description: 'Orbit 작업 그래프가 요청한 결과를 제출한다. 프롬프트에 [출력 형식]이 있을 때만, 작업을 마친 뒤 한 번 부른다. 출력 구조에 맞지 않으면 틀린 곳을 알려 주므로 고쳐서 다시 부른다.',
     inputSchema: { type: 'object', properties: { result: { type: 'object', description: '프롬프트의 출력 구조(JSON Schema)를 따르는 결과 객체' } }, required: ['result'] },
     annotations: { title: 'Orbit 결과 제출', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  }] } });
+  }, ...messageTools] } });
   if (method === 'tools/call') {
+    if (params && messageTools.some(tool => tool.name === params.name)) {
+      try {
+        const result = params.name === 'list_peers' ? messages.peers(dir) : params.name === 'send_message' ? messages.send(dir, params.arguments) : await messages.receive(dir, params.arguments);
+        return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result) }] } });
+      } catch (error) { return send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: error.message }] } }); }
+    }
     if (!params || params.name !== TOOL) return send({ jsonrpc: '2.0', id, error: { code: -32602, message: '알 수 없는 도구입니다' } });
     try { submit(params.arguments); return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: '제출했습니다. 결과를 다시 출력하지 말고 응답을 마치세요.' }] } }); }
     catch (error) { return send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: error.message }] } }); }
@@ -183,7 +198,7 @@ process.stdin.on('data', chunk => {
     const line = buffer.slice(0, at).trim();
     buffer = buffer.slice(at + 1);
     if (!line) continue;
-    try { handle(JSON.parse(line)); } catch {}
+    try { handle(JSON.parse(line)).catch(() => {}); } catch {}
   }
 });
 `
@@ -219,11 +234,12 @@ if ($global:OrbitCodexCommand) {
     if ($args -match '^(exec|e|review|login|logout|mcp|mcp-server|app-server|completion|sandbox|debug|apply|a|cloud|features|--help|-h|--version|-V)$') { & $global:OrbitCodexCommand @args; return }
     Invoke-OrbitBridge start codex @args
     $orbitExtra = @('-c', "tui.terminal_title=['session-id','status']", '-c', $env:ORBIT_CODEX_NOTIFY)
+    if ($args -notcontains $env:ORBIT_CODEX_MCP) { $orbitExtra += @('-c', $env:ORBIT_CODEX_MCP) }
     $orbitArgs = @($args)
     # Windows PowerShell은 네이티브 인자의 큰따옴표를 제거하므로 notify와 Orbit MCP의 TOML 문자열을 보존한다.
     if ($PSVersionTable.PSVersion -lt [version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') {
       $orbitArgs = @($orbitArgs | ForEach-Object { if ([string]$_ -match '^(notify|mcp_servers\.orbit)=') { ([string]$_).Replace('"', '"""') } else { $_ } })
-      $orbitExtra[3] = $orbitExtra[3].Replace('"', '"""')
+      $orbitExtra = @($orbitExtra | ForEach-Object { if ([string]$_ -match '^(notify|mcp_servers\.orbit)=') { ([string]$_).Replace('"', '"""') } else { $_ } })
     }
     if ($args -notcontains '--no-daemon') { $orbitExtra += '--no-daemon' }
     try { & $global:OrbitCodexCommand @orbitArgs @orbitExtra }
@@ -237,6 +253,7 @@ if ($global:OrbitClaudeCommand) {
     Invoke-OrbitBridge start claude @args
     $orbitExtra = @()
     if ($args -notcontains $env:ORBIT_CLAUDE_SETTINGS) { $orbitExtra = @('--settings', $env:ORBIT_CLAUDE_SETTINGS) }
+    if ($args -notcontains $env:ORBIT_CLAUDE_MCP) { $orbitExtra += @('--mcp-config', $env:ORBIT_CLAUDE_MCP) }
     try { & $global:OrbitClaudeCommand @args @orbitExtra }
     finally { $orbitCode = $LASTEXITCODE; Invoke-OrbitBridge stop; $global:LASTEXITCODE = $orbitCode }
   }
@@ -258,8 +275,8 @@ codex() {
   esac
   orbit_bridge start codex "$@"
   case " $* " in
-    *' --no-daemon '*) command codex "$@" -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY";;
-    *) command codex "$@" --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY";;
+    *' --no-daemon '*) command codex "$@" -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY" -c "$ORBIT_CODEX_MCP";;
+    *) command codex "$@" --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY" -c "$ORBIT_CODEX_MCP";;
   esac
   local orbit_code=$?
   orbit_bridge stop
@@ -272,7 +289,7 @@ claude() {
   orbit_bridge start claude "$@"
   case " $* " in
     *" $ORBIT_CLAUDE_SETTINGS "*) command claude "$@";;
-    *) command claude "$@" --settings "$ORBIT_CLAUDE_SETTINGS";;
+    *) command claude "$@" --settings "$ORBIT_CLAUDE_SETTINGS" --mcp-config "$ORBIT_CLAUDE_MCP";;
   esac
   local orbit_code=$?
   orbit_bridge stop
@@ -307,9 +324,9 @@ function codex
   end
   orbit_bridge start codex $argv
   if contains -- --no-daemon $argv
-    command codex $argv -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY"
+    command codex $argv -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY" -c "$ORBIT_CODEX_MCP"
   else
-    command codex $argv --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY"
+    command codex $argv --no-daemon -c "tui.terminal_title=['session-id','status']" -c "$ORBIT_CODEX_NOTIFY" -c "$ORBIT_CODEX_MCP"
   end
   set -l orbit_code $status
   orbit_bridge stop
@@ -324,7 +341,7 @@ function claude
   if contains -- "$ORBIT_CLAUDE_SETTINGS" $argv
     command claude $argv
   else
-    command claude $argv --settings "$ORBIT_CLAUDE_SETTINGS"
+    command claude $argv --settings "$ORBIT_CLAUDE_SETTINGS" --mcp-config "$ORBIT_CLAUDE_MCP"
   end
   set -l orbit_code $status
   orbit_bridge stop
@@ -351,13 +368,13 @@ export function capturePromptHash(text: string): string {
 
 /** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
 /** schema: 출력 구조가 있으면 MCP 서버(submit_output)가 이 구조로 제출을 검사한다. */
-export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string, schema?: string): string {
+export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string, schema?: string, messages?: { root: string; nodeId: string }): string {
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
   endOutputCapture(dir)
   for (const signal of ['working', 'done', 'idle'] as const) rmSync(signalFile(dir, signal), { force: true })
   const promptHash = capturePromptHash(prompt)
   const requestId = randomUUID()
-  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}) }))
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}), ...(messages ? { messages } : {}) }))
   return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
 }
 export function readAgentError(dir: string): string | undefined {
@@ -437,6 +454,8 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   writeFileSync(helper, bridge)
   const mcp = path.join(dir, 'mcp.cjs')
   writeFileSync(mcp, mcpServer)
+  const messages = path.join(dir, 'messages.cjs')
+  writeFileSync(messages, messageRuntime)
   const server = { command: process.execPath, args: [slash(mcp), slash(dir)], env: { ELECTRON_RUN_AS_NODE: '1' } }
   const claudeMcp = path.join(dir, 'claude-mcp.json')
   writeFileSync(claudeMcp, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'stdio', ...server } } }))
@@ -447,13 +466,17 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   const hookCommand = (action: string) => platform === 'win32'
     ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`, 'utf16le').toString('base64')}`
     : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`
+  const messageCommand = platform === 'win32'
+    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(messages)} ${shellQuote(dir)}`, 'utf16le').toString('base64')}`
+    : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(messages)} ${shellQuote(dir)}`
+  const messageHook = { type: 'command', command: messageCommand, timeout: 5 }
   // 지난 실행에서 남은 신호는 지운다
   for (const s of AGENT_SIGNALS) rmSync(signalFile(dir, s), { force: true })
   endOutputCapture(dir)
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
   // 결과 제출 도구는 묻지 않고 쓰게 한다 (그래프 실행이 권한 확인에서 멈추지 않도록)
-  writeFileSync(settings, JSON.stringify({ permissions: { allow: [`mcp__${MCP_SERVER_NAME}__${MCP_SUBMIT_TOOL}`] }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  writeFileSync(settings, JSON.stringify({ permissions: { allow: [MCP_SUBMIT_TOOL, 'list_peers', 'send_message', 'receive_messages'].map(tool => `mcp__${MCP_SERVER_NAME}__${tool}`) }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], PostToolUse: [{ matcher: '.*', hooks: [messageHook] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
   const notify = path.join(dir, `notify.${win ? 'ps1' : 'sh'}`)
@@ -468,7 +491,7 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
     codexNotify,
     claudeMcp,
     codexMcp,
-    env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings, ORBIT_CODEX_NOTIFY: codexNotify }
+    env: { ORBIT_NODE: process.execPath, ORBIT_BRIDGE: helper, ORBIT_TERMINAL_STATE: state, ORBIT_TERMINAL_GENERATION: generation, ORBIT_CLAUDE_SETTINGS: settings, ORBIT_CODEX_NOTIFY: codexNotify, ORBIT_CODEX_MCP: codexMcp, ORBIT_CLAUDE_MCP: claudeMcp }
   }
 }
 

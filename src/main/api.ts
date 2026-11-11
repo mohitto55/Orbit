@@ -101,7 +101,8 @@ export function createApi(deps: ApiDeps) {
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       await workspace.setModel(id, model, settings)
     },
-    beginOutputCapture: (id, prompt, schema) => terminals?.beginOutputCapture(id, prompt, schema),
+    beginOutputCapture: (id, prompt, schema, messages) => terminals?.beginOutputCapture(id, prompt, schema, messages),
+    syncMessageRun: (runId, scope) => terminals?.syncMessageRun(runId, scope),
     readAgentOutput: (id) => terminals?.readAgentOutput(id),
     endOutputCapture: (id) => terminals?.endOutputCapture(id),
     interrupt: (id) => terminals?.write(id, '\x03'),
@@ -643,6 +644,7 @@ export function createApi(deps: ApiDeps) {
       return { ...skill, id: sk.skillId(skill) }
     },
     pipelineRuns: () => pipes.list(),
+    pipelineMessages: (runId: string) => terminals?.messageLog(runId) ?? [],
     /** 응답 끝 신호를 놓쳤을 때 사람이 직접 "이 노드는 끝났다"고 넘긴다 */
     markNodeDone: (runId: string, nodeId: string) => {
       const node = pipes.list().find((run) => run.runId === runId)?.nodes[nodeId]
