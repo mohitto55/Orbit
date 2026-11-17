@@ -410,7 +410,7 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .live-markdown .cm-editor { color: var(--text); background: var(--panel); font-family: var(--font); }
 .live-markdown .cm-editor.cm-focused { outline: none; }
 .live-markdown .cm-scroller { font: inherit; font-size: 14.5px; line-height: 1.75; max-height: 46vh; min-height: 240px; overflow: auto; }
-.live-markdown .cm-content { padding: 18px 22px; caret-color: var(--text); overflow-wrap: anywhere; }
+.live-markdown .cm-content { padding: 18px 22px; caret-color: var(--text); overflow-wrap: anywhere; min-width: 0; flex-shrink: 1; }
 .live-markdown .cm-line { padding: 0; }
 .live-markdown .cm-placeholder { color: var(--muted); }
 .live-markdown .cm-md-heading { font-weight: 700; padding: 4px 0; }
@@ -430,9 +430,11 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .live-markdown .cm-md-quote { border-left: 3px solid var(--accent-line); padding-left: 12px; color: var(--text-2); }
 .live-markdown .cm-md-bullet { color: var(--muted); }
 .live-markdown input.cm-md-task-box { width: 15px; height: 15px; margin: 0 3px 0 0; vertical-align: -2px; accent-color: var(--ok); cursor: pointer; }
-.live-markdown .cm-md-block { padding: 4px 0; cursor: text; }
+/* Rendered HTML must not inherit CodeMirror's break-spaces. Table markup's
+   inter-element newlines are foster-parented before the table by innerHTML. */
+.live-markdown .cm-md-block { padding: 4px 0; cursor: text; white-space: normal; }
 .live-markdown .cm-md-block .md-table { margin: 4px 0; }
-.live-markdown .cm-md-image { display: inline-block; max-width: 100%; cursor: text; }
+.live-markdown .cm-md-image { display: inline-block; max-width: 100%; cursor: text; white-space: normal; }
 .live-markdown .cm-md-image .md, .live-markdown .cm-md-image p { display: inline; margin: 0; }
 .live-markdown .cm-md-image img { max-width: 100%; max-height: 280px; vertical-align: middle; }
 .live-markdown .cm-md-image-error { display: inline-block; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }

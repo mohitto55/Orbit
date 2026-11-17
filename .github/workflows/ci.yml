@@ -17,4 +17,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:junit
-      - run: npm run build
+      - run: xvfb-run -a npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: markdown-ui-results
+          path: test-results/
+          retention-days: 14

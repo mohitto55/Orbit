@@ -147,11 +147,14 @@ it('[TK-F03-AC2] 유형이나 시기가 없으면 Task로 저장되지 않는다
 npm install
 npm run dev         # 개발 모드 실행
 npm test            # 핵심 로직 테스트
+npm run test:ui     # 실제 Electron Markdown 표시·편집·저장 UI 검사
 npm run typecheck
 npm run dist        # 현재 OS용 설치 파일 (release/)
 ```
 
-릴리스: `v*` 태그를 push하면 GitHub Actions가 세 OS용 설치 파일을 만들어 Releases에 올린다.
+Markdown UI 검사 범위와 실패 보고서는 [품질 검사 문서](docs/markdown-ui-quality.md)에 정리되어 있다. Linux의 화면 없는 환경에서는 `xvfb-run -a npm run test:ui`로 실행한다.
+
+릴리스: `v*` 태그를 push하면 GitHub Actions가 세 OS에서 로직·UI 검사를 통과한 뒤 설치 파일을 만들어 Releases에 올린다.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

@@ -60,7 +60,10 @@ class TaskBox extends WidgetType {
 /** 표·이미지도 같은 문서 안에 표시하며 클릭한 위치에서 원문 편집으로 이어진다. */
 class MarkdownBlock extends WidgetType {
   constructor(readonly from: number, readonly source: string, readonly block: boolean, readonly cells: number[][], readonly documentPath: string, readonly references: string) { super() }
-  eq(other: MarkdownBlock) { return this.from === other.from && this.source === other.source && this.block === other.block && this.documentPath === other.documentPath && this.references === other.references }
+  eq(other: MarkdownBlock) {
+    return this.from === other.from && this.source === other.source && this.block === other.block && this.documentPath === other.documentPath && this.references === other.references
+      && this.cells.length === other.cells.length && this.cells.every((row, i) => row.length === other.cells[i].length && row.every((position, j) => position === other.cells[i][j]))
+  }
   toDOM(view: EditorView) {
     const dom: HTMLElement = document.createElement(this.block ? 'div' : 'span')
     dom.className = this.block ? 'cm-md-block' : 'cm-md-image'
@@ -133,11 +136,14 @@ function present(state: EditorState, focused: boolean): Presentation {
     }
     if (name === 'Table' || name === 'HTMLBlock' || name === 'HorizontalRule' || name === 'Image') {
       if (!active(from, to)) {
-        const cells: number[][] = []
+        const cells: number[][] = [], rows: string[] = []
         for (let row = node.firstChild; row; row = row.nextSibling) {
           if (row.name === 'TableHeader' || row.name === 'TableRow') cells.push(row.getChildren('TableCell').map((cell) => cell.from))
+          // Each row starts after its quote/list prefix. Slicing the whole table
+          // leaves later lines' `> ` prefixes inside the standalone Markdown.
+          if (row.name === 'TableHeader' || row.name === 'TableDelimiter' || row.name === 'TableRow') rows.push(state.doc.sliceString(row.from, row.to))
         }
-        replace(from, to, new MarkdownBlock(from, source(), name !== 'Image', cells, state.facet(documentLocation), references), name !== 'Image')
+        replace(from, to, new MarkdownBlock(from, name === 'Table' ? rows.join('\n') : source(), name !== 'Image', cells, state.facet(documentLocation), references), name !== 'Image')
         return false
       }
       if (name === 'Table') {
@@ -154,6 +160,13 @@ function present(state: EditorState, focused: boolean): Presentation {
       if (active(parent.from, parent.to)) mark(from, to, 'cm-md-format')
       else replace(from, to)
     }
+    if (name === 'Escape' && !active(from, to)) replace(from, from + 1)
+    if (name === 'Autolink') {
+      mark(from + 1, to - 1, 'cm-md-link')
+      if (!active(from, to)) { replace(from, from + 1); replace(to - 1, to) }
+      return false
+    }
+    if (name === 'URL' && parent && !['Link', 'Image', 'LinkReference'].includes(parent.name)) mark(from, to, 'cm-md-link')
     if (name === 'Link') {
       // Markdown 파서는 [[위키 링크]]의 안쪽 대괄호도 일반 Link로 읽는다.
       if (state.doc.sliceString(Math.max(0, from - 1), from) === '[' && state.doc.sliceString(to, to + 1) === ']') return false
