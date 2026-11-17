@@ -50,11 +50,14 @@ describe('자동화 라이브러리 저장', () => {
     await expect(saveSkill(project, { ...input, name: 'empty', body: '  ' }, home)).rejects.toThrow('본문')
   })
 
-  it('작성한 스킬을 노드로 불러 String 값으로 Print에 전달하고 수정·재열기 후 최신 본문을 사용한다', async () => {
+  it.each(['claude', 'codex', 'agents'] as const)('%s 스킬을 노드로 불러 String 값으로 Print에 전달하고 수정·재열기 후 최신 본문을 사용한다', async (location) => {
     const dir = await tempDir('orbit-skill-graph-')
     const deps = { send() {}, pickFolder: async () => null, recentFile: path.join(dir, 'recent.json'), onProjectOpened() {} }
     const api = createApi(deps), project = await api.createProject(path.join(dir, 'project'))
-    const skill = await api.saveSkill({ scope: 'project', name: 'inspect-feature', description: '기능 검사', body: '# 기준\n\n- [ ] 입력 확인' })
+    const skill = await api.saveSkill({ scope: 'project', location, name: 'inspect-feature', description: '기능 검사', body: `# ${location} 기준\n\n- [ ] 입력 확인` })
+    for (const other of ['claude', 'codex', 'agents'] as const) if (other !== location) {
+      await api.saveSkill({ scope: 'project', location: other, name: 'inspect-feature', description: '동명 스킬', body: `${other}의 다른 본문` })
+    }
     const graph = await api.savePipeline({ title: '스킬 본문 출력', nodes: [
       { id: 'start', kind: 'start', terminal: 'new', text: '' },
       { id: 'skill', kind: 'skill', ref: skill.id, terminal: 'new', text: '' },

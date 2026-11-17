@@ -85,7 +85,7 @@ it.each(['role', 'design', 'system'] as const)('%s 문서는 서식 안에서 �
   expect(host.querySelector('table')?.textContent).toContain('검증')
   const view = editor()
   expect(view.state.sliceDoc()).toBe(source)
-  const readImage = () => documentImageResponse(host.querySelector<HTMLImageElement>('.md img')!.src, ctx, ctx.projectDir)
+  const readImage = () => documentImageResponse(host.querySelector<HTMLImageElement>('.md img')!.src, ctx, [ctx.projectDir])
   expect((await readImage()).status).toBe(200)
   const at = source.indexOf('승인')
   await act(async () => view.dispatch({ changes: { from: at, to: at + 2, insert: '승인과 취소' } }))

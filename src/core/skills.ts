@@ -4,11 +4,13 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import matter from 'gray-matter'
 import { exists, readMd } from './md'
+import { SKILL_LOCATIONS, type SkillLocation } from './skillLocations'
 
-/** 연동: Claude Code 스킬(.claude/skills)을 읽는다. 작업 그래프의 스킬 노드가 이 내용을 글로 내보낸다. */
+/** 작업 그래프의 스킬 노드가 Claude Code·Codex·공용 스킬의 본문을 글로 내보낸다. */
 export interface Skill {
-  /** project: 프로젝트의 .claude/skills, user: 내 홈의 ~/.claude/skills */
+  /** project: 프로젝트 폴더, user: 사용자 홈 */
   scope: 'project' | 'user'
+  location: SkillLocation
   name: string
   description: string
   /** frontmatter를 뺀 본문 */
@@ -16,20 +18,22 @@ export interface Skill {
   file: string
 }
 
-/** 스킬 노드가 가리키는 id: "project:이름" / "user:이름" (같은 이름이 양쪽에 있어도 구분된다) */
-export const skillId = (s: Pick<Skill, 'scope' | 'name'>) => `${s.scope}:${s.name}`
+/** 기존 Claude ID는 유지한다. 새 위치는 접두어로 구분해 다른 본문으로 바뀌지 않는다. */
+export const skillId = (s: Pick<Skill, 'scope' | 'name' | 'location'>) => `${s.location === 'claude' ? '' : `${s.location}:`}${s.scope}:${s.name}`
 
-async function readDir(dir: string, scope: Skill['scope']): Promise<Skill[]> {
+async function readDir(dir: string, scope: Skill['scope'], location: SkillLocation): Promise<Skill[]> {
   if (!(await exists(dir))) return []
   const out: Skill[] = []
   for (const e of await fs.readdir(dir, { withFileTypes: true })) {
     // <이름>/SKILL.md, 또는 바로 놓인 <이름>.md
-    const file = e.isDirectory() ? path.join(dir, e.name, 'SKILL.md') : e.name.endsWith('.md') ? path.join(dir, e.name) : null
+    const entry = path.join(dir, e.name)
+    const directory = e.isDirectory() || (e.isSymbolicLink() && (await fs.stat(entry).catch(() => null))?.isDirectory())
+    const file = directory ? path.join(entry, 'SKILL.md') : e.name.endsWith('.md') ? entry : null
     if (!file || !(await exists(file))) continue
     try {
       const { data, content } = await readMd(file)
-      const fallback = e.isDirectory() ? e.name : e.name.replace(/\.md$/, '')
-      out.push({ scope, name: String(data.name ?? fallback), description: String(data.description ?? ''), body: content.trim(), file })
+      const fallback = directory ? e.name : e.name.replace(/\.md$/, '')
+      out.push({ scope, location, name: String(data.name ?? fallback), description: String(data.description ?? ''), body: content.trim(), file })
     } catch {
       // 형식이 깨진 스킬 하나 때문에 나머지를 못 쓰게 하지 않는다
     }
@@ -38,13 +42,15 @@ async function readDir(dir: string, scope: Skill['scope']): Promise<Skill[]> {
 }
 
 export async function listSkills(projectDir: string, home = os.homedir()): Promise<Skill[]> {
-  const [project, user] = await Promise.all([readDir(path.join(projectDir, '.claude', 'skills'), 'project'), readDir(path.join(home, '.claude', 'skills'), 'user')])
-  return [...project, ...user]
+  const groups = await Promise.all((['project', 'user'] as const).flatMap((scope) =>
+    SKILL_LOCATIONS.map((location) => readDir(path.join(scope === 'project' ? projectDir : home, `.${location}`, 'skills'), scope, location))))
+  return groups.flat()
 }
 
 export interface SkillInput {
   id?: string
   scope: Skill['scope']
+  location?: SkillLocation
   name: string
   description: string
   body: string
@@ -58,10 +64,12 @@ export async function saveSkill(projectDir: string, input: SkillInput, home = os
   const matches = input.id ? skills.filter((s) => skillId(s) === input.id) : []
   if (input.id && matches.length !== 1) throw new Error('수정할 스킬을 찾을 수 없거나 이름이 중복됩니다')
   const current = matches[0]
-  if (current && (current.name !== name || current.scope !== input.scope)) throw new Error('연결된 노드를 유지하려면 기존 스킬의 이름과 위치는 변경할 수 없습니다')
+  const location = input.location ?? current?.location ?? 'claude'
+  if (!SKILL_LOCATIONS.includes(location)) throw new Error('스킬 저장 위치가 올바르지 않습니다')
+  if (current && (current.name !== name || current.scope !== input.scope || current.location !== location)) throw new Error('연결된 노드를 유지하려면 기존 스킬의 이름과 위치는 변경할 수 없습니다')
   if (!current && (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64 || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i.test(name))) throw new Error('새 스킬 이름은 64자 이내의 영문 소문자·숫자·하이픈으로 입력하세요')
-  if (!current && skills.some((s) => s.scope === input.scope && s.name.toLowerCase() === name.toLowerCase())) throw new Error('같은 이름의 스킬이 이미 있습니다')
-  const root = path.join(input.scope === 'project' ? projectDir : home, '.claude', 'skills')
+  if (!current && skills.some((s) => s.scope === input.scope && s.location === location && s.name.toLowerCase() === name.toLowerCase())) throw new Error('같은 이름의 스킬이 이미 있습니다')
+  const root = path.join(input.scope === 'project' ? projectDir : home, `.${location}`, 'skills')
   await fs.mkdir(root, { recursive: true })
   const file = current?.file ?? path.join(root, name, 'SKILL.md')
   await fs.mkdir(path.dirname(file), { recursive: true })
@@ -80,5 +88,5 @@ export async function saveSkill(projectDir: string, input: SkillInput, home = os
     try { await fs.writeFile(file, raw, { encoding: 'utf8', flag: 'wx' }) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('같은 이름의 스킬 파일이 이미 있습니다'); throw error }
   }
-  return { scope: input.scope, name, description: input.description.trim(), body: input.body.replace(/\r\n/g, '\n').trim(), file }
+  return { scope: input.scope, location, name, description: input.description.trim(), body: input.body.replace(/\r\n/g, '\n').trim(), file }
 }

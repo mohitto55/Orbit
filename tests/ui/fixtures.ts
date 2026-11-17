@@ -6,20 +6,22 @@ import { createProject, type Ctx } from '../../src/core/workspace'
 import { createTask, type Task } from '../../src/core/task'
 import { readMd } from '../../src/core/md'
 
-export type Orbit = { app: ElectronApplication; page: Page; ctx: Ctx; directory: string }
+export type Orbit = { app: ElectronApplication; page: Page; ctx: Ctx; directory: string; isolatedHome: string }
 
 export const test = base.extend<{ orbit: Orbit }>({
   orbit: async ({}, use, testInfo) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'orbit-ui-'))
     const profile = path.join(directory, 'profile')
+    const isolatedHome = path.join(directory, 'home')
     await fs.mkdir(profile)
+    await fs.mkdir(isolatedHome)
     const ctx = await createProject(path.join(directory, 'project'), 'Markdown UI QA')
     const bootstrap = path.join(directory, 'launch.cjs')
     // Only the test process receives this profile. Launch the production entry point,
     // preload, renderer and IPC without exposing a test API in the shipped app.
-    await fs.writeFile(bootstrap, `const { app } = require('electron');\napp.setPath('userData', ${JSON.stringify(profile)});\nrequire(${JSON.stringify(path.resolve('out/main/index.js'))});\n`)
+    await fs.writeFile(bootstrap, `const { app } = require('electron');\napp.setPath('appData', ${JSON.stringify(profile)});\napp.setPath('userData', ${JSON.stringify(profile)});\napp.setPath('home', ${JSON.stringify(isolatedHome)});\nrequire(${JSON.stringify(path.resolve('out/main/index.js'))});\n`)
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE' && entry[0] !== 'ELECTRON_RENDERER_URL'))
-    const app = await _electron.launch({ args: [bootstrap, '--no-sandbox'], env })
+    const app = await _electron.launch({ args: [bootstrap, '--no-sandbox'], env: { ...env, HOME: isolatedHome, USERPROFILE: isolatedHome } })
     const page = await app.firstWindow()
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.stack ?? error.message))
@@ -29,7 +31,7 @@ export const test = base.extend<{ orbit: Orbit }>({
       await page.evaluate((dir) => window.orbit.invoke('openProject', dir), ctx.projectDir)
       await page.reload()
       await expect(page.locator('.brand-name')).toContainText('Markdown UI QA')
-      await use({ app, page, ctx, directory })
+      await use({ app, page, ctx, directory, isolatedHome })
       expect(errors, 'Renderer errors').toEqual([])
     } finally {
       const failed = testInfo.status !== testInfo.expectedStatus || errors.length > 0

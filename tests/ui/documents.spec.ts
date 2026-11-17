@@ -68,7 +68,7 @@ async function openDocument(orbit: Orbit, kind: Kind) {
   } else if (kind === 'skill') {
     await page.locator('nav').getByRole('button', { name: '자동화', exact: true }).click()
     await page.getByRole('button', { name: '그래프', exact: true }).click()
-    await page.locator('.pipe-skill-row').getByRole('button', { name: /^markdown-ui-qa\s*프로젝트$/ }).click()
+    await page.locator('.pipe-skill-row').getByRole('button', { name: /^markdown-ui-qa\s*프로젝트 · Claude Code$/ }).click()
   } else if (kind === 'request') {
     await page.locator('nav').getByRole('button', { name: /^변경 검토/ }).click()
     await page.getByRole('button', { name: '직접 다듬기', exact: true }).click()

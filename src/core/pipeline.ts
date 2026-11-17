@@ -153,7 +153,7 @@ export function withMessagePeers(nodes: PipeNode[], id: string, peers: string[])
 export interface Env {
   library?: Pick<Pipeline, 'id' | 'title' | 'nodes' | 'edges'>[]
   tasks?: { id: string; title: string; body: string; status: string }[]
-  /** 스킬: id는 "project:이름" / "user:이름" */
+  /** 스킬 ID는 저장 위치·범위·이름을 구분한다 (기존 Claude ID도 그대로 유지). */
   skills?: { id: string; name: string; body: string }[]
   /** 도메인의 기능·규칙 명세 */
   specs?: EnvSpec[]

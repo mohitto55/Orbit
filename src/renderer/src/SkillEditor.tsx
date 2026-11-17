@@ -3,17 +3,19 @@ import { api } from './api'
 import { RunDrawer } from './Automation'
 import { LiveMarkdownEditor } from './LiveMarkdownEditor'
 import { errorToast, toast } from './ui'
+import { SKILL_LOCATIONS, SKILL_LOCATION_LABELS, type SkillLocation } from '../../core/skillLocations'
 
 type Skill = Awaited<ReturnType<typeof api.listSkills>>[number]
 
 export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill; canAdd: boolean; onClose: () => void; onSaved: (skill: Skill, addNode: boolean) => void }) {
   const [name, setName] = useState(skill?.name ?? '')
   const [scope, setScope] = useState<Skill['scope']>(skill?.scope ?? 'project')
+  const [location, setLocation] = useState<SkillLocation>(skill?.location ?? 'claude')
   const [description, setDescription] = useState(skill?.description ?? '')
   const [body, setBody] = useState(skill?.body ?? '')
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const saving = useRef(false)
-  const dirty = name !== (skill?.name ?? '') || scope !== (skill?.scope ?? 'project') || description !== (skill?.description ?? '') || body !== (skill?.body ?? '')
+  const dirty = name !== (skill?.name ?? '') || scope !== (skill?.scope ?? 'project') || location !== (skill?.location ?? 'claude') || description !== (skill?.description ?? '') || body !== (skill?.body ?? '')
   const close = async () => {
     if (saving.current) return
     try { if (!dirty || await api.confirmAction('저장하지 않은 스킬 편집을 닫을까요?')) onClose() }
@@ -23,7 +25,7 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
     if (saving.current) return
     saving.current = true; setBusy(true); setError('')
     try {
-      const result = await api.saveSkill({ id: skill?.id, scope, name, description, body })
+      const result = await api.saveSkill({ id: skill?.id, scope, location, name, description, body })
       toast('스킬을 저장했습니다')
       onSaved(result, addNode)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -35,6 +37,9 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
       <span className="small muted">{skill ? '기존 노드와의 연결을 유지하기 위해 이름은 고정됩니다.' : '영문 소문자·숫자·하이픈, 최대 64자'}</span>
     </div>
     <div className="field"><label htmlFor="skill-scope">사용 범위</label><select id="skill-scope" value={scope} disabled={busy || !!skill} onChange={(e) => setScope(e.target.value as Skill['scope'])}><option value="project">이 프로젝트</option><option value="user">모든 프로젝트 · 내 스킬</option></select></div>
+    <div className="field"><label htmlFor="skill-location">저장 위치</label><select id="skill-location" value={location} disabled={busy || !!skill} onChange={(e) => setLocation(e.target.value as SkillLocation)}>{SKILL_LOCATIONS.map((value) => <option key={value} value={value}>{SKILL_LOCATION_LABELS[value]} (.{value}/skills)</option>)}</select>
+      {skill && <span className="small muted">{skill.file}</span>}
+    </div>
     <div className="field"><label htmlFor="skill-description">설명</label><input id="skill-description" value={description} disabled={busy} placeholder="언제 사용하는 스킬인지 적어 주세요" onChange={(e) => setDescription(e.target.value)} /></div>
     <fieldset className="skill-body" disabled={busy}><LiveMarkdownEditor value={body} onChange={setBody} label="스킬 본문" disabled={busy} documentPath={skill?.file} /></fieldset>
     {error && <p role="alert" className="pipe-value-error">{error}</p>}

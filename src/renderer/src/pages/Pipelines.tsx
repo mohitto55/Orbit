@@ -50,6 +50,7 @@ import { useAutomation } from '../Automation'
 import { isListShape, isOpenTask, sourceKind, messagePeers, withMessagePeers } from '../../../core/pipeline'
 import { SourcePicker, type SourceOption } from '../SourcePicker'
 import { SkillEditor } from '../SkillEditor'
+import { SKILL_LOCATION_LABELS } from '../../../core/skillLocations'
 
 cytoscape.use(edgehandles)
 
@@ -62,6 +63,7 @@ const edgeKey = (e: PipeEdge) => JSON.stringify([e.from, e.to, e.pin, e.fromPort
 const edgeOf = (from: string, to: string, pin?: OutPin, toPort?: string): PipeEdge => ({ from, to, ...(pin ? isExecPort(pin) ? { fromPort: pin } : { pin: 'data' as const, ...(pin !== 'data' ? { fromPort: pin } : {}) } : {}), ...(toPort ? { toPort } : {}) })
 const isPortNode = (n: PipeNode) => isAgent(n) || n.kind === 'template' || n.kind === 'foreach' || n.kind === 'add' || n.kind === 'if' || n.kind === 'print' || isLogic(n) || isFunctionBoundary(n)
 type SkillItem = Awaited<ReturnType<typeof api.listSkills>>[number]
+const skillOrigin = (s: SkillItem) => `${s.scope === 'user' ? '내 스킬' : '프로젝트'} · ${SKILL_LOCATION_LABELS[s.location ?? 'claude']}`
 type Env = { library: Pipeline[]; tasks: Task[]; skills: SkillItem[]; specs: Spec[]; designs: Design[]; terminals: TerminalInfo[] }
 
 const KIND_LABEL = KIND_NAME
@@ -632,11 +634,11 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
         </div>
         {templates.length === 0 && <div className="small muted">입·출력 변수가 있는 함수를 만들어 다른 그래프에서 호출할 수 있습니다</div>}
         {templates.map((p) => graphItem(p, templates))}
-        <div className="pipe-list-head">스킬<button className="ghost" title="새 스킬" onClick={() => setEditingSkill('new')}>+</button></div>
+        <div className="pipe-list-head">스킬<div className="row"><button className="ghost" title="스킬 새로고침" onClick={() => void api.listSkills().then(setSkills).catch(errorToast)}>↻</button><button className="ghost" title="새 스킬" onClick={() => setEditingSkill('new')}>+</button></div></div>
         <input type="search" aria-label="스킬 검색" placeholder="스킬 검색" value={skillQuery} onChange={(e) => setSkillQuery(e.target.value)} />
         {!skills.length && <div className="small muted">스킬을 만들고 String 출력으로 본문을 전달하세요.</div>}
-        {skills.filter((s) => `${s.name} ${s.description}`.toLocaleLowerCase().includes(skillQuery.trim().toLocaleLowerCase())).map((s) => <div className="pipe-skill-row" key={s.id}>
-          <button className="tree-item" title={s.description || s.name} onClick={() => setEditingSkill(s)}><span>{s.name}</span><small>{s.scope === 'user' ? '내 스킬' : '프로젝트'}</small></button>
+        {skills.filter((s) => `${s.name} ${s.description} ${skillOrigin(s)} ${s.file.replace(/\\/g, '/')}`.toLocaleLowerCase().includes(skillQuery.trim().toLocaleLowerCase())).map((s) => <div className="pipe-skill-row" key={s.id}>
+          <button className="tree-item" title={`${s.description || s.name}\n${s.file}`} onClick={() => setEditingSkill(s)}><span>{s.name}</span><small>{skillOrigin(s)}</small></button>
           <button className="ghost" disabled={!draft} aria-label={`${s.name} 노드 추가`} title="스킬 노드 추가" onClick={() => addNode('skill', { ref: s.id })}>+</button>
         </div>)}
       </div>
@@ -733,8 +735,7 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               <option value="">{skills.length ? '+ 스킬' : '스킬 없음'}</option>
               {skills.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name}
-                  {s.scope === 'user' ? ' (내 스킬)' : ''}
+                  {s.name} ({skillOrigin(s)})
                 </option>
               ))}
             </select>
@@ -944,9 +945,9 @@ function menuItems(env: Env, draft: Draft, from?: string, pin?: OutPin): MenuIte
     ...env.skills.map((s) => ({
       key: `skill:${s.id}`,
       kind: 'skill' as NodeKind,
-      label: s.name,
+      label: `${s.name} (${skillOrigin(s)})`,
       group: '스킬',
-      words: `${KIND_WORDS.skill} ${s.name} ${s.description}`,
+      words: `${KIND_WORDS.skill} ${s.name} ${s.description} ${skillOrigin(s)} ${s.file}`,
       extra: { ref: s.id }
     })),
     ...env.specs.map((s) => ({ key: `spec:${s.id}`, kind: 'spec' as NodeKind, label: s.title, group: '기능 명세', words: `${KIND_WORDS.spec} ${s.title}`, extra: { ref: s.id } })),
@@ -1558,8 +1559,7 @@ function NodePanel({
             {!env.skills.some((s) => s.id === node.ref) && <option value="">골라 주세요</option>}
             {env.skills.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}
-                {s.scope === 'user' ? ' (내 스킬)' : ''}
+                {s.name} ({skillOrigin(s)})
               </option>
             ))}
           </select>

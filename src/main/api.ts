@@ -634,7 +634,7 @@ export function createApi(deps: ApiDeps) {
       return records.map((record) => pipes.start(record.pipe, true, { ...record.options, groupId: nextGroup, retryOf: record.state.runId }))
     },
     stopPipeline: (runId: string) => pipes.stop(runId),
-    /** 스킬 노드에서 고를 Claude Code 스킬 (프로젝트·내 홈) */
+    /** 스킬 노드에서 고를 Claude Code·Codex·공용 스킬 (프로젝트·내 홈) */
     async listSkills() {
       return (await sk.listSkills(need().projectDir)).map((s) => ({ ...s, id: sk.skillId(s) }))
     },

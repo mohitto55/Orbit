@@ -10,6 +10,7 @@ import { createDialogApi } from './dialogs'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
 import { documentImageResponse } from './documentImages'
+import { SKILL_LOCATIONS } from '../core/skillLocations'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'orbit-image', privileges: { standard: true, secure: true } }])
 
@@ -165,7 +166,7 @@ async function smoke(dir: string, out?: string) {
 }
 
 app.whenReady().then(async () => {
-  protocol.handle('orbit-image', async (request) => documentImageResponse(request.url, await api.currentProject(), path.join(app.getPath('home'), '.claude', 'skills')))
+  protocol.handle('orbit-image', async (request) => documentImageResponse(request.url, await api.currentProject(), SKILL_LOCATIONS.map((location) => path.join(app.getPath('home'), `.${location}`, 'skills'))))
   await theme.load()
   createWindow()
   if (process.env.ORBIT_SMOKE) {

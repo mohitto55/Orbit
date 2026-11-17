@@ -14,12 +14,12 @@ function localPath(value: string): string {
 }
 
 /** 임의 파일·실행 문서를 제공하지 않고 현재 프로젝트와 내 스킬의 이미지 파일만 읽는다. */
-export async function documentImageResponse(url: string, ctx: Ctx | null, skillRoot: string): Promise<Response> {
+export async function documentImageResponse(url: string, ctx: Ctx | null, skillRoots: readonly string[]): Promise<Response> {
   try {
     const request = new URL(url), source = request.searchParams.get('source'), document = request.searchParams.get('document')
     if (request.protocol !== 'orbit-image:' || request.hostname !== 'local' || !source || !ctx) return new Response(null, { status: 404 })
     const base = document ? path.dirname(document) : ctx.dataRoot
-    const candidate = path.resolve(base, localPath(source)), allowed = [ctx.projectDir, ctx.dataRoot, skillRoot]
+    const candidate = path.resolve(base, localPath(source)), allowed = [ctx.projectDir, ctx.dataRoot, ...skillRoots]
     if (!allowed.some((root) => inside(path.resolve(root), candidate))) return new Response(null, { status: 403 })
     const file = await fs.realpath(candidate)
     const roots = await Promise.all(allowed.map((root) => fs.realpath(root).catch(() => null)))
