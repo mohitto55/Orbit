@@ -37,6 +37,13 @@ function matchesRequest(text, capture) {
   const marker = /<!-- orbit-request:([\w-]+) -->\s*$/.exec(text);
   return (!marker || marker[1] === capture.requestId) && promptHash(text) === capture.promptHash;
 }
+function matchesClaudeRequest(text, capture) {
+  if (matchesRequest(text, capture)) return true;
+  if (typeof text !== 'string') return false;
+  // Claude의 긴 붙여넣기 포장만 벗긴다. 본문·요청 ID 검증과 원문 안의 태그는 유지한다.
+  const pasted = /^\s*<pasted_content id="([\w-]+)">\r?\n([\s\S]*)\r?\n<\/pasted_content id="\1">\s*$/.exec(text);
+  return !!pasted && matchesRequest(pasted[2], capture);
+}
 function captureRequest() {
   try {
     const capture = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'capture.json'), 'utf8'));
@@ -97,7 +104,7 @@ if (action === 'start') {
       if (action === 'prompt') {
         const state = read(), capture = captureRequest();
         if (state?.kind !== 'claude' || !state.running || event.hook_event_name !== 'UserPromptSubmit' || event.agent_id) return;
-        if (capture && matchesRequest(event.prompt, capture) && (!capture.sessionId || capture.sessionId === event.session_id)) {
+        if (capture && matchesClaudeRequest(event.prompt, capture) && (!capture.sessionId || capture.sessionId === event.session_id)) {
           fs.writeFileSync(path.join(path.dirname(file), 'capture.json'), JSON.stringify({ ...capture, submitted: event.session_id }));
         }
         return;
