@@ -112,7 +112,8 @@ for (const width of [960, 1360]) for (const theme of ['light', 'dark'] as const)
   })
 }
 
-test('긴 표·연속 표·수평 스크롤·문서 스크롤 후에도 빈 공간이나 겹침이 없다', async ({ orbit }) => {
+for (const height of [680, 860]) test(`긴 표·연속 표·수평 스크롤·문서 스크롤 ${height}px`, async ({ orbit }) => {
+  await orbit.app.evaluate(({ BrowserWindow }, height) => BrowserWindow.getAllWindows()[0].setSize(1024, height), height)
   const table = '| 이름 | 설명 |\n| --- | --- |\n' + Array.from({ length: 35 }, (_, i) => `| 행 ${i} | 설명 ${i} |`).join('\n')
   const { editor } = await openTask(orbit, '맨 위\n\n' + table + '\n\n두 표 사이\n\n' + table + '\n\n맨 아래')
   // CodeMirror virtualizes offscreen blocks. Check both ends after scrolling.
@@ -122,6 +123,9 @@ test('긴 표·연속 표·수평 스크롤·문서 스크롤 후에도 빈 공�
     return { gap: t.top - b.top, excess: b.height - t.height }
   }))
   for (const block of blocks) { expect(block.gap).toBeLessThan(15); expect(block.excess).toBeLessThan(30) }
+  // The modal itself scrolls on short displays. Bring the editor into the window
+  // before testing scrolling inside it; otherwise the modal clips its last line.
+  await editor.locator('.cm-scroller').scrollIntoViewIfNeeded()
   await editor.locator('.cm-scroller').evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect(editor.getByText('맨 아래', { exact: true })).toBeInViewport()
   await expect(editor.locator('table').last().getByRole('cell', { name: '행 34', exact: true })).toBeAttached()
