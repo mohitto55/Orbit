@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Annotation, EditorState, StateEffect, StateField, Transaction, type Range } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Facet, StateEffect, StateField, Transaction, type Range } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, keymap, placeholder, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from '@codemirror/commands'
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
@@ -10,6 +10,16 @@ import { Markdown } from './Markdown'
 
 const focusChanged = StateEffect.define<boolean>()
 const externalChange = Annotation.define<boolean>()
+const wikiNavigation = Facet.define<(target: string) => void>()
+
+function followWiki(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false
+  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-wiki]')?.dataset.wiki : undefined
+  if (!target) return false
+  event.preventDefault()
+  view.state.facet(wikiNavigation)[0]?.(target)
+  return true
+}
 
 class Bullet extends WidgetType {
   eq() { return true }
@@ -22,17 +32,19 @@ class Bullet extends WidgetType {
 }
 
 class TaskBox extends WidgetType {
-  constructor(readonly from: number, readonly checked: boolean, readonly label: string) { super() }
-  eq(other: TaskBox) { return this.from === other.from && this.checked === other.checked && this.label === other.label }
+  constructor(readonly from: number, readonly checked: boolean, readonly label: string, readonly disabled: boolean) { super() }
+  eq(other: TaskBox) { return this.from === other.from && this.checked === other.checked && this.label === other.label && this.disabled === other.disabled }
   toDOM(view: EditorView) {
     const input = document.createElement('input')
     input.type = 'checkbox'
     input.className = 'cm-md-task-box'
     input.checked = this.checked
+    input.disabled = this.disabled
     input.setAttribute('aria-label', `완료 조건: ${this.label}`)
     input.addEventListener('mousedown', (event) => event.preventDefault())
     input.addEventListener('click', (event) => {
       event.stopPropagation()
+      if (view.state.readOnly) { event.preventDefault(); return }
       if (!/^\[[ xX]\]$/.test(view.state.doc.sliceString(this.from, this.from + 3))) return
       view.dispatch({
         changes: { from: this.from + 1, to: this.from + 2, insert: this.checked ? ' ' : 'x' },
@@ -54,6 +66,7 @@ class MarkdownBlock extends WidgetType {
     // 기존 Markdown의 HTML·URL 정제를 그대로 사용한다. 원문은 이 HTML로 역변환하지 않는다.
     dom.innerHTML = renderToStaticMarkup(<Markdown source={this.source} />)
     dom.addEventListener('mousedown', (event) => {
+      if (followWiki(event, view)) return
       if (event.button !== 0) return
       event.preventDefault()
       const cell = event.target instanceof Element ? event.target.closest<HTMLTableCellElement>('td,th') : null
@@ -88,7 +101,11 @@ function present(state: EditorState, focused: boolean): Presentation {
     const { from, to, name } = ref, node = ref.node, parent = node.parent
     const source = () => state.doc.sliceString(from, to)
     const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name)
-    if (heading) line(from, `cm-md-heading cm-md-h${heading[1]}`)
+    if (heading) {
+      line(from, `cm-md-heading cm-md-h${heading[1]}`)
+      const anchor = /[ \t]*\{#[\w-]+\}$/.exec(source())
+      if (anchor && !active(from, to)) replace(to - anchor[0].length, to)
+    }
     if (name === 'FencedCode' || name === 'CodeBlock') {
       const first = state.doc.lineAt(from), last = state.doc.lineAt(to)
       const closing = node.lastChild?.name === 'CodeMark' ? node.lastChild.from : -1
@@ -123,6 +140,8 @@ function present(state: EditorState, focused: boolean): Presentation {
       else replace(from, to)
     }
     if (name === 'Link') {
+      // Markdown 파서는 [[위키 링크]]의 안쪽 대괄호도 일반 Link로 읽는다.
+      if (state.doc.sliceString(Math.max(0, from - 1), from) === '[' && state.doc.sliceString(to, to + 1) === ']') return false
       const marks = node.getChildren('LinkMark'), opening = marks[0]
       const closing = marks.find((m) => state.doc.sliceString(m.from, m.to) === ']')
       if (opening && closing) {
@@ -142,10 +161,23 @@ function present(state: EditorState, focused: boolean): Presentation {
     }
     if (name === 'TaskMarker') {
       const checked = /x/i.test(source()), end = state.doc.lineAt(to).to
-      if (!active(from, to)) replace(from, to, new TaskBox(from, checked, state.doc.sliceString(to, end).trim()))
+      if (!active(from, to)) replace(from, to, new TaskBox(from, checked, state.doc.sliceString(to, end).trim(), state.readOnly))
       if (checked && parent) mark(to, parent.to, 'cm-md-checked')
     }
   } })
+  for (const match of state.doc.toString().matchAll(/\[\[([^\[\]\n|]+)(?:\|([^\]\n]*))?\]\]/g)) {
+    const from = match.index!, to = from + match[0].length
+    let node = tree.resolveInner(from + 2, 1), inLiteral = false
+    for (;;) {
+      if (['InlineCode', 'FencedCode', 'CodeBlock', 'Image', 'HTMLBlock', 'Table'].includes(node.name) || (node.name === 'Link' && (node.from < from || node.to > to))) { inLiteral = true; break }
+      if (!node.parent) break
+      node = node.parent
+    }
+    if (inLiteral) continue
+    const aliased = !!match[2], labelFrom = from + 2 + (aliased ? match[1].length + 1 : 0), labelTo = labelFrom + (aliased ? match[2].length : match[1].length)
+    ranges.push(Decoration.mark({ class: 'cm-md-link', attributes: { 'data-wiki': match[1].trim(), title: 'Ctrl/⌘+클릭으로 문서 열기' } }).range(labelFrom, labelTo))
+    if (!active(from, to)) { replace(from, labelFrom); replace(labelTo, to) }
+  }
   return { decorations: Decoration.set(ranges, true), atomic: Decoration.set(atomic, true), focused }
 }
 
@@ -153,7 +185,7 @@ const presentation = StateField.define<Presentation>({
   create: (state) => present(state, false),
   update(value, tr) {
     const focused = tr.effects.find((effect) => effect.is(focusChanged))?.value ?? value.focused
-    return tr.docChanged || tr.selection || focused !== value.focused || syntaxTree(tr.state) !== syntaxTree(tr.startState)
+    return tr.docChanged || tr.selection || tr.reconfigured || focused !== value.focused || syntaxTree(tr.state) !== syntaxTree(tr.startState)
       ? present(tr.state, focused) : value
   },
   provide: (field) => [EditorView.decorations.from(field, (value) => value.decorations), EditorView.atomicRanges.of((view) => view.state.field(field).atomic)]
@@ -173,16 +205,21 @@ function liveMarkdown() {
   ]
 }
 
-export function LiveMarkdownEditor({ value, onChange, label = '세부 내용' }: { value: string; onChange: (value: string) => void; label?: string }) {
+export function LiveMarkdownEditor({ value, onChange, onWiki, label = '본문', disabled = false }: { value: string; onChange: (value: string) => void; onWiki?: (target: string) => void; label?: string; disabled?: boolean }) {
   const id = useId(), host = useRef<HTMLDivElement>(null), editor = useRef<EditorView | null>(null)
   const change = useRef(onChange); change.current = onChange
+  const wiki = useRef(onWiki); wiki.current = onWiki
+  const editability = useRef(new Compartment())
   useEffect(() => {
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({ doc: value, extensions: [
         liveMarkdown(),
+        editability.current.of([EditorState.readOnly.of(disabled), EditorView.editable.of(!disabled)]),
+        wikiNavigation.of((target) => wiki.current?.(target)),
+        EditorView.domEventHandlers({ mousedown: followWiki }),
         ...(value.includes('\r\n') ? [EditorState.lineSeparator.of('\r\n')] : []),
-        placeholder('여기에 바로 작성하세요. 완료 조건은 - [ ] 항목으로 추가합니다.'),
+        placeholder('여기에 바로 작성하세요.'),
         EditorView.contentAttributes.of({ id, 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.some((tr) => tr.annotation(externalChange))) change.current(update.state.sliceDoc())
@@ -197,5 +234,8 @@ export function LiveMarkdownEditor({ value, onChange, label = '세부 내용' }:
     const view = editor.current
     if (view && view.state.sliceDoc() !== value) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value }, annotations: [externalChange.of(true), Transaction.addToHistory.of(false)] })
   }, [value])
-  return <div className="live-markdown"><label htmlFor={id} className="small muted">{label}</label><div className="live-markdown-host" ref={host} /></div>
+  useEffect(() => {
+    editor.current?.dispatch({ effects: editability.current.reconfigure([EditorState.readOnly.of(disabled), EditorView.editable.of(!disabled)]) })
+  }, [disabled])
+  return <div className="live-markdown" aria-disabled={disabled || undefined}><label htmlFor={id} className="small muted">{label}</label><div className="live-markdown-host" ref={host} /></div>
 }

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../src/renderer/src/App'
 import type { Domain, Design, Knowledge } from '../src/renderer/src/types'
@@ -39,6 +40,10 @@ async function input(field: HTMLInputElement | HTMLTextAreaElement, value: strin
     Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(field, value)
     field.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+async function body(element: HTMLElement, value: string) {
+  const view = EditorView.findFromDOM(element)!
+  await act(async () => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } }))
 }
 async function openDesign() {
   await click('문서로'); await click('세부 도메인'); await click('설계 (3층)'); await click('두 번째 설계')
@@ -88,8 +93,8 @@ afterEach(async () => {
 it('[PL-F01-AC3] 메뉴를 왕복해도 하위 도메인·설계·작성 내용·검색과 스크롤을 유지한다', async () => {
   expect(calls).not.toContain('listKnowledge') // 아직 방문하지 않은 화면은 읽지 않는다.
   await openDesign()
-  const domainPage = shown(), editor = domainPage.querySelector<HTMLTextAreaElement>('.md-source')!
-  await input(editor, '## 작성 중인 두 번째 설계\n\n다른 화면을 보고 돌아올 내용')
+  const domainPage = shown(), editor = domainPage.querySelector<HTMLElement>('.cm-content')!
+  await body(editor, '## 작성 중인 두 번째 설계\n\n다른 화면을 보고 돌아올 내용')
   domainPage.querySelector<HTMLElement>('.pane-main')!.scrollTop = 240
   const reads = calls.filter((name) => name === 'listDomains').length
 
@@ -98,8 +103,8 @@ it('[PL-F01-AC3] 메뉴를 왕복해도 하위 도메인·설계·작성 내용�
   await input(shown().querySelector<HTMLInputElement>('input[placeholder="검색"]')!, '탐색')
   const memo = [...shown().querySelectorAll<HTMLButtonElement>('.tree-item')].find((b) => b.textContent?.includes('탐색 메모'))!
   await act(async () => memo.click())
-  const memoEditor = shown().querySelector<HTMLTextAreaElement>('.md-source')!
-  await input(memoEditor, '메모 작성 중')
+  const memoEditor = shown().querySelector<HTMLElement>('.cm-content')!
+  await body(memoEditor, '메모 작성 중')
   await act(async () => { for (const listener of listeners.get('files-changed') ?? []) listener(null) })
   expect(calls.filter((name) => name === 'listDomains')).toHaveLength(reads)
 
@@ -107,15 +112,15 @@ it('[PL-F01-AC3] 메뉴를 왕복해도 하위 도메인·설계·작성 내용�
   expect(shown()).toBe(domainPage)
   expect(shown().querySelector('.tabs .on')?.textContent).toBe('설계 (3층)')
   expect(shown().querySelector('.split.inner .tree-item.on')?.textContent?.trim()).toBe('두 번째 설계')
-  expect(shown().querySelector('.md-source')).toBe(editor)
-  expect(editor.value).toContain('작성 중인 두 번째 설계')
+  expect(shown().querySelector('.cm-content')).toBe(editor)
+  expect(EditorView.findFromDOM(editor)!.state.sliceDoc()).toContain('작성 중인 두 번째 설계')
   expect(shown().querySelector<HTMLElement>('.pane-main')!.scrollTop).toBe(240)
   expect(calls.filter((name) => name === 'listDomains')).toHaveLength(reads + 1)
 
   await navigate('지식')
   expect(shown().querySelector<HTMLInputElement>('input[placeholder="검색"]')!.value).toBe('탐색')
-  expect(shown().querySelector('.md-source')).toBe(memoEditor)
-  expect(memoEditor.value).toBe('메모 작성 중')
+  expect(shown().querySelector('.cm-content')).toBe(memoEditor)
+  expect(EditorView.findFromDOM(memoEditor)!.state.sliceDoc()).toBe('메모 작성 중')
 })
 
 it('[PL-F01-AC3] 보존된 변경 검토 화면에서도 바로가기가 지정한 탭과 요청으로 이동한다', async () => {
@@ -141,6 +146,6 @@ it('[PL-F01-AC3] 프로젝트를 닫으면 보관한 화면을 해제하여 다�
   await act(async () => host.querySelector<HTMLButtonElement>('.recent button')!.click())
   expect(projectDir).toBe('/other-project')
   expect(shown()).not.toBe(previous)
-  expect(shown().querySelector('.md-source')).toBeNull()
+  expect(shown().querySelector('.cm-content')).toBeNull()
   expect(shown().textContent).toContain('왼쪽에서 도메인을 고르면')
 })

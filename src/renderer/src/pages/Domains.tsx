@@ -5,7 +5,7 @@ import type { Domain, DomainScope, SubdomainType } from '../types'
 import { Badge, Empty, Modal, askChange, errorToast, toast, useLoad } from '../ui'
 import SpecTable from './SpecTable'
 import { RunButton, SourceRuns } from '../Automation'
-import { MdEditor } from '../Markdown'
+import { LiveMarkdownEditor } from '../LiveMarkdownEditor'
 import DesignPanel from './DesignPanel'
 import ModelPanel from './ModelPanel'
 import DomainGraph from './DomainGraph'
@@ -423,10 +423,7 @@ function CreateDomain({ domains, onClose, onCreated }: { domains: Domain[]; onCl
           </select>
         </div>
       </div>
-      <div className="field">
-        <label>역할</label>
-        <textarea rows={3} value={role} onChange={(e) => setRole(e.target.value)} placeholder="이 도메인이 책임지는 일" />
-      </div>
+      <LiveMarkdownEditor label="역할" value={role} onChange={setRole} />
       <div className="row end">
         <button onClick={onClose}>취소</button>
         <button className="primary" disabled={!title.trim()} onClick={submit}>
@@ -504,7 +501,7 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
           </select>
         </div>
       </div>
-      <MdEditor label="domain.md (역할 / 용어 / 모델 / 하지 않는 것)" value={content} onChange={setContent} onWiki={onWiki} />
+      <LiveMarkdownEditor label="역할 · 용어 · 모델 · 하지 않는 것" value={content} onChange={setContent} onWiki={onWiki} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제

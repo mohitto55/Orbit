@@ -444,7 +444,7 @@ function TaskEditor({
         <input value={f.links} onChange={(e) => set('links', e.target.value)} />
       </div>
       <div className="field">
-        <LiveMarkdownEditor value={f.body} onChange={(body) => set('body', body)} />
+        <LiveMarkdownEditor label="세부 내용" value={f.body} onChange={(body) => set('body', body)} />
         <span className="small muted">변경 내용과 완료 조건의 체크는 저장을 누르면 반영됩니다.</span>
       </div>
       <div className="row between">

@@ -2,7 +2,9 @@
 import { act, createElement, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Markdown, MdEditor } from '../src/renderer/src/Markdown'
+import { EditorView } from '@codemirror/view'
+import { Markdown } from '../src/renderer/src/Markdown'
+import { LiveMarkdownEditor } from '../src/renderer/src/LiveMarkdownEditor'
 import { setChecklistChecked } from '../src/renderer/src/checklistMarkdown'
 
 let host: HTMLDivElement
@@ -18,72 +20,55 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove(); vi.unstubAllGlobals()
 })
-async function click(text: string) {
-  const button = [...host.querySelectorAll('button')].find((element) => element.textContent === text)!
-  await act(async () => button.click())
-}
-async function input(area: HTMLTextAreaElement, value: string) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, value)
-    area.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-}
+const editor = () => EditorView.findFromDOM(host.querySelector<HTMLElement>('.cm-content')!)!
 
-it('공통 편집기는 원문으로 열리고 미리보기 전환 시 빈 줄·문법·커서를 그대로 보존한다', async () => {
+it('공통 편집기는 렌더링된 본문 하나로 열리고 문법·빈 줄·위키 링크를 보존한다', async () => {
   const onChange = vi.fn()
   const onWiki = vi.fn()
-  await act(async () => root.render(createElement(MdEditor, { value: markdown, onChange, onWiki, label: '본문' })))
-  const area = host.querySelector('textarea')!
-  expect(area.value).toBe(markdown)
-  expect(area.getAttribute('aria-label')).toBe('본문 Markdown 원문')
-  expect(host.querySelector('[contenteditable="true"]')).toBeNull()
-  expect(host.querySelector('h2')).toBeNull()
-  area.focus(); area.setSelectionRange(12, 18)
-  await click('미리보기')
-  expect(area.style.display).toBe('none')
-  expect(host.querySelector('h2')?.textContent).toBe('제목')
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: markdown, onChange, onWiki, label: '본문' })))
+  const view = editor()
+  expect(host.querySelector('textarea')).toBeNull()
+  expect(host.querySelector('[contenteditable="true"][aria-label="본문"]')).not.toBeNull()
+  expect(host.textContent).not.toContain('미리보기')
+  expect(host.querySelector('.cm-md-h2')?.textContent).toBe('제목')
   expect(host.querySelector('table')).not.toBeNull()
-  expect(host.querySelector('pre code')?.textContent).toContain('const a = 1\n\nconst b = 2')
-  await click('할 일')
+  expect(host.querySelector('.cm-content')?.textContent).toContain('const a = 1')
+  const link = host.querySelector<HTMLElement>('[data-wiki="task"]')!
+  expect(link.textContent).toBe('할 일')
+  await act(async () => link.dispatchEvent(new MouseEvent('mousedown', { ctrlKey: true, bubbles: true, cancelable: true })))
   expect(onWiki).toHaveBeenCalledWith('task')
-  await click('편집')
-  expect(host.querySelector('textarea')).toBe(area)
-  expect(area.style.display).toBe('')
-  expect(area.value).toBe(markdown)
-  expect([area.selectionStart, area.selectionEnd]).toEqual([12, 18])
+  expect(editor()).toBe(view)
+  expect(view.state.sliceDoc()).toBe(markdown)
   expect(onChange).not.toHaveBeenCalled()
 })
 
-it('줄바꿈·한글 조합·붙여넣기·실행 취소 키는 기본 텍스트 입력에 맡기고 내용을 변환하지 않는다', async () => {
-  let changed = ''
-  function Editor() {
-    const [value, setValue] = useState(markdown)
-    return createElement(MdEditor, { value, onChange: (next: string) => { changed = next; setValue(next) } })
-  }
-  await act(async () => root.render(createElement(Editor)))
-  const area = host.querySelector('textarea')!
-  for (const init of [{ key: 'Enter' }, { key: 'Enter', shiftKey: true }, { key: 'Enter', isComposing: true }, { key: 'Backspace' }, { key: 'z', ctrlKey: true }, { key: 'v', ctrlKey: true }]) {
-    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
-    area.dispatchEvent(event)
-    expect(event.defaultPrevented).toBe(false)
-  }
-  const next = markdown.replace('첫 줄\n둘째 줄', '수정한 첫 줄\n새 줄\n\n둘째 줄')
-  await input(area, next)
-  expect(changed).toBe(next)
-  await click('미리보기'); await click('편집')
-  expect(area.value).toBe(next)
+it('저장 중에는 입력과 체크를 잠그고 저장 후 같은 편집기에서 계속 작성한다', async () => {
+  const onChange = vi.fn()
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: markdown, onChange })))
+  const view = editor()
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: markdown, onChange, disabled: true })))
+  expect(view.state.readOnly).toBe(true)
+  expect(view.contentDOM.getAttribute('contenteditable')).toBe('false')
+  expect(host.querySelector<HTMLInputElement>('.cm-md-task-box')?.disabled).toBe(true)
+  await act(async () => host.querySelector<HTMLInputElement>('.cm-md-task-box')!.click())
+  expect(onChange).not.toHaveBeenCalled()
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: markdown, onChange })))
+  expect(editor()).toBe(view)
+  expect(view.contentDOM.getAttribute('contenteditable')).toBe('true')
+  expect(host.querySelector<HTMLInputElement>('.cm-md-task-box')?.disabled).toBe(false)
+  await act(async () => view.dispatch({ changes: { from: view.state.doc.length, insert: '\n추가 내용' } }))
+  expect(onChange).toHaveBeenLastCalledWith(markdown + '\n추가 내용')
 })
 
-it('체크 항목 변경 등 외부에서 갱신한 원문도 편집과 미리보기에 함께 반영한다', async () => {
+it('외부에서 갱신한 원문도 동일한 편집 본문에 반영하고 변경 콜백을 재호출하지 않는다', async () => {
   const onChange = vi.fn()
-  await act(async () => root.render(createElement(MdEditor, { value: markdown, onChange })))
-  const area = host.querySelector('textarea')!
-  await click('미리보기')
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: markdown, onChange })))
+  const view = editor()
   const updated = markdown.replace('- [ ] 확인', '- [x] 확인')
-  await act(async () => root.render(createElement(MdEditor, { value: updated, onChange })))
+  await act(async () => root.render(createElement(LiveMarkdownEditor, { value: updated, onChange })))
   expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true)
-  await click('편집')
-  expect(area.value).toBe(updated)
+  expect(editor()).toBe(view)
+  expect(view.state.sliceDoc()).toBe(updated)
   expect(onChange).not.toHaveBeenCalled()
 })
 

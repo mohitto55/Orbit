@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api, on } from '../api'
 import type { PageProps } from '../App'
 import { Badge, Empty, errorToast, toast, useLoad } from '../ui'
-import { Markdown, MdEditor } from '../Markdown'
+import { Markdown } from '../Markdown'
+import { LiveMarkdownEditor } from '../LiveMarkdownEditor'
 import { DiffTable } from './DiffView'
 
 type Agent = 'claude' | 'codex'
@@ -286,7 +287,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
                 </button>
               </div>
             </div>
-            {view === 'edit' ? <MdEditor value={edited} onChange={setEdited} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
+            {view === 'edit' ? <LiveMarkdownEditor value={edited} onChange={setEdited} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
           </div>
           {dirty && (
             <div className="row">

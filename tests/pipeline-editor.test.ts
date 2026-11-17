@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { EditorView } from '@codemirror/view'
 import type { Core, CytoscapeOptions, NodeSingular } from 'cytoscape'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PipelineEditor from '../src/renderer/src/pages/Pipelines'
@@ -216,9 +217,10 @@ describe('함수와 리스트 항목 편집 화면', () => {
     await change(host.querySelector<HTMLInputElement>('#skill-name')!, 'review-feature')
     await change(host.querySelector<HTMLInputElement>('#skill-description')!, '기능을 검토하는 절차')
     const body = '# 검토\n\n- [ ] 입력 확인\n한 줄 더\n\n```txt\n원문\n```'
-    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!, body)
-    await click('미리보기')
-    expect(host.querySelector('.run-drawer h1')!.textContent).toBe('검토')
+    const skillEditor = () => EditorView.findFromDOM(host.querySelector<HTMLElement>('[aria-label="스킬 본문"]')!)!
+    await act(async () => skillEditor().dispatch({ changes: { from: 0, insert: body } }))
+    expect(host.querySelector('.run-drawer .cm-md-h1')!.textContent).toBe('검토')
+    expect(host.querySelector('.run-drawer textarea')).toBeNull()
     await click('저장하고 노드 추가')
     await act(async () => { await vi.advanceTimersByTimeAsync(550) })
     const skillNode = saved[0].nodes.find((n) => n.kind === 'skill')!
@@ -228,8 +230,8 @@ describe('함수와 리스트 항목 편집 화면', () => {
     expect(host.textContent).toContain('입력 확인')
     await act(async () => host.querySelector<HTMLButtonElement>('.pipe-skill-row .tree-item')!.click())
     expect(host.querySelector<HTMLInputElement>('#skill-name')!.disabled).toBe(true)
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!.value).toBe(body)
-    await change(host.querySelector<HTMLTextAreaElement>('[aria-label="스킬 본문 Markdown 원문"]')!, '# 수정한 스킬\n새 본문')
+    expect(skillEditor().state.sliceDoc()).toBe(body)
+    await act(async () => skillEditor().dispatch({ changes: { from: 0, to: skillEditor().state.doc.length, insert: '# 수정한 스킬\n새 본문' } }))
     await click('저장')
     expect(host.querySelector('.pipe-value')?.textContent).toContain('새 본문')
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="review-feature 노드 추가"]')!.click())
