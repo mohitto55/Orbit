@@ -287,7 +287,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
                 </button>
               </div>
             </div>
-            {view === 'edit' ? <LiveMarkdownEditor value={edited} onChange={setEdited} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
+            {view === 'edit' ? <LiveMarkdownEditor value={edited} onChange={setEdited} documentPath={draft.documentPath} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
           </div>
           {dirty && (
             <div className="row">

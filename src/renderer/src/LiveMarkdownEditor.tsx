@@ -11,6 +11,7 @@ import { Markdown } from './Markdown'
 const focusChanged = StateEffect.define<boolean>()
 const externalChange = Annotation.define<boolean>()
 const wikiNavigation = Facet.define<(target: string) => void>()
+const documentLocation = Facet.define<string, string>({ combine: (values) => values[0] ?? '' })
 
 function followWiki(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false
@@ -58,13 +59,13 @@ class TaskBox extends WidgetType {
 
 /** 표·이미지도 같은 문서 안에 표시하며 클릭한 위치에서 원문 편집으로 이어진다. */
 class MarkdownBlock extends WidgetType {
-  constructor(readonly from: number, readonly source: string, readonly block: boolean, readonly cells: number[][] = []) { super() }
-  eq(other: MarkdownBlock) { return this.from === other.from && this.source === other.source && this.block === other.block }
+  constructor(readonly from: number, readonly source: string, readonly block: boolean, readonly cells: number[][], readonly documentPath: string, readonly references: string) { super() }
+  eq(other: MarkdownBlock) { return this.from === other.from && this.source === other.source && this.block === other.block && this.documentPath === other.documentPath && this.references === other.references }
   toDOM(view: EditorView) {
     const dom: HTMLElement = document.createElement(this.block ? 'div' : 'span')
     dom.className = this.block ? 'cm-md-block' : 'cm-md-image'
     // 기존 Markdown의 HTML·URL 정제를 그대로 사용한다. 원문은 이 HTML로 역변환하지 않는다.
-    dom.innerHTML = renderToStaticMarkup(<Markdown source={this.source} />)
+    dom.innerHTML = renderToStaticMarkup(<Markdown source={this.source + this.references} documentPath={this.documentPath} />)
     dom.addEventListener('mousedown', (event) => {
       if (followWiki(event, view)) return
       if (event.button !== 0) return
@@ -76,7 +77,18 @@ class MarkdownBlock extends WidgetType {
       view.focus()
     })
     dom.addEventListener('click', (event) => event.preventDefault())
-    for (const img of dom.querySelectorAll('img')) img.addEventListener('load', () => view.requestMeasure(), { once: true })
+    for (const img of dom.querySelectorAll('img')) {
+      img.title = '클릭해서 이미지 경로·설명 수정'
+      img.addEventListener('load', () => view.requestMeasure(), { once: true })
+      img.addEventListener('error', () => {
+        img.hidden = true
+        const message = document.createElement('span')
+        message.className = 'cm-md-image-error'
+        message.textContent = `이미지를 불러올 수 없습니다${img.alt ? ` (${img.alt})` : ''} · 클릭해서 경로 수정`
+        img.after(message)
+        view.requestMeasure()
+      }, { once: true })
+    }
     return dom
   }
   ignoreEvent() { return true }
@@ -97,6 +109,9 @@ function present(state: EditorState, focused: boolean): Presentation {
     ranges.push(range); atomic.push(range)
   }
   const tree = ensureSyntaxTree(state, state.doc.length, 30) ?? syntaxTree(state)
+  const definitions: string[] = []
+  tree.iterate({ enter(ref) { if (ref.name === 'LinkReference') { definitions.push(state.doc.sliceString(ref.from, ref.to)); return false } } })
+  const references = definitions.length ? '\n\n' + definitions.join('\n') : ''
   tree.iterate({ enter(ref) {
     const { from, to, name } = ref, node = ref.node, parent = node.parent
     const source = () => state.doc.sliceString(from, to)
@@ -122,7 +137,7 @@ function present(state: EditorState, focused: boolean): Presentation {
         for (let row = node.firstChild; row; row = row.nextSibling) {
           if (row.name === 'TableHeader' || row.name === 'TableRow') cells.push(row.getChildren('TableCell').map((cell) => cell.from))
         }
-        replace(from, to, new MarkdownBlock(from, source(), name !== 'Image', cells), name !== 'Image')
+        replace(from, to, new MarkdownBlock(from, source(), name !== 'Image', cells, state.facet(documentLocation), references), name !== 'Image')
         return false
       }
       if (name === 'Table') {
@@ -205,17 +220,19 @@ function liveMarkdown() {
   ]
 }
 
-export function LiveMarkdownEditor({ value, onChange, onWiki, label = '본문', disabled = false }: { value: string; onChange: (value: string) => void; onWiki?: (target: string) => void; label?: string; disabled?: boolean }) {
+export function LiveMarkdownEditor({ value, onChange, onWiki, documentPath = '', label = '본문', disabled = false }: { value: string; onChange: (value: string) => void; onWiki?: (target: string) => void; documentPath?: string; label?: string; disabled?: boolean }) {
   const id = useId(), host = useRef<HTMLDivElement>(null), editor = useRef<EditorView | null>(null)
   const change = useRef(onChange); change.current = onChange
   const wiki = useRef(onWiki); wiki.current = onWiki
   const editability = useRef(new Compartment())
+  const location = useRef(new Compartment())
   useEffect(() => {
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({ doc: value, extensions: [
         liveMarkdown(),
         editability.current.of([EditorState.readOnly.of(disabled), EditorView.editable.of(!disabled)]),
+        location.current.of(documentLocation.of(documentPath)),
         wikiNavigation.of((target) => wiki.current?.(target)),
         EditorView.domEventHandlers({ mousedown: followWiki }),
         ...(value.includes('\r\n') ? [EditorState.lineSeparator.of('\r\n')] : []),
@@ -237,5 +254,8 @@ export function LiveMarkdownEditor({ value, onChange, onWiki, label = '본문', 
   useEffect(() => {
     editor.current?.dispatch({ effects: editability.current.reconfigure([EditorState.readOnly.of(disabled), EditorView.editable.of(!disabled)]) })
   }, [disabled])
+  useEffect(() => {
+    editor.current?.dispatch({ effects: location.current.reconfigure(documentLocation.of(documentPath)) })
+  }, [documentPath])
   return <div className="live-markdown" aria-disabled={disabled || undefined}><label htmlFor={id} className="small muted">{label}</label><div className="live-markdown-host" ref={host} /></div>
 }

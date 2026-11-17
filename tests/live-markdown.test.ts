@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { EditorView, runScopeHandlers } from '@codemirror/view'
 import { redo, undo } from '@codemirror/commands'
+import { readFileSync } from 'node:fs'
 import { LiveMarkdownEditor } from '../src/renderer/src/LiveMarkdownEditor'
 
 let host: HTMLDivElement, root: Root, changed: string[]
@@ -15,10 +16,10 @@ const deferSelection = (event: Event) => {
   queueMicrotask(() => { const next = new Event('selectionchange'); queuedSelection.add(next); document.dispatchEvent(next) })
 }
 const editor = () => EditorView.findFromDOM(host.querySelector<HTMLElement>('.cm-content')!)!
-async function mount(initial: string) {
+async function mount(initial: string, documentPath?: string) {
   function Editor() {
     const [value, setValue] = useState(initial)
-    return createElement(LiveMarkdownEditor, { value, onChange: (next: string) => { changed.push(next); setValue(next) } })
+    return createElement(LiveMarkdownEditor, { value, documentPath, onChange: (next: string) => { changed.push(next); setValue(next) } })
   }
   await act(async () => root.render(createElement(Editor)))
   return editor()
@@ -111,6 +112,60 @@ it('[TK-F11-AC5] 표·HTML을 렌더링해도 스크립트와 위험한 속성�
   const source = '<div>설명<img src="x" onerror="alert(1)"><script>alert(1)</script></div>\n\n| 링크 |\n|---|\n| [위험](javascript:alert%281%29) |'
   const view = await mount(source)
   expect(host.querySelector('script,[onerror],a[href^="javascript:"]')).toBeNull()
+  expect(view.state.sliceDoc()).toBe(source)
+  expect(changed).toEqual([])
+})
+
+it('Task 모달에서도 체크박스가 본문 너비로 늘어나지 않고 왼쪽 문장 옆에 붙는다', async () => {
+  const style = document.createElement('style')
+  style.textContent = readFileSync('src/renderer/src/styles.css', 'utf8')
+  document.head.appendChild(style)
+  host.className = 'modal wide'
+  try {
+    await act(async () => root.render(createElement('div', { className: 'field' }, createElement(LiveMarkdownEditor, { value: '- [ ] TODO\n- [x] 완료', onChange() {} }))))
+    const boxes = [...host.querySelectorAll<HTMLInputElement>('.cm-md-task-box')]
+    expect(boxes).toHaveLength(2)
+    expect(boxes.map((box) => getComputedStyle(box).width)).toEqual(['15px', '15px'])
+    expect(boxes[0].closest('.cm-line')?.textContent?.trim()).toBe('TODO')
+  } finally { style.remove() }
+})
+
+it.each([
+  '![흐름도](assets/flow.png "한 턴")',
+  '<img src="assets/flow.png" alt="흐름도" width="760">',
+  '![흐름도][chart]\n\n[chart]: assets/flow.png "한 턴"',
+  '| 그림 |\n|---|\n| ![흐름도](assets/flow.png) |'
+])('이미지를 표시하고 같은 본문에서 경로·설명 수정과 실행 취소를 보존한다: %s', async (markup) => {
+  const source = '# 설계\n\n' + markup + '\n\n메모', documentPath = 'C:/project/.orbit/domains/chat/design/flow.md'
+  const view = await mount(source, documentPath)
+  const image = host.querySelector<HTMLImageElement>('.md img')!
+  expect(image).not.toBeNull()
+  expect(image.alt).toBe('흐름도')
+  const url = new URL(image.src)
+  expect(url.protocol).toBe('orbit-image:')
+  expect(url.searchParams.get('source')).toBe('assets/flow.png')
+  expect(url.searchParams.get('document')).toBe(documentPath)
+  await act(async () => image.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true })))
+  expect(view.state.sliceDoc()).toBe(source)
+  const at = source.indexOf('flow.png')
+  await act(async () => view.dispatch({ changes: { from: at, to: at + 'flow.png'.length, insert: 'changed.png' }, selection: { anchor: source.length } }))
+  await act(async () => { view.contentDOM.blur(); await vi.waitFor(() => expect(host.querySelector('.md img')?.getAttribute('src')).toContain('changed.png')) })
+  expect(changed.at(-1)).toBe(source.replace('flow.png', 'changed.png'))
+  await act(async () => { undo(view) })
+  expect(view.state.sliceDoc()).toBe(source)
+  const alt = source.indexOf('흐름도')
+  await act(async () => view.dispatch({ changes: { from: alt, to: alt + 3, insert: '수정한 그림 설명' } }))
+  expect(host.querySelector<HTMLImageElement>('.md img')?.alt).toBe('수정한 그림 설명')
+  expect(view.state.sliceDoc()).toBe(source.replace('흐름도', '수정한 그림 설명'))
+})
+
+it('이미지 로딩 실패도 본문을 깨뜨리지 않고 클릭해서 잘못된 경로를 수정할 수 있다', async () => {
+  const source = '![설명](missing.png)\n\n본문', view = await mount(source)
+  await act(async () => host.querySelector('.md img')!.dispatchEvent(new Event('error')))
+  const message = host.querySelector<HTMLElement>('.cm-md-image-error')!
+  expect(message.textContent).toContain('클릭해서 경로 수정')
+  await act(async () => message.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true })))
+  expect(view.state.selection.main.head).toBe(0)
   expect(view.state.sliceDoc()).toBe(source)
   expect(changed).toEqual([])
 })

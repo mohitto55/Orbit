@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
 import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
@@ -9,6 +9,9 @@ import { createTheme } from './theme'
 import { createDialogApi } from './dialogs'
 import type { Ctx } from '../core/workspace'
 import { NotifyLog, afterTime } from '../core/notify'
+import { documentImageResponse } from './documentImages'
+
+protocol.registerSchemesAsPrivileged([{ scheme: 'orbit-image', privileges: { standard: true, secure: true } }])
 
 let win: BrowserWindow | null = null
 
@@ -162,6 +165,7 @@ async function smoke(dir: string, out?: string) {
 }
 
 app.whenReady().then(async () => {
+  protocol.handle('orbit-image', async (request) => documentImageResponse(request.url, await api.currentProject(), path.join(app.getPath('home'), '.claude', 'skills')))
   await theme.load()
   createWindow()
   if (process.env.ORBIT_SMOKE) {

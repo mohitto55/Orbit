@@ -16,6 +16,7 @@ export interface Domain {
   id: string
   title: string
   folder: string
+  file?: string
   parent?: string
   subdomainType: SubdomainType
   version: number
@@ -43,6 +44,7 @@ export async function listDomains(ctx: Ctx): Promise<Domain[]> {
       id: data.id ?? `dom-${folder}`,
       title: data.title ?? folder,
       folder,
+      file,
       parent: data.parent || undefined,
       subdomainType: data.subdomainType ?? 'Supporting',
       version: Number(data.version ?? 1),

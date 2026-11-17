@@ -102,7 +102,7 @@ function DesignEditor({ design, onSaved }: { design: DesignWithStale; onSaved: (
         <History target={design.id} />
       ) : (
         <>
-          <LiveMarkdownEditor label="설계 본문" value={content} onChange={setContent} />
+          <LiveMarkdownEditor label="설계 본문" value={content} onChange={setContent} documentPath={design.file} />
           <div className="row end">
             <button className="primary" disabled={content === design.content} onClick={save}>
               저장

@@ -375,6 +375,7 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .md h3 { font-size: 15px; font-weight: 650; margin: 22px 0 8px; }
 .md h4 { font-size: 14px; margin: 16px 0 6px; color: var(--text-2); }
 .md p { margin: 8px 0; }
+.md img { max-width: 100%; height: auto; }
 .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
 .md li { margin: 3px 0; }
 .md li::marker { color: var(--faint); }
@@ -434,6 +435,7 @@ mark { background: var(--mark); color: inherit; cursor: pointer; border-radius: 
 .live-markdown .cm-md-image { display: inline-block; max-width: 100%; cursor: text; }
 .live-markdown .cm-md-image .md, .live-markdown .cm-md-image p { display: inline; margin: 0; }
 .live-markdown .cm-md-image img { max-width: 100%; max-height: 280px; vertical-align: middle; }
+.live-markdown .cm-md-image-error { display: inline-block; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }
 .bordered { border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; background: var(--panel); }
 .md-viewer { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .md-viewer .md-scroll { flex: 1; }
@@ -688,7 +690,7 @@ select.prio { font-weight: 600; }
 .reorderable.is-dragging, .reorderable.is-dragging * { cursor: grabbing !important; }
 .modal-back.wide { padding-top: 4vh; }
 .modal.wide { width: min(1100px, 94vw); max-height: 92vh; overflow: auto; display: flex; flex-direction: column; }
-.modal.wide .field input, .modal.wide .field select { width: 100%; }
+.modal.wide .field input:not([type='checkbox']):not([type='radio']), .modal.wide .field select { width: 100%; }
 textarea.task-body { min-height: 48vh; resize: vertical; font-size: 14px; line-height: 1.65; }
 .logo { flex: none; }
 

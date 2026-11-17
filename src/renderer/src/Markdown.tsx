@@ -5,12 +5,13 @@ import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import type { Nodes } from 'hast'
 import { readChecklist, type ChecklistItem } from './checklistMarkdown'
+import { markdownImageUrl } from './markdownImages'
 
 // md 안의 <br> 등 기본 HTML은 살리고, 스크립트 같은 위험한 요소는 걸러낸다.
 // wiki: (위키링크), term: (Drift 용어 강조) 링크는 앱 내부 이동용으로 허용한다.
 const schema = {
   ...defaultSchema,
-  protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), 'wiki', 'term'] }
+  protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), 'wiki', 'term'], src: [...(defaultSchema.protocols?.src ?? []), 'orbit-image', 'data'] }
 }
 
 const INTERNAL = /^(wiki|term):/
@@ -34,6 +35,7 @@ function prepare(src: string, terms?: { title: string; id: string }[]): string {
 
 export interface MarkdownProps {
   source: string
+  documentPath?: string
   onWiki?: (target: string) => void
   onTerm?: (domainId: string) => void
   terms?: { title: string; id: string }[]
@@ -41,11 +43,11 @@ export interface MarkdownProps {
   onChecklistToggle?: (item: ChecklistItem, checked: boolean) => void
 }
 
-export function Markdown({ source, onWiki, onTerm, terms, className = '', onChecklistToggle }: MarkdownProps) {
+export function Markdown({ source, documentPath, onWiki, onTerm, terms, className = '', onChecklistToggle }: MarkdownProps) {
   if (!source.trim()) return <div className={`md empty-md ${className}`}>(내용 없음)</div>
   return (
     <div className={`md ${className}`}>
-      <MdContent source={source} onWiki={onWiki} onTerm={onTerm} terms={terms} onChecklistToggle={onChecklistToggle} />
+      <MdContent source={source} documentPath={documentPath} onWiki={onWiki} onTerm={onTerm} terms={terms} onChecklistToggle={onChecklistToggle} />
     </div>
   )
 }
@@ -67,16 +69,26 @@ function bindChecklist(items: ChecklistItem[]) {
   }
 }
 
+function resolveImages(documentPath?: string) {
+  return () => (tree: Nodes) => {
+    const visit = (node: Nodes) => {
+      if (node.type === 'element' && node.tagName === 'img' && typeof node.properties.src === 'string') node.properties.src = markdownImageUrl(node.properties.src, documentPath)
+      if ('children' in node) node.children.forEach(visit)
+    }
+    visit(tree)
+  }
+}
+
 /** 감싸는 .md 없이 렌더링만 한다. 블록 단위로 나눠 그릴 때 쓴다. */
-export function MdContent({ source, onWiki, onTerm, terms, onChecklistToggle }: Omit<MarkdownProps, 'className'>) {
+export function MdContent({ source, documentPath, onWiki, onTerm, terms, onChecklistToggle }: Omit<MarkdownProps, 'className'>) {
   const rendered = prepare(source, terms)
   const items = onChecklistToggle ? readChecklist(source) : []
   const renderedItems = onChecklistToggle ? readChecklist(rendered) : []
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, schema], ...(onChecklistToggle ? [bindChecklist(items.length === renderedItems.length ? renderedItems : [])] : [])]}
-      urlTransform={(url) => (INTERNAL.test(url) ? url : defaultUrlTransform(url))}
+      rehypePlugins={[rehypeRaw, resolveImages(documentPath), [rehypeSanitize, schema], ...(onChecklistToggle ? [bindChecklist(items.length === renderedItems.length ? renderedItems : [])] : [])]}
+      urlTransform={(url, key, node) => key === 'src' && node.tagName === 'img' ? url : (INTERNAL.test(url) ? url : defaultUrlTransform(url))}
       components={{
         input: ({ node, checked, ...props }) => {
           const index = node?.properties['data-checklist-index']

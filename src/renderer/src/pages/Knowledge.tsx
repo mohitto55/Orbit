@@ -115,7 +115,7 @@ function Editor({ draft, setDraft, onSave, items }: { draft: Draft; setDraft: (d
       </div>
       {current?.supersededBy && <div className="banner">이 결정은 {current.supersededBy}로 대체되었습니다</div>}
       {current?.sources.length ? <div className="small muted">근거: {current.sources.join(', ')}</div> : null}
-      <LiveMarkdownEditor label="본문" value={local.content} onChange={(v) => set({ content: v })} />
+      <LiveMarkdownEditor label="본문" value={local.content} onChange={(v) => set({ content: v })} documentPath={current?.file} />
       <div className="row end">
         <button className="primary" disabled={!local.title.trim()} onClick={onSave}>
           저장

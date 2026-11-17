@@ -501,7 +501,7 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
           </select>
         </div>
       </div>
-      <LiveMarkdownEditor label="역할 · 용어 · 모델 · 하지 않는 것" value={content} onChange={setContent} onWiki={onWiki} />
+      <LiveMarkdownEditor label="역할 · 용어 · 모델 · 하지 않는 것" value={content} onChange={setContent} onWiki={onWiki} documentPath={domain.file} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제

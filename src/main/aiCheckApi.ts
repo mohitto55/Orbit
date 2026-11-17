@@ -72,6 +72,7 @@ async function draftView(ctx: Ctx, id: string) {
     at: draft.at,
     base: draft.base,
     currentVersion: domain.version,
+    documentPath: domain.file,
     before: domain.content,
     after,
     diff: lineDiff(domain.content, after, 3),

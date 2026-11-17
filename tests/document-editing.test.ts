@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import path from 'path'
+import { promises as fs } from 'node:fs'
 import Domains from '../src/renderer/src/pages/Domains'
 import { ChangeDialog } from '../src/renderer/src/ui'
 import { createDomain, listDomains, saveDomain } from '../src/core/domain'
@@ -11,8 +12,9 @@ import { createSystemDesign, listDesigns, saveDesign } from '../src/core/design'
 import { buildDomainMapFrom } from '../src/core/domainmap'
 import { writeMd } from '../src/core/md'
 import { newProject } from './helpers'
+import { documentImageResponse } from '../src/main/documentImages'
 
-const source = '\n# 결제 문서 {#payment}\n\n## 책임\n\n**승인**을 처리한다.\n줄바꿈을 보존한다.\n\n\n- [ ] 중복 결제 확인\n\n| 입력 | 처리 |\n|---|---|\n| 요청 | 검증 |\n\n```ts\nconst amount = 100\n```\n'
+const source = '\n# 결제 문서 {#payment}\n\n## 책임\n\n**승인**을 처리한다.\n줄바꿈을 보존한다.\n\n\n- [ ] 중복 결제 확인\n\n| 입력 | 처리 |\n|---|---|\n| 요청 | 검증 |\n\n```ts\nconst amount = 100\n```\n\n![설계 흐름](assets/flow.svg)\n'
 let host: HTMLDivElement, root: Root, ctx: Awaited<ReturnType<typeof newProject>>, domainId: string
 let pending: Promise<unknown>[]
 const editor = () => EditorView.findFromDOM(host.querySelector<HTMLElement>('.cm-content')!)!
@@ -47,6 +49,11 @@ beforeEach(async () => {
   const system = await createSystemDesign(ctx)
   await saveDesign(ctx, system.id, source, { size: 'minor', summary: '테스트 본문' })
   await writeMd(path.join(ctx.dataRoot, 'domains/payment/design/payment.md'), { id: 'payment-design', title: '결제 설계', version: 1, basedOn: [], refs: [] }, source)
+  for (const folder of [ctx.dataRoot, path.join(ctx.dataRoot, 'domains/payment'), path.join(ctx.dataRoot, 'domains/payment/design')]) {
+    await fs.mkdir(path.join(folder, 'assets'), { recursive: true })
+    await fs.writeFile(path.join(folder, 'assets/flow.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    await fs.writeFile(path.join(folder, 'assets/updated.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="32"/>')
+  }
   host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
   window.orbit = {
     getPathForFile: (file: File) => file.name,
@@ -78,10 +85,14 @@ it.each(['role', 'design', 'system'] as const)('%s 문서는 서식 안에서 �
   expect(host.querySelector('table')?.textContent).toContain('검증')
   const view = editor()
   expect(view.state.sliceDoc()).toBe(source)
+  const readImage = () => documentImageResponse(host.querySelector<HTMLImageElement>('.md img')!.src, ctx, ctx.projectDir)
+  expect((await readImage()).status).toBe(200)
   const at = source.indexOf('승인')
   await act(async () => view.dispatch({ changes: { from: at, to: at + 2, insert: '승인과 취소' } }))
   await act(async () => host.querySelector<HTMLInputElement>('.cm-md-task-box')!.click())
-  const expected = source.replace('**승인**', '**승인과 취소**').replace('- [ ]', '- [x]')
+  const imageAt = view.state.sliceDoc().indexOf('flow.svg')
+  await act(async () => view.dispatch({ changes: { from: imageAt, to: imageAt + 8, insert: 'updated.svg' } }))
+  const expected = source.replace('**승인**', '**승인과 취소**').replace('- [ ]', '- [x]').replace('flow.svg', 'updated.svg')
   expect(editor()).toBe(view)
   expect(view.state.sliceDoc()).toBe(expected)
   await click('저장')
@@ -100,4 +111,5 @@ it.each(['role', 'design', 'system'] as const)('%s 문서는 서식 안에서 �
   expect(editor().state.sliceDoc()).toBe(expected)
   expect(host.querySelector('.cm-md-strong')?.textContent).toBe('승인과 취소')
   expect(host.querySelector<HTMLInputElement>('.cm-md-task-box')?.checked).toBe(true)
+  expect(await (await readImage()).text()).toContain('width="32"')
 })
