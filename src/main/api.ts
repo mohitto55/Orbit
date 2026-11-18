@@ -25,14 +25,20 @@ import { readSessionTitle } from '../core/sessionTitles'
 import { agentModels } from '../core/agentModels'
 import * as pl from '../core/pipelineStore'
 import * as sk from '../core/skills'
-import { PipelineRunner, featureText, taskText, newNodeId, isOpenTask, type Env, type Pipeline, type PipelineSource, type PipeEdge, type PipeNode } from '../core/pipeline'
+import { PipelineRunner, featureText, taskText, newNodeId, isOpenTask, isAgent, type Env, type Pipeline, type PipelineSource, type PipeEdge, type PipeNode } from '../core/pipeline'
 import { PipelineHistory, prepareExecutions, type PipelineRunRequest, type RunFilter } from '../core/pipelineExecution'
+import { PipelineScheduler, type ScheduleTrigger } from '../core/pipelineScheduler'
+import type { ScheduleInput } from '../core/automationSchedule'
+import { AgentAccountStore } from './agentAccountStore'
+import { AGENT_PROVIDERS, defaultAccountId, type AccountObservation, type AgentAccount, type AgentAccountInput, type AgentProvider } from '../core/agentAccounts'
 
 export interface ApiDeps {
   send: (channel: string, payload: unknown) => void
   pickFolder: () => Promise<string | null>
   recentFile: string
   onProjectOpened: (ctx: ws.Ctx) => void
+  scheduleNow?: () => number
+  accountProbe?: (account: AgentAccount) => Promise<AccountObservation>
 }
 
 export function createApi(deps: ApiDeps) {
@@ -46,6 +52,9 @@ export function createApi(deps: ApiDeps) {
   let recovery: AbortController | null = null
   let shuttingDown = false
   let history: PipelineHistory | null = null
+  let scheduler: PipelineScheduler | null = null
+  let projectRevision = 0
+  const accounts = new AgentAccountStore(path.join(path.dirname(deps.recentFile), 'agent-accounts'), () => deps.send('accounts-changed', null), deps.accountProbe)
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
@@ -68,7 +77,7 @@ export function createApi(deps: ApiDeps) {
         onAgentDone: (id) => pipes.agentDone(id),
         onAgentError: (id, message) => pipes.terminalFailed(id, message),
         onCommandDone: (id, code, output) => pipes.commandDone(id, code, output)
-      })
+      }, { quotaDir: accounts.quotaDir, identify: (kind, home) => accounts.identify(kind, home) })
       terminals = workspace
       try { await workspace.restore(settings) } catch (e) { workspace.suspend(false); throw e }
       if (ctx !== c) { workspace.suspend(); throw new Error('프로젝트가 변경되었습니다') }
@@ -82,13 +91,14 @@ export function createApi(deps: ApiDeps) {
 
   /** IN-F11: 터미널 작업 그래프를 실행한다. 노드가 끝나면 이어진 다음 노드를 연다. */
   const pipes = new PipelineRunner({
-    createTerminal: async (kind, label, session, model, tabTitle) => {
+    createTerminal: async (kind, label, session, model, tabTitle, accountId) => {
       const c = need()
+      const account = kind !== 'shell' ? await accounts.resolve(kind, accountId) : undefined
       const settings = await ws.readSettings(c)
       const workspace = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       const title = (tabTitle || `${{ shell: '터미널', claude: 'Claude Code', codex: 'Codex' }[kind]} · ${label}`).slice(0, 100)
-      const { reused, ...info } = await workspace.open(kind, settings, { title, resume: session, model })
+      const { reused, ...info } = await workspace.open(kind, settings, { title, resume: session, model, ...(account ? { accountId: account.id, accountHome: account.builtin ? undefined : account.configDir } : {}) })
       deps.send('term-created', info)
       return { ...info, reused }
     },
@@ -151,7 +161,11 @@ export function createApi(deps: ApiDeps) {
   }
 
   async function opened(c: ws.Ctx) {
+    const revision = ++projectRevision
     recovery?.abort()
+    scheduler?.stop()
+    await scheduler?.flush()
+    if (revision !== projectRevision || shuttingDown) throw new Error('프로젝트가 변경되었습니다')
     if (ctx?.projectDir !== c.projectDir) {
       stopTerminals()
       history?.finish()
@@ -160,9 +174,31 @@ export function createApi(deps: ApiDeps) {
       history = new PipelineHistory(path.join(path.dirname(deps.recentFile), 'pipeline-runs', key), (error) => deps.send('project-error', `실행 기록 저장 실패: ${error instanceof Error ? error.message : String(error)}`))
       await history.load()
     }
+    if (revision !== projectRevision || shuttingDown) throw new Error('프로젝트가 변경되었습니다')
     ctx = c
+    const scheduleKey = createHash('sha256').update(path.resolve(c.projectDir)).digest('hex')
+    const nextScheduler = new PipelineScheduler({
+      file: path.join(path.dirname(deps.recentFile), 'pipeline-schedules', `${scheduleKey}.json`),
+      now: deps.scheduleNow,
+      changed: () => { if (ctx === c) deps.send('schedules-changed', null) },
+      onError: (error) => { if (ctx === c) deps.send('project-error', `예약 실행 오류: ${error instanceof Error ? error.message : String(error)}`) },
+      isRunning: (id) => pipes.list().some((run) => run.pipelineId === id && run.status === 'running'),
+      check: async (request) => {
+        if (ctx !== c || shuttingDown) return { message: '프로젝트가 변경되었습니다' }
+        const { prepared } = await prepareGraphRequest(request)
+        for (const execution of prepared) {
+          const block = await accounts.check(execution.pipe.nodes.filter(isAgent).map((node) => node.kind as AgentProvider), execution.options.accountIds, true)
+          if (block) return block
+        }
+      },
+      run: (request, trigger) => { if (ctx !== c || shuttingDown) throw new Error('프로젝트가 변경되었습니다'); return runGraphs(request, trigger) }
+    })
+    scheduler = nextScheduler
+    try { await nextScheduler.load() }
+    catch (error) { deps.send('project-error', `예약을 불러오지 못했습니다: ${error instanceof Error ? error.message : String(error)}`) }
     await remember(c.projectDir)
     deps.onProjectOpened(c)
+    if (ctx === c && !shuttingDown) nextScheduler.start()
     return { ...c, settings: await ws.readSettings(c), isGit: await ws.isGitRepo(c.projectDir) }
   }
 
@@ -208,18 +244,51 @@ export function createApi(deps: ApiDeps) {
     return { tasks, specs, sources, library, skills: skills.map((s) => ({ id: sk.skillId(s), name: s.name, body: s.body })), designs: designs.map((d) => ({ id: d.id, title: d.title, system: d.system, content: d.content })) }
   }
 
-  async function runGraphs(request: PipelineRunRequest) {
+  async function prepareGraphRequest(request: PipelineRunRequest) {
     const c = need()
+    if (request.accountIds !== undefined && (!request.accountIds || typeof request.accountIds !== 'object' || Array.isArray(request.accountIds) || Object.entries(request.accountIds).some(([kind, id]) => !AGENT_PROVIDERS.includes(kind as AgentProvider) || typeof id !== 'string' || !id))) throw new Error('실행 계정을 다시 선택하세요')
+    const accountIds = { claude: defaultAccountId('claude'), codex: defaultAccountId('codex'), ...request.accountIds }
     const library = await pl.listPipelines(c), graph = library.find((p) => p.id === request.pipelineId)
     if (!graph) throw new Error('작업 그래프를 찾을 수 없습니다')
     if (graph.template) throw new Error('함수는 작업 그래프에서 호출하세요')
     const snapshotIds = new Set([...(request.selection?.sources.filter((s) => s.kind === 'change').map((s) => s.id) ?? []), ...Object.values(request.values ?? {}).flatMap((v) => v.split('\n')), ...graph.nodes.flatMap((n) => Object.values(n.values ?? {}).flatMap((v) => v.split('\n')))])
     const env = await executionEnvironment(c, snapshotIds, library)
+    await accounts.list()
     const workspace = await terms()
     env.terminals = workspace.layout().tabs.map((t) => workspace.get(t.id) ?? t)
-    const prepared = prepareExecutions(graph, env, { ...request, terminalIds: request.terminalIds ?? [], allowNew: request.allowNew ?? false })
+    const prepared = prepareExecutions(graph, env, { ...request, accountIds, terminalIds: request.terminalIds ?? [], allowNew: request.allowNew ?? false })
+    for (const execution of prepared) for (const node of execution.pipe.nodes.filter(isAgent)) {
+      const selected = await accounts.resolve(node.kind as AgentProvider, accountIds[node.kind as AgentProvider])
+      if (node.terminalInput && 'tabId' in node.terminalInput) {
+        const terminal = workspace.get(node.terminalInput.tabId)
+        if (terminal && (terminal.accountId ?? defaultAccountId(node.kind as AgentProvider)) !== selected.id) throw new Error('연결한 터미널의 계정이 선택한 실행 계정과 다릅니다')
+      }
+    }
     if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
-    return prepared.map(({ pipe, options }) => pipes.start(pipe, true, options))
+    return { c, prepared }
+  }
+
+  async function runGraphs(request: PipelineRunRequest, schedule?: ScheduleTrigger) {
+    const revision = projectRevision
+    const { c, prepared } = await prepareGraphRequest(request)
+    for (const execution of prepared) {
+      const block = await accounts.check(execution.pipe.nodes.filter(isAgent).map((node) => node.kind as AgentProvider), execution.options.accountIds, !!schedule || !!request.accountIds)
+      if (block) throw new Error(block.message)
+    }
+    if (ctx !== c || revision !== projectRevision || shuttingDown) throw new Error('프로젝트가 변경되었습니다')
+    return prepared.map(({ pipe, options }) => pipes.start(pipe, true, { ...options, schedule }))
+  }
+
+  function schedules(): PipelineScheduler {
+    need()
+    if (!scheduler) throw new Error('예약을 불러오지 못했습니다')
+    return scheduler
+  }
+
+  async function accountUpdated<T>(operation: Promise<T>): Promise<T> {
+    const result = await operation
+    await scheduler?.recheckBlocked()
+    return result
   }
 
   return {
@@ -261,12 +330,16 @@ export function createApi(deps: ApiDeps) {
       return ctx ? { ...ctx, settings: await ws.readSettings(ctx), isGit: await ws.isGitRepo(ctx.projectDir) } : null
     },
     closeProject() {
+      projectRevision++
       recovery?.abort()
+      // 다음 열기에서 진행 중인 저장까지 기다려 예약 회차가 덮어써지지 않게 한다.
+      scheduler?.stop()
       stopTerminals()
       history?.finish()
       pipes.reset()
       history = null
       ctx = null
+      return scheduler?.flush()
     },
     getSettings: () => ws.readSettings(need()),
     saveSettings: (s: ws.ProjectSettings) => ws.saveSettings(need(), s),
@@ -579,10 +652,32 @@ export function createApi(deps: ApiDeps) {
     },
 
     // 연동: 터미널 작업 그래프 (IN-F11)
+    listAgentAccounts: () => accounts.list(),
+    saveAgentAccount: (input: AgentAccountInput) => accountUpdated(accounts.save(input)),
+    removeAgentAccount: (id: string) => accountUpdated(accounts.remove(id)),
+    refreshAgentAccount: (id: string) => accountUpdated(accounts.refresh(id)),
+    async openAgentAccount(id: string) {
+      const c = need(), all = await accounts.list(), account = all.find((row) => row.id === id)
+      if (!account) throw new Error('계정을 찾을 수 없습니다')
+      const settings = await ws.readSettings(c), workspace = await terms()
+      if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
+      const info = workspace.create(account.provider, settings, undefined, undefined, { title: account.label, accountId: account.id, accountHome: account.builtin ? undefined : account.configDir })
+      deps.send('term-created', info)
+      return info
+    },
     listPipelines: () => pl.listPipelines(need()),
     reorderPipeline: (id: string, targetId: string, position: 'before' | 'after') => pl.reorderPipeline(need(), id, targetId, position),
     savePipeline: (input: { id?: string; title: string; template?: boolean; nodes: PipeNode[]; edges: PipeEdge[] }) => pl.savePipeline(need(), input),
-    deletePipeline: (id: string) => pl.deletePipeline(need(), id),
+    async deletePipeline(id: string) { await pl.deletePipeline(need(), id); await schedules().removePipeline(id) },
+    listPipelineSchedules: () => schedules().list(),
+    async savePipelineSchedule(input: ScheduleInput) {
+      const c = need(), store = schedules()
+      await prepareGraphRequest(input.request)
+      if (ctx !== c || scheduler !== store) throw new Error('프로젝트가 변경되었습니다')
+      return store.save(input)
+    },
+    setPipelineScheduleEnabled: (id: string, enabled: boolean) => schedules().setEnabled(id, enabled),
+    deletePipelineSchedule: (id: string) => schedules().remove(id),
     agentModels,
     /** DM-F02-AC4: 이 프로젝트에서 로컬에 저장된 Claude Code·Codex 세션 (최근 것부터). id는 --resume에 넘기는 세션 id */
     async agentSessions(kind: 'claude' | 'codex') {
@@ -613,6 +708,8 @@ export function createApi(deps: ApiDeps) {
       const record = pipes.execution(id) ?? await store?.get(id)
       if (!record) throw new Error('실행 기록을 찾을 수 없습니다')
       if (record.state.status === 'running') throw new Error('진행 중인 작업은 다시 실행할 수 없습니다')
+      const block = await accounts.check(record.pipe.nodes.filter(isAgent).map((node) => node.kind as AgentProvider), record.options.accountIds, !!record.options.accountIds)
+      if (block) throw new Error(block.message)
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       return pipes.start(record.pipe, true, { ...record.options, retryOf: id, groupId: `group-${newNodeId()}` })
     },
@@ -629,6 +726,10 @@ export function createApi(deps: ApiDeps) {
         if (offset + page.runs.length >= page.total) break
       }
       const records = await Promise.all(rows.map((r) => pipes.execution(r.runId) ?? store.get(r.runId)))
+      for (const record of records) {
+        const block = await accounts.check(record.pipe.nodes.filter(isAgent).map((node) => node.kind as AgentProvider), record.options.accountIds, !!record.options.accountIds)
+        if (block) throw new Error(block.message)
+      }
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
       const nextGroup = `group-${newNodeId()}`
       return records.map((record) => pipes.start(record.pipe, true, { ...record.options, groupId: nextGroup, retryOf: record.state.runId }))
@@ -653,8 +754,11 @@ export function createApi(deps: ApiDeps) {
     },
     killAllTerminals() {
       shuttingDown = true
+      projectRevision++
+      scheduler?.stop()
       recovery?.abort()
       try { stopTerminals() } finally { history?.finish(); stopTests() }
+      return scheduler?.flush()
     }
   }
 }

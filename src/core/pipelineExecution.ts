@@ -3,6 +3,7 @@ import path from 'path'
 import { bindPipelineInputs, expandPipeline, isAgent, isListShape, isOpenTask, newNodeId, pipelineProblems, sourceKind, type Env, type Pipeline, type PipelineExecution, type RunOptions, type PipelineRunSummary, type RunFilter, summarizeRun, type SourceRef } from './pipeline'
 
 export interface PipelineRunRequest {
+  accountIds?: import('./agentAccounts').AccountSelection
   pipelineId: string
   values?: Record<string, string>
   selection?: { port: string; sources: Pick<SourceRef, 'kind' | 'id'>[] }
@@ -48,7 +49,8 @@ export function prepareExecutions(graph: Pipeline, env: Env, request: PipelineRu
     const pipe = { ...graph, ...expandPipeline(boundGraph, env) }
     if (request.terminalIds && !request.allowNew && env.terminals) for (const node of pipe.nodes) {
       if ((!isAgent(node) && node.kind !== 'shell') || node.session || node.terminalInput || node.terminal === 'continue') continue
-      if (!env.terminals.some((t) => request.terminalIds!.includes(t.id) && t.kind === node.kind && t.exited === undefined)) throw new Error(`${node.name ?? node.kind}: 사용할 ${node.kind} 터미널을 선택하거나 새 터미널을 허용하세요`)
+      const accountId = isAgent(node) ? request.accountIds?.[node.kind as 'claude' | 'codex'] : undefined
+      if (!env.terminals.some((t) => request.terminalIds!.includes(t.id) && t.kind === node.kind && t.exited === undefined && (!accountId || (t.accountId ?? `default-${t.kind}`) === accountId))) throw new Error(`${node.name ?? node.kind}: 사용할 ${node.kind} 터미널을 선택하거나 새 터미널을 허용하세요${accountId ? ' (선택한 실행 계정과 같은 계정이어야 합니다)' : ''}`)
     }
     // 실행에 쓰인 정의·입력만 보관한다. 다른 프로젝트 자료나 전체 터미널 출력은 복사하지 않는다.
     const definitions: Pipeline[] = [graph]
@@ -62,9 +64,9 @@ export function prepareExecutions(graph: Pipeline, env: Env, request: PipelineRu
       library: definitions.slice(1), tasks: env.tasks?.filter((t) => ids.has(t.id)),
       specs: env.specs?.filter((s) => specIds.has(s.id)), skills: env.skills?.filter((s) => ids.has(s.id)),
       sources: env.sources?.filter((s) => ids.has(s.id)),
-      terminals: env.terminals?.map(({ id, title, kind, exited, activity }) => ({ id, title, kind, exited, activity }))
+      terminals: env.terminals?.map(({ id, title, kind, exited, activity, accountId }) => ({ id, title, kind, exited, activity, accountId }))
     }
-    return { pipe, options: { groupId, sources: [...new Map(refs.map((s) => [`${s.kind}:${s.id}`, s])).values()], terminalIds: request.terminalIds, allowNew: request.allowNew, maxConcurrent: request.maxConcurrent, snapshot: { graph: boundGraph, env: snapshotEnv, values: bound } } }
+    return { pipe, options: { groupId, sources: [...new Map(refs.map((s) => [`${s.kind}:${s.id}`, s])).values()], terminalIds: request.terminalIds, allowNew: request.allowNew, maxConcurrent: request.maxConcurrent, accountIds: request.accountIds, snapshot: { graph: boundGraph, env: snapshotEnv, values: bound } } }
   })
 }
 

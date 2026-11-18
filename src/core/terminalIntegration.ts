@@ -3,6 +3,7 @@ import path from 'path'
 import { createHash, randomUUID } from 'crypto'
 import type { TerminalKind } from './terminal'
 import { messageRuntime } from './sessionMessages'
+import { prepareQuotaCapture } from './agentQuotaCapture'
 
 export interface CliLaunch {
   kind: 'codex' | 'claude'
@@ -451,7 +452,7 @@ export function takeAgentSignals(dir: string): AgentSignal[] {
 }
 
 /** 앱이 만든 셸에만 적용한다. 사용자의 CLI 전역 설정·셸 프로필은 수정하지 않는다. */
-export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string, platform = process.platform): { init: string; env: Record<string, string>; claudeSettings: string; codexNotify: string; claudeMcp: string; codexMcp: string } {
+export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd: string, platform = process.platform, quota?: { home: string; dir: string }): { init: string; env: Record<string, string>; claudeSettings: string; codexNotify: string; claudeMcp: string; codexMcp: string } {
   mkdirSync(dir, { recursive: true })
   const helper = path.join(dir, 'bridge.cjs')
   const state = path.join(dir, 'state.json')
@@ -470,9 +471,9 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   const codexMcp = `mcp_servers.${MCP_SERVER_NAME}={command=${JSON.stringify(slash(server.command))},args=${JSON.stringify(server.args)},env={ELECTRON_RUN_AS_NODE="1"}}`
   writeFileSync(init, platform === 'win32' ? powershellInit : path.basename(process.env.SHELL ?? '') === 'fish' ? fishInit : posixInit)
   writeFileSync(state, JSON.stringify({ generation, runId: generation, kind, cwd, args: [], running: kind !== 'shell' }))
-  const hookCommand = (action: string) => platform === 'win32'
-    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`, 'utf16le').toString('base64')}`
-    : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(helper)} ${action}`
+  const hookCommand = (action: string, script = helper) => platform === 'win32'
+    ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(script)} ${action}`, 'utf16le').toString('base64')}`
+    : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(script)} ${action}`
   const messageCommand = platform === 'win32'
     ? `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${shellQuote(process.execPath)} ${shellQuote(messages)} ${shellQuote(dir)}`, 'utf16le').toString('base64')}`
     : `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(messages)} ${shellQuote(dir)}`
@@ -484,6 +485,11 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
   // 결과 제출 도구는 묻지 않고 쓰게 한다 (그래프 실행이 권한 확인에서 멈추지 않도록)
   writeFileSync(settings, JSON.stringify({ permissions: { allow: [MCP_SUBMIT_TOOL, 'list_peers', 'send_message', 'receive_messages'].map(tool => `mcp__${MCP_SERVER_NAME}__${tool}`) }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], PostToolUse: [{ matcher: '.*', hooks: [messageHook] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  if (kind === 'claude' && quota) {
+    const config = JSON.parse(readFileSync(settings, 'utf8'))
+    config.statusLine = prepareQuotaCapture(dir, cwd, quota.home, quota.dir, hookCommand('', path.join(dir, 'quota-status.cjs')))
+    writeFileSync(settings, JSON.stringify(config))
+  }
   // Codex는 notify를 셸 없이 바로 실행하므로 신호를 남기는 작은 스크립트를 만든다
   const win = platform === 'win32'
   const notify = path.join(dir, `notify.${win ? 'ps1' : 'sh'}`)

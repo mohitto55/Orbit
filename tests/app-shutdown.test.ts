@@ -5,7 +5,7 @@ import { TerminalManager } from '../src/core/terminal'
 
 const mocks = vi.hoisted(() => ({ kill: vi.fn(), unregister: vi.fn(), quit: vi.fn(), beforeInstall: undefined as (() => void) | undefined }))
 vi.mock('electron', () => ({
-  app: Object.assign(new EventEmitter(), { getPath: () => '/orbit-test-does-not-exist', getVersion: () => '0.0.0', whenReady: () => new Promise<void>(() => {}), quit: mocks.quit }),
+  app: Object.assign(new EventEmitter(), { getPath: () => '/orbit-test-does-not-exist', getVersion: () => '0.0.0', requestSingleInstanceLock: () => true, whenReady: () => new Promise<void>(() => {}), quit: mocks.quit }),
   BrowserWindow: class {}, dialog: {}, globalShortcut: { unregisterAll: mocks.unregister }, ipcMain: { handle() {} }, Notification: {}, protocol: { registerSchemesAsPrivileged() {} }, shell: {}
 }))
 vi.mock('../src/main/api', () => ({ createApi: () => ({ killAllTerminals: mocks.kill }) }))

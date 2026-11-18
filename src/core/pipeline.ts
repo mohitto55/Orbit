@@ -159,7 +159,7 @@ export interface Env {
   specs?: EnvSpec[]
   /** 설계 문서 (시스템 공통 설계 + 기능별 설계) */
   designs?: EnvDesign[]
-  terminals?: Pick<TerminalInfo, 'id' | 'title' | 'kind' | 'exited' | 'activity'>[]
+  terminals?: Pick<TerminalInfo, 'id' | 'title' | 'kind' | 'exited' | 'activity' | 'accountId'>[]
   sources?: PipelineSource[]
 }
 
@@ -1205,6 +1205,7 @@ export interface NodeRun {
 }
 
 export interface RunState {
+  schedule?: import('./pipelineScheduler').ScheduleTrigger
   messaging?: boolean
   runId: string
   pipelineId: string
@@ -1220,6 +1221,8 @@ export interface RunState {
 }
 
 export interface RunOptions {
+  accountIds?: import('./agentAccounts').AccountSelection
+  schedule?: import('./pipelineScheduler').ScheduleTrigger
   groupId?: string
   sources?: SourceRef[]
   retryOf?: string
@@ -1232,6 +1235,7 @@ export interface RunOptions {
 export interface PipelineExecution { state: RunState; pipe: Pipeline; options: RunOptions }
 
 export interface PipelineRunSummary {
+  schedule?: import('./pipelineScheduler').ScheduleTrigger
   runId: string
   pipelineId: string
   title: string
@@ -1251,7 +1255,7 @@ export interface PipelineRunSummary {
 export function summarizeRun(state: RunState): PipelineRunSummary {
   const nodes = Object.values(state.nodes)
   const current = nodes.find((n) => n.status === 'running' || n.status === 'starting') ?? nodes.find((n) => n.status === 'waiting') ?? nodes.find((n) => n.status === 'failed')
-  return { runId: state.runId, pipelineId: state.pipelineId, title: state.title, status: state.status, started: state.started, finished: state.finished, groupId: state.groupId, retryOf: state.retryOf, sources: state.sources ?? [], stage: current?.name ?? '', message: state.message ?? current?.message, done: nodes.filter((n) => n.status === 'done').length, total: nodes.length, waiting: state.status === 'running' && current?.status === 'waiting' }
+  return { runId: state.runId, pipelineId: state.pipelineId, title: state.title, status: state.status, started: state.started, finished: state.finished, groupId: state.groupId, retryOf: state.retryOf, schedule: state.schedule, sources: state.sources ?? [], stage: current?.name ?? '', message: state.message ?? current?.message, done: nodes.filter((n) => n.status === 'done').length, total: nodes.length, waiting: state.status === 'running' && current?.status === 'waiting' }
 }
 
 export interface RunFilter { source?: Pick<SourceRef, 'kind' | 'id'>; status?: RunState['status'] | 'waiting'; groupId?: string; offset?: number; limit?: number }
@@ -1260,7 +1264,7 @@ export interface RunFilter { source?: Pick<SourceRef, 'kind' | 'id'>; status?: R
 export interface RunnerDeps {
   /** session과 같은 세션의 열린 터미널을 재사용하고, 없으면 새 탭을 연다. */
   /** title: 노드에 정한 탭 이름. 있으면 label 대신 그대로 탭 이름으로 쓴다. */
-  createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string, title?: string) => Promise<TerminalInfo & { reused?: boolean }>
+  createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string, title?: string, accountId?: string) => Promise<TerminalInfo & { reused?: boolean }>
   hasTerminal: (termId: string) => boolean
   getTerminal: (termId: string) => TerminalInfo | undefined
   whenReady: (termId: string) => Promise<void>
@@ -1350,6 +1354,7 @@ export class PipelineRunner {
       groupId: options.groupId,
       sources: options.sources,
       retryOf: options.retryOf,
+      schedule: options.schedule,
       options: JSON.parse(JSON.stringify(options)) as RunOptions,
       pipe: JSON.parse(JSON.stringify(pipe)),
       sentAt: {}
@@ -1460,6 +1465,7 @@ export class PipelineRunner {
         return
       }
       const from = continueFrom(run.pipe, node, (n) => run.nodes[n.id].status === 'done')
+      const accountId = isAgent(node) ? run.options.accountIds?.[node.kind as 'claude' | 'codex'] : undefined
       if (node.terminalInput) {
         const input = node.terminalInput
         termId = 'tabId' in input ? input.tabId : run.nodes[input.nodeId]?.termId ?? ''
@@ -1468,7 +1474,7 @@ export class PipelineRunner {
         if (!termId || !this.deps.hasTerminal(termId)) throw new Error(`${nodeName(from)}의 터미널이 닫혀 이어서 실행할 수 없습니다`)
       } else {
         const session = node.kind === 'claude' || node.kind === 'codex' ? node.session : undefined
-        const pool = !session && run.options.terminalIds?.map((id) => this.deps.getTerminal(id)).filter((t): t is TerminalInfo => !!t && t.exited === undefined && t.kind === node.kind)
+        const pool = !session && run.options.terminalIds?.map((id) => this.deps.getTerminal(id)).filter((t): t is TerminalInfo => !!t && t.exited === undefined && t.kind === node.kind && (!accountId || (t.accountId ?? `default-${t.kind}`) === accountId))
         const available = pool && pool.find((t) => !this.owner.has(t.id) && (t.activity !== 'working' || t.id === readyTerminal))
         if (available) termId = available.id
         else if (pool && (pool.length || !run.options.allowNew)) {
@@ -1478,7 +1484,9 @@ export class PipelineRunner {
         } else {
         const model = isAgent(node) ? node.model?.trim() || undefined : undefined
         const tabTitle = node.tabTitle?.trim() || undefined
-        const terminal = tabTitle
+        const terminal = accountId
+          ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model, tabTitle, accountId)
+          : tabTitle
           ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model, tabTitle)
           : model
             ? await this.deps.createTerminal(node.kind as TerminalKind, nodeName(node), session, model)
@@ -1490,6 +1498,7 @@ export class PipelineRunner {
       if (run.status !== 'running') return
       if (this.owner.has(termId)) { wait('지정 터미널에서 다른 작업 노드가 실행 중', termId); return }
       const terminal = this.deps.getTerminal(termId)
+      if (accountId && terminal && (terminal.accountId ?? `default-${terminal.kind}`) !== accountId) throw new Error('연결한 터미널의 계정이 선택한 실행 계정과 다릅니다')
       if (node.terminalInput) {
         if (!terminal || terminal.exited !== undefined) throw new Error('연결한 터미널이 닫혔습니다. 사용할 터미널을 다시 고르세요')
         if (terminal.kind !== node.kind) throw new Error(`${KIND_NAME[node.kind]} 노드에는 같은 종류의 터미널을 연결하세요`)

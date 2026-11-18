@@ -37,6 +37,17 @@ function runnerHarness(initial: TerminalInfo[] = [tab('codex')]) {
 }
 
 describe('작업 그래프 터미널 입출력', () => {
+  it('선택한 계정과 다른 터미널 입력은 실행하지 않고 같은 계정의 유휴 탭만 재사용한다', async () => {
+    const wrong = { ...tab('codex'), accountId: 'personal' }, matching = { ...tab('codex'), id: 'work-tab', accountId: 'work' }
+    const h = runnerHarness([wrong, matching]), p = graph()
+    const rejected = h.runner.start({ ...p, ...expandPipeline(p, { terminals: [wrong] }) }, true, { accountIds: { codex: 'work' } })
+    expect(rejected.nodes.work.message).toContain('계정이 선택한 실행 계정과 다릅니다')
+    expect(h.submit).not.toHaveBeenCalled()
+    h.runner.start({ ...p, nodes: [node('work', 'codex', { text: '업무' })], edges: [] }, true, { terminalIds: [wrong.id, matching.id], allowNew: true, accountIds: { codex: 'work' } })
+    await vi.waitFor(() => expect(h.submit).toHaveBeenCalledWith(matching.id, '업무'))
+    expect(h.createTerminal).not.toHaveBeenCalled()
+  })
+
   it.each(['claude', 'codex'] as const)('[DM-F02-AC22] %s 노드의 모델을 먼저 적용하고 같은 터미널의 다음 노드 모델도 적용한다', async (kind) => {
     const p = graph(kind), h = runnerHarness([tab(kind)])
     p.nodes.find((n) => n.id === 'work')!.model = 'model-a'

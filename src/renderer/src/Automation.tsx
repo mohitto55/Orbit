@@ -7,14 +7,17 @@ import type { TerminalInfo } from './types'
 import { Empty, errorToast, toast } from './ui'
 import { PipelineValue } from './PipelineValue'
 import { SourcePicker } from './SourcePicker'
+import { localDateTime, parseLocalDateTime, type PipelineSchedule, type ScheduleTiming } from '../../core/automationSchedule'
+import { AGENT_LABELS, AGENT_PROVIDERS, defaultAccountId, type AccountSelection, type AccountView } from '../../core/agentAccounts'
 
-type Selection = { sources: SourceRef[]; pipelineId?: string }
+type Selection = { sources: SourceRef[]; pipelineId?: string; schedule?: PipelineSchedule | 'new' }
 interface AutomationActions {
   open: (sources: SourceRef[], pipelineId?: string) => void
   inspect: (runId: string) => void
   history: (source?: SourceRef) => void
+  schedule: (schedule?: PipelineSchedule, pipelineId?: string) => void
 }
-const AutomationContext = createContext<AutomationActions>({ open: () => {}, inspect: () => {}, history: () => {} })
+const AutomationContext = createContext<AutomationActions>({ open: () => {}, inspect: () => {}, history: () => {}, schedule: () => {} })
 const RunSummariesContext = createContext<PipelineRunSummary[]>([])
 export const useAutomation = () => useContext(AutomationContext)
 export const RUN_LABEL: Record<RunState['status'], string> = { running: '실행 중', done: '완료', failed: '실패', stopped: '중지됨' }
@@ -29,7 +32,7 @@ export function AutomationProvider({ children, go }: { children: ReactNode; go: 
     const off = on('pipeline-state', (state: RunState) => setSummaries((all) => [summarizeRun(state), ...all.filter((r) => r.runId !== state.runId)].sort((a, b) => b.started.localeCompare(a.started)).slice(0, 100)))
     return () => { alive = false; off() }
   }, [])
-  const actions = useMemo<AutomationActions>(() => ({ open: (sources, pipelineId) => setSelection({ sources, pipelineId }), inspect: setDetail, history: (source) => go('automation', source ? `source:${source.kind}:${source.id}` : 'runs') }), [go])
+  const actions = useMemo<AutomationActions>(() => ({ open: (sources, pipelineId) => setSelection({ sources, pipelineId }), inspect: setDetail, history: (source) => go('automation', source ? `source:${source.kind}:${source.id}` : 'runs'), schedule: (schedule, pipelineId) => setSelection({ sources: [], pipelineId: schedule?.request.pipelineId ?? pipelineId, schedule: schedule ?? 'new' }) }), [go])
   return <AutomationContext.Provider value={actions}><RunSummariesContext.Provider value={summaries}>
     {children}
     {selection && <RunPanel selection={selection} onClose={() => setSelection(null)} onGraphs={() => { setSelection(null); go('automation', 'graphs') }} />}
@@ -76,14 +79,25 @@ export function RunDrawer({ title, children, onClose }: { title: string; childre
 }
 
 function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onClose: () => void; onGraphs: () => void }) {
+  const saved = selection.schedule && selection.schedule !== 'new' ? selection.schedule : undefined
+  const scheduling = !!selection.schedule
   const [graphs, setGraphs] = useState<Pipeline[]>([]), [sources, setSources] = useState<SourceRef[]>([]), [tabs, setTabs] = useState<TerminalInfo[]>([])
-  const [graphId, setGraphId] = useState(selection.pipelineId ?? ''), [port, setPort] = useState('')
-  const [values, setValues] = useState<Record<string, string>>({}), [terminalIds, setTerminalIds] = useState<string[]>([])
-  const [allowNew, setAllowNew] = useState(false), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState('')
-  const [maxConcurrent, setMaxConcurrent] = useState('')
+  const [graphId, setGraphId] = useState(selection.pipelineId ?? ''), [port, setPort] = useState(saved?.request.selection?.port ?? '')
+  const [values, setValues] = useState<Record<string, string>>(saved?.request.values ?? {}), [terminalIds, setTerminalIds] = useState<string[]>(saved?.request.terminalIds ?? [])
+  const [allowNew, setAllowNew] = useState(saved?.request.allowNew ?? scheduling), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState('')
+  const [maxConcurrent, setMaxConcurrent] = useState(saved?.request.maxConcurrent?.toString() ?? '')
+  const [scheduleTitle, setScheduleTitle] = useState(saved?.title ?? '')
+  const [scheduleEnabled, setScheduleEnabled] = useState(saved?.enabled ?? true)
+  const [timingKind, setTimingKind] = useState<ScheduleTiming['kind']>(saved?.timing.kind ?? 'daily')
+  const [dailyTime, setDailyTime] = useState(saved?.timing.kind === 'daily' ? saved.timing.time : '09:00')
+  const [every, setEvery] = useState(saved?.timing.kind === 'interval' ? String(saved.timing.every) : '3')
+  const [unit, setUnit] = useState<'minutes' | 'hours' | 'days'>(saved?.timing.kind === 'interval' ? saved.timing.unit : 'hours')
+  const [onceAt, setOnceAt] = useState(localDateTime(saved?.timing.kind === 'once' ? saved.timing.at : Date.now() + 3600_000))
+  const [accounts, setAccounts] = useState<AccountView[]>([]), [accountIds, setAccountIds] = useState<AccountSelection>(saved?.request.accountIds ?? {})
   const [started, setStarted] = useState<RunState[] | null>(null)
   const automation = useAutomation()
-  const kind = selection.sources[0]?.kind
+  const selectedSources: SourceRef[] = saved?.request.selection?.sources.map((ref) => sources.find((source) => source.kind === ref.kind && source.id === ref.id) ?? { ...ref, title: ref.id }) ?? selection.sources
+  const kind = selectedSources[0]?.kind
   const compatible = (p: Pipeline) => !p.template && (!kind || p.nodes.some((n) => n.kind === 'function-input' && n.params?.some((param) => sourceKind(param.type) === kind)))
   useEffect(() => {
     let alive = true
@@ -94,14 +108,16 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
     }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)) }).finally(() => { if (alive) setLoading(false) })
     const off = on('term-info', (tab: TerminalInfo) => setTabs((all) => all.map((t) => t.id === tab.id ? { ...t, ...tab } : t)))
     const offSources = on('files-changed', () => { void api.pipelineSources().then((data) => { if (alive) setSources(data) }).catch(errorToast) })
-    return () => { alive = false; off(); offSources() }
+    const loadAccounts = () => { void api.listAgentAccounts().then((data) => { if (alive) setAccounts(data ?? []) }).catch(errorToast) }
+    loadAccounts(); const offAccounts = on('accounts-changed', loadAccounts)
+    return () => { alive = false; off(); offSources(); offAccounts() }
   }, [])
   const graph = graphs.find((p) => p.id === graphId)
   const entry = graph?.nodes.find((n) => n.kind === 'function-input')
   const params = entry?.params ?? []
   const targets = params.filter((p) => sourceKind(p.type) === kind)
   const target = targets.find((p) => p.id === port) ?? targets[0]
-  const count = target && !isListShape(target.type) ? selection.sources.length : 1
+  const count = target && !isListShape(target.type) ? selectedSources.length : 1
   const value = (id: string, type: string) => values[id] ?? entry?.values?.[id] ?? (type === 'boolean' ? 'false' : type === 'number' ? '0' : '')
   const changeGraph = (id: string) => { setGraphId(id); setPort(''); setValues({}); setError('') }
   const start = async () => {
@@ -109,18 +125,33 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
     setBusy(true); setError('')
     try {
       const bound = Object.fromEntries(params.filter((p) => p.id !== target?.id).map((p) => [p.id, value(p.id, p.type)]))
-      const runs = await api.runPipelineBatch({ pipelineId: graph.id, values: bound, ...(target ? { selection: { port: target.id, sources: selection.sources } } : {}), terminalIds, allowNew, maxConcurrent: maxConcurrent ? Number(maxConcurrent) : undefined })
+      const request = { pipelineId: graph.id, values: bound, ...(target ? { selection: { port: target.id, sources: selectedSources } } : {}), terminalIds, allowNew, maxConcurrent: maxConcurrent ? Number(maxConcurrent) : undefined, accountIds: { claude: accountIds.claude ?? defaultAccountId('claude'), codex: accountIds.codex ?? defaultAccountId('codex') } }
+      if (scheduling) {
+        const timing: ScheduleTiming = timingKind === 'daily' ? { kind: 'daily', time: dailyTime } : timingKind === 'interval' ? { kind: 'interval', every: Number(every), unit } : { kind: 'once', at: parseLocalDateTime(onceAt) }
+        await api.savePipelineSchedule({ id: saved?.id, title: scheduleTitle.trim() || graph.title, enabled: scheduleEnabled, timing, request })
+        toast('예약을 저장했습니다'); onClose(); return
+      }
+      const runs = await api.runPipelineBatch(request)
       setStarted(runs); toast(`${runs.length}개의 실행을 만들었습니다`)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
-  return <RunDrawer title={started ? '실행을 시작했습니다' : '그래프로 실행'} onClose={() => { if (!busy) onClose() }}>
+  return <RunDrawer title={started ? '실행을 시작했습니다' : scheduling ? saved ? '예약 편집' : '새 예약' : '그래프로 실행'} onClose={() => { if (!busy) onClose() }}>
     {started ? <>
       <p>{started.length}개의 독립 실행을 만들었습니다. 선택한 터미널에서 병렬로 진행하며, 사용 중인 터미널은 기다립니다.</p>
       <div className="run-targets">{started.map((r) => <button key={r.runId} onClick={() => { onClose(); automation.inspect(r.runId) }}>{r.sources?.map((s) => s.title).join(', ') || r.title} · 결과 보기</button>)}</div>
       <button className="primary" onClick={onClose}>원래 작업 계속하기</button>
     </> : loading ? <Empty>그래프와 입력을 불러오는 중…</Empty> : <>
-      {selection.sources.length > 0 && <div className="run-targets"><b>선택한 대상 · {selection.sources.length}개</b>{selection.sources.map((s) => <span key={`${s.kind}:${s.id}`}>{s.title}</span>)}</div>}
+      {selectedSources.length > 0 && <div className="run-targets"><b>선택한 대상 · {selectedSources.length}개</b>{selectedSources.map((s) => <span key={`${s.kind}:${s.id}`}>{s.title}</span>)}</div>}
+      {scheduling && <fieldset disabled={busy} className="schedule-fields">
+        <div className="field"><label htmlFor="schedule-title">예약 이름</label><input id="schedule-title" value={scheduleTitle} placeholder={graph?.title ?? '예약 이름'} onChange={(e) => setScheduleTitle(e.target.value)} /></div>
+        <div className="field"><label htmlFor="schedule-kind">예약 방식</label><select id="schedule-kind" value={timingKind} onChange={(e) => setTimingKind(e.target.value as ScheduleTiming['kind'])}><option value="daily">매일 정해진 시각</option><option value="interval">일정 간격마다</option><option value="once">날짜와 시각 지정 · 한 번</option></select></div>
+        {timingKind === 'daily' && <div className="field"><label htmlFor="schedule-time">매일 실행 시각</label><input id="schedule-time" type="time" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} /></div>}
+        {timingKind === 'interval' && <div className="row"><div className="field"><label htmlFor="schedule-every">반복 간격</label><input id="schedule-every" type="number" min={1} step={1} value={every} onChange={(e) => setEvery(e.target.value)} /></div><div className="field"><label htmlFor="schedule-unit">간격 단위</label><select id="schedule-unit" value={unit} onChange={(e) => setUnit(e.target.value as typeof unit)}><option value="minutes">분</option><option value="hours">시간</option><option value="days">일</option></select></div></div>}
+        {timingKind === 'once' && <div className="field"><label htmlFor="schedule-at">실행 날짜와 시각</label><input id="schedule-at" type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)} /></div>}
+        <label className="run-terminal"><input type="checkbox" checked={scheduleEnabled} onChange={(e) => setScheduleEnabled(e.target.checked)} />예약 사용</label>
+        <p className="small muted">컴퓨터 시각 기준 ({Intl.DateTimeFormat().resolvedOptions().timeZone}). Orbit에서 이 프로젝트를 열어 둔 동안 실행합니다. 놓친 예약은 다시 열 때 한 번 실행하며, 같은 그래프가 실행 중이면 기다립니다.</p>
+      </fieldset>}
       <div className="field"><label htmlFor="run-graph">작업 그래프</label><select id="run-graph" value={graphId} onChange={(e) => changeGraph(e.target.value)}><option value="">그래프를 고르세요</option>{graphs.filter(compatible).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></div>
       {!graphs.some(compatible) && <div className="empty">{kind ? `${SHAPE_NAME[kind]} 또는 List<${SHAPE_NAME[kind]}> Input이 있는 그래프가 필요합니다.` : '작업 그래프를 먼저 만드세요.'}<button onClick={onGraphs}>그래프 설정</button></div>}
       {target && <div className="run-preview">
@@ -137,14 +168,18 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
         </div>
       })}
       {graph && <details className="run-environment" open={tabs.length === 0 || undefined}><summary>실행 환경 · {terminalIds.length ? `추가 터미널 ${terminalIds.length}개 선택` : '추가 터미널 선택 안 함'}</summary>
+        {AGENT_PROVIDERS.map((provider) => <div className="field" key={provider}><label htmlFor={`run-account-${provider}`}>{AGENT_LABELS[provider]} 실행 계정</label><select id={`run-account-${provider}`} value={accountIds[provider] ?? defaultAccountId(provider)} onChange={(e) => setAccountIds({ ...accountIds, [provider]: e.target.value })}>
+          {!accounts.some((account) => account.id === (accountIds[provider] ?? defaultAccountId(provider))) && <option value={accountIds[provider] ?? defaultAccountId(provider)}>{accountIds[provider] ? '등록 해제된 계정 · 다시 선택하세요' : '기본 계정'}</option>}
+          {accounts.filter((account) => account.provider === provider).map((account) => <option key={account.id} value={account.id} disabled={!account.enabled}>{account.label}{account.enabled ? '' : ' · 사용 중지'}</option>)}
+        </select></div>)}
         <div className="field"><label htmlFor="run-concurrency">동시 터미널 작업 수</label><input id="run-concurrency" type="number" min={1} max={64} value={maxConcurrent} placeholder="가용 터미널 수에 맞춤" onChange={(e) => setMaxConcurrent(e.target.value)} /></div>
-        <p className="small muted">노드에 연결한 터미널·세션은 그대로 사용합니다. 터미널이 지정되지 않은 노드에 자동 배정할 세션만 추가로 선택하세요.</p>
+        <p className="small muted">선택한 실행 계정과 같은 계정의 터미널을 사용합니다. 노드에 연결한 터미널·세션은 유지하며, 지정되지 않은 노드에 자동 배정할 세션만 추가로 선택하세요.</p>
         {tabs.filter((t) => t.exited === undefined).map((tab) => <label className="run-terminal" key={tab.id}><input type="checkbox" checked={terminalIds.includes(tab.id)} onChange={(e) => setTerminalIds(e.target.checked ? [...terminalIds, tab.id] : terminalIds.filter((id) => id !== tab.id))} /><span>{tab.title}<small>{tab.kind} · {tab.model || '세션 기본 모델'} · {tab.effort || '기본 effort'}{tab.activity === 'working' ? ' · 사용 중' : ''}</small></span></label>)}
         <label className="run-terminal"><input type="checkbox" checked={allowNew} onChange={(e) => setAllowNew(e.target.checked)} />사용할 세션이 없을 때 새 터미널 허용</label>
         {!terminalIds.length && !allowNew && <p className="small muted">노드에 터미널이 지정되어 있다면 추가 선택은 필요 없습니다.</p>}
       </details>}
       {error && <p role="alert" className="pipe-value-error">{error}</p>}
-      <footer className="row between"><button onClick={onClose} disabled={busy}>취소</button><button className="primary" disabled={busy || !graph || (!!kind && !target)} onClick={() => void start()}>{busy ? '실행 준비 중…' : `${count}건 실행`}</button></footer>
+      <footer className="row between"><button onClick={onClose} disabled={busy}>취소</button><button className="primary" disabled={busy || !graph || (!!kind && !target)} onClick={() => void start()}>{busy ? '저장·실행 준비 중…' : scheduling ? '예약 저장' : `${count}건 실행`}</button></footer>
     </>}
   </RunDrawer>
 }

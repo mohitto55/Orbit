@@ -8,6 +8,7 @@ export type TerminalKind = 'shell' | 'claude' | 'codex'
 export type TerminalActivity = 'idle' | 'working' | 'completed'
 
 export interface TerminalInfo extends AgentOptions {
+  accountId?: string
   id: string
   kind: TerminalKind
   title: string
@@ -134,13 +135,15 @@ export class TerminalManager {
    * 셸을 열고, Claude Code·Codex면 그 셸 안에서 실행한다 (에이전트가 끝나도 셸은 남는다).
    * signals: 실행 명령에 응답 끝·준비 신호 훅이 붙어 있다 (IN-F10).
    */
-  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind], options: { id?: string; env?: Record<string, string>; command?: string; output?: string; sequence?: number; init?: string; signals?: boolean } = {}): TerminalInfo {
+  create(kind: TerminalKind, cwd: string, cols = 100, rows = 30, settings: Partial<ProjectSettings> = {}, sessionId?: string, title = TITLES[kind], options: { id?: string; env?: Record<string, string>; unsetEnv?: readonly string[]; command?: string; output?: string; sequence?: number; init?: string; signals?: boolean } = {}): TerminalInfo {
     if (!Object.hasOwn(TITLES, kind)) throw new Error('지원하지 않는 터미널 종류입니다')
     const start = options.command ?? terminalCommand(kind, settings, sessionId)
     const { file, args } = defaultShell()
     if (options.init && process.platform === 'win32') args.push('-NoExit', '-Command', options.init)
     const id = options.id ?? `term-${randomUUID()}`
-    const pty = this.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: { ...cleanEnv(process.env), ...options.env } })
+    const env = cleanEnv(process.env)
+    for (const key of options.unsetEnv ?? []) delete env[key]
+    const pty = this.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: { ...env, ...options.env } })
     const info: TerminalInfo = { id, kind, title, pid: pty.pid, ...(sessionId ? { sessionId } : {}) }
     const entry: Term = { pty, info, output: options.output ?? '', sequence: options.sequence ?? 0, lastData: this.now(), sawData: false, ready: false, signals: !!options.signals }
     this.terms.set(id, entry)

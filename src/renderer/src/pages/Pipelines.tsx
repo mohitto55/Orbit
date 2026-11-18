@@ -554,13 +554,14 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
     setSel(null)
   }
 
-  const start = async () => {
+  const start = async (schedule = false) => {
     if (!draft) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
     dirty.current = true
     await flush(draft)
     try {
-      automation.open([], draft.id)
+      if (schedule) automation.schedule(undefined, draft.id)
+      else automation.open([], draft.id)
     } catch (e) {
       errorToast(e)
     }
@@ -663,7 +664,8 @@ export default function PipelineEditor({ tabs, onShowTerminal }: { tabs: Termina
               {!draft.nodes.some((n) => n.kind === 'function-input') && <button onClick={() => update((d) => ({ ...d, ...withFunctionBoundary(d, d.id) }))}>외부 Input 추가</button>}
               {!!graphRuns.length && <><select aria-label="표시할 실행" value={run?.runId ?? ''} onChange={(e) => setSelectedRun(e.target.value)}>{graphRuns.map((r) => <option key={r.runId} value={r.runId}>{r.sources?.map((s) => s.title).join(', ') || r.title} · {RUN_LABEL[r.status]} · {new Date(r.started).toLocaleTimeString()}</option>)}</select><button onClick={() => run && automation.inspect(run.runId)}>실행 상세</button></>}
               <button className="ghost" title="패널 크기 초기화" onClick={layout.reset}>레이아웃 초기화</button>
-                <button className="primary" disabled={!!draft.template} title={draft.template ? '함수는 작업 그래프에서 호출해 실행합니다' : '입력과 실행 환경을 지정합니다'} onClick={start}>
+                <button disabled={!!draft.template} onClick={() => void start(true)}>예약</button>
+                <button className="primary" disabled={!!draft.template} title={draft.template ? '함수는 작업 그래프에서 호출해 실행합니다' : '입력과 실행 환경을 지정합니다'} onClick={() => void start()}>
                   ▶ 실행
                 </button>
               <button className="ghost danger" onClick={remove}>

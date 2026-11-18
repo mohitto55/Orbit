@@ -34,6 +34,9 @@ function migrateOldSettings() {
   }
 }
 migrateOldSettings()
+// 한 프로필의 예약을 여러 앱 프로세스가 동시에 실행하지 않게 한다.
+if (!app.requestSingleInstanceLock()) app.exit(0)
+app.on('second-instance', () => { if (win?.isMinimized()) win.restore(); win?.show(); win?.focus() })
 let watcher: FSWatcher | null = null
 
 function send(channel: string, payload: unknown) {

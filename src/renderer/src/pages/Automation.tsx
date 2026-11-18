@@ -7,15 +7,19 @@ import { SOURCE_KINDS, type SourceKind } from '../../../core/pipeline'
 import type { TerminalInfo } from '../types'
 import { Empty, errorToast } from '../ui'
 import PipelineEditor from './Pipelines'
+import { Schedules } from '../Schedules'
+import { AgentAccounts } from '../AgentAccounts'
 
 export default function Automation({ focus, go }: PageProps) {
-  const [view, setView] = useState<'runs' | 'graphs'>('runs'), [opened, setOpened] = useState(false)
+  const [view, setView] = useState<'runs' | 'graphs' | 'schedules' | 'accounts'>('runs'), [opened, setOpened] = useState(false)
   const [filter, setFilter] = useState<RunFilter>({}), [rows, setRows] = useState<PipelineRunSummary[]>([]), [total, setTotal] = useState(0)
   const [counts, setCounts] = useState({ running: 0, waiting: 0, done: 0, failed: 0, stopped: 0 })
   const [tabs, setTabs] = useState<TerminalInfo[]>([]), [revision, setRevision] = useState(0), [loading, setLoading] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>()
   const automation = useAutomation()
   useEffect(() => {
+    if (focus === 'schedules') { setView('schedules'); return }
+    if (focus === 'accounts') { setView('accounts'); return }
     if (focus?.startsWith('graphs')) { setView('graphs'); setOpened(true); return }
     if (!focus) return
     setView('runs')
@@ -60,7 +64,9 @@ export default function Automation({ focus, go }: PageProps) {
     } catch (error) { errorToast(error) } finally { setActing(false) }
   }
   return <div className="page automation-page">
-    <div className="row between"><h2>자동화</h2><div className="seg"><button className={view === 'runs' ? 'on' : ''} onClick={() => setView('runs')}>실행</button><button className={view === 'graphs' ? 'on' : ''} onClick={() => { setView('graphs'); setOpened(true) }}>그래프</button></div></div>
+    <div className="row between"><h2>자동화</h2><div className="seg"><button className={view === 'runs' ? 'on' : ''} onClick={() => setView('runs')}>실행</button><button className={view === 'graphs' ? 'on' : ''} onClick={() => { setView('graphs'); setOpened(true) }}>그래프</button><button className={view === 'schedules' ? 'on' : ''} onClick={() => setView('schedules')}>예약</button><button className={view === 'accounts' ? 'on' : ''} onClick={() => setView('accounts')}>계정·쿼터</button></div></div>
+    {view === 'schedules' && <Schedules />}
+    {view === 'accounts' && <AgentAccounts onTerminal={(id) => go('terminal', id)} />}
     {opened && <div className="automation-editor" hidden={view !== 'graphs'}><PipelineEditor tabs={tabs} onShowTerminal={(id) => go('terminal', id)} /></div>}
     <div hidden={view !== 'runs'}>
       <div className="row between"><div className="row"><select aria-label="실행 상태 필터" value={filter.status ?? ''} onChange={(e) => setFilter({ ...filter, status: e.target.value as RunFilter['status'] || undefined, offset: 0 })}><option value="">모든 상태</option><option value="waiting">대기</option>{Object.entries(RUN_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
@@ -70,7 +76,7 @@ export default function Automation({ focus, go }: PageProps) {
       <p className="small muted">실행 중 {counts.running} · 대기 {counts.waiting} · 완료 {counts.done} · 실패 {counts.failed} · 중지 {counts.stopped}</p>
       {filter.groupId && <div className="row"><button disabled={acting} onClick={() => void groupAction(false)}>이 묶음 중지</button><button disabled={acting} onClick={() => void groupAction(true)}>실패한 항목만 처음부터 재실행</button></div>}
       {rows.length ? <table className="table run-table"><thead><tr><th>대상 / 그래프</th><th>현재 단계</th><th>상태</th><th>시작</th><th /></tr></thead><tbody>{rows.map((run) => <tr key={run.runId}>
-        <td><button className="link" onClick={() => automation.inspect(run.runId)}>{run.sources.map((s) => s.title).join(', ') || run.title}</button><div className="small muted">{run.title}{run.retryOf ? ' · 재실행' : ''}</div></td>
+        <td><button className="link" onClick={() => automation.inspect(run.runId)}>{run.sources.map((s) => s.title).join(', ') || run.title}</button><div className="small muted">{run.title}{run.retryOf ? ' · 재실행' : ''}{run.schedule ? ` · 예약: ${run.schedule.title}` : ''}</div></td>
         <td>{run.stage}<div className="small muted">{run.message ?? `${run.done} / ${run.total} 노드 완료`}</div></td>
         <td><span className={`run-status ${run.waiting && run.status === 'running' ? 'waiting' : run.status}`}>● {run.waiting && run.status === 'running' ? '대기' : RUN_LABEL[run.status]}</span></td>
         <td className="small">{new Date(run.started).toLocaleString()}</td>
