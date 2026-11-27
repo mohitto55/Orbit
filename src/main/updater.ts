@@ -2,7 +2,9 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import {
   DEFAULT_UPDATE_SETTINGS,
+  isTransientUpdateError,
   notesText,
+  updateErrorText,
   reduceUpdate,
   shouldAutoCheck,
   type UpdateEvent,
@@ -46,19 +48,31 @@ export function createUpdater(deps: { send: (channel: string, payload: unknown) 
     autoUpdater.on('update-not-available', () => emit({ type: 'not-available' }))
     autoUpdater.on('download-progress', (p) => emit({ type: 'progress', percent: p.percent, transferred: p.transferred, total: p.total }))
     autoUpdater.on('update-downloaded', (i) => emit({ type: 'downloaded', version: i.version }))
-    autoUpdater.on('error', (e) => emit({ type: 'error', message: e?.message ?? String(e) }))
+    // 확인 중 실패는 check()가 재시도 여부를 정해 알린다
+    autoUpdater.on('error', (e) => { if (!retrying) emit({ type: 'error', message: updateErrorText(e?.message ?? String(e)) }) })
     updater = autoUpdater
     return updater
   }
 
-  async function check() {
+  /** GitHub 504·연결 끊김 같은 일시 오류는 잠시 뒤 다시 확인한다 */
+  const RETRY_DELAYS_MS = [10_000, 60_000]
+  let retrying = false
+  let retryTimer: NodeJS.Timeout | null = null
+  async function check(attempt = 0) {
     const u = await getUpdater()
     if (!u) return status
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+    retrying = attempt < RETRY_DELAYS_MS.length
     try {
       await u.checkForUpdates()
     } catch (e) {
-      emit({ type: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
+      const message = e instanceof Error ? e.message : String(e)
+      if (isTransientUpdateError(message) && attempt < RETRY_DELAYS_MS.length) {
+        emit({ type: 'checking' })
+        retryTimer = setTimeout(() => { retryTimer = null; void check(attempt + 1) }, RETRY_DELAYS_MS[attempt])
+        retryTimer.unref?.()
+      } else emit({ type: 'error', message: updateErrorText(message) })
+    } finally { retrying = false }
     return status
   }
 
@@ -81,7 +95,7 @@ export function createUpdater(deps: { send: (channel: string, payload: unknown) 
         try {
           await u.downloadUpdate()
         } catch (e) {
-          emit({ type: 'error', message: e instanceof Error ? e.message : String(e) })
+          emit({ type: 'error', message: updateErrorText(e instanceof Error ? e.message : String(e)) })
         }
         return status
       },

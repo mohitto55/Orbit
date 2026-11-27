@@ -69,6 +69,23 @@ export function shouldAutoCheck(settings: UpdateSettings, status: UpdateStatus, 
   return now.getTime() - new Date(status.checkedAt).getTime() >= hours * 3600 * 1000
 }
 
+/** GitHub·네트워크의 일시 오류인가 (잠시 뒤 다시 확인하면 대개 된다) */
+export function isTransientUpdateError(message: string): boolean {
+  return /\b(?:HttpError: )?5\d\d\b|Gateway Time-?out|Service Unavailable|Bad Gateway|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|net::ERR_|timed? ?out/i.test(message)
+}
+
+/**
+ * electron-updater의 오류 원문(HTTP 응답 본문·헤더·스택까지 들어 있다)을 화면에 보일 한 줄로 바꾼다.
+ * 원문을 그대로 보여 주면 길고 쿠키 헤더 같은 값도 노출된다.
+ */
+export function updateErrorText(message: string): string {
+  if (isTransientUpdateError(message)) return 'GitHub에 일시적으로 연결하지 못해 업데이트를 확인하지 못했습니다. 잠시 후 다시 확인합니다'
+  if (/ensure a production release exists|Unable to find latest version/i.test(message)) return '공개된 최신 릴리스를 찾지 못했습니다. 잠시 후 다시 확인해 주세요'
+  if (/\b(?:401|403|404)\b/.test(message)) return '업데이트 서버에서 릴리스 정보를 받지 못했습니다. 잠시 후 다시 확인해 주세요'
+  const first = message.split(/\r?\n/).find((line) => line.trim())?.trim() ?? message
+  return first.length > 200 ? `${first.slice(0, 200)}…` : first
+}
+
 /** 릴리스 노트는 문자열 또는 [{version, note}] 배열로 온다 */
 export function notesText(notes: unknown): string | undefined {
   if (typeof notes === 'string') return notes
