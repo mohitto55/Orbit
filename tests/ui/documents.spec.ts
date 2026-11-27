@@ -108,6 +108,14 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
     await blurEditor(orbit.page)
     await expect.poll(() => editor.getByAltText('첨부.svg').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(45)
     await expect.poll(() => editor.getByAltText('도식').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(160)
+    const photo = editor.getByAltText('첨부.svg')
+    await photo.click()
+    const handle = photo.locator('xpath=..').getByRole('button', { name: '사진 크기 조절 se', exact: true })
+    await handle.scrollIntoViewIfNeeded()
+    const rect = (await handle.boundingBox())!
+    await orbit.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    await orbit.page.mouse.down(); await orbit.page.mouse.move(rect.x + rect.width / 2 + 30, rect.y + rect.height / 2 + 20, { steps: 4 }); await orbit.page.mouse.up()
+    await expect.poll(async () => Math.round((await photo.boundingBox())!.width)).toBe(75)
     if (kind === 'request') await orbit.page.getByRole('button', { name: '다듬은 내용 저장', exact: true }).click()
     else {
       await orbit.page.getByRole('button', { name: '저장', exact: true }).click()
@@ -118,7 +126,7 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
     }
     const imageDocument = kind === 'request' ? path.join(orbit.ctx.dataRoot, 'domains/markdown-qa/domain.md') : file
     const source = path.relative(path.dirname(imageDocument), path.join(orbit.ctx.dataRoot, 'assets', createHash('sha256').update(picture).digest('hex') + '.svg')).split(path.sep).join('/')
-    const expected = integrationSource.replace('- [ ]', '- [x]') + `\n\n저장 검증 한글\n\n![첨부.svg](${source})`
+    const expected = integrationSource.replace('- [ ]', '- [x]') + `\n\n저장 검증 한글\n\n![첨부.svg|75](${source})`
     await expect.poll(async () => (kind === 'request' ? (await readDraft(file))!.content : (await readMd(file)).content).trim()).toBe(expected)
     editor = await openDocument(orbit, kind)
     await expect(editor.locator('.cm-md-task-box').first()).toBeChecked()
@@ -128,6 +136,7 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
     await expect(editor.locator('.cm-content')).toContainText('저장 검증 한글')
     await expect.poll(() => editor.getByAltText('도식').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(160)
     await expect.poll(() => editor.getByAltText('첨부.svg').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(45)
+    await expect.poll(async () => Math.round((await editor.getByAltText('첨부.svg').boundingBox())!.width)).toBe(75)
     await expectNoOverflow(editor)
   })
 }

@@ -6,11 +6,13 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import type { Nodes } from 'hast'
 import { readChecklist, type ChecklistItem } from './checklistMarkdown'
 import { markdownImageUrl } from './markdownImages'
+import { showImagePreview } from './imagePreview'
 
 // md 안의 <br> 등 기본 HTML은 살리고, 스크립트 같은 위험한 요소는 걸러낸다.
 // wiki: (위키링크), term: (Drift 용어 강조) 링크는 앱 내부 이동용으로 허용한다.
 const schema = {
   ...defaultSchema,
+  attributes: { ...defaultSchema.attributes, img: [...(defaultSchema.attributes?.img ?? []), 'dataMarkdownImage'] },
   protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), 'wiki', 'term'], src: [...(defaultSchema.protocols?.src ?? []), 'orbit-image', 'data'] }
 }
 
@@ -69,10 +71,17 @@ function bindChecklist(items: ChecklistItem[]) {
   }
 }
 
-function resolveImages(documentPath?: string) {
+function resolveImages(source: string, documentPath?: string) {
   return () => (tree: Nodes) => {
     const visit = (node: Nodes) => {
-      if (node.type === 'element' && node.tagName === 'img' && typeof node.properties.src === 'string') node.properties.src = markdownImageUrl(node.properties.src, documentPath)
+      if (node.type === 'element' && node.tagName === 'img' && typeof node.properties.src === 'string') {
+        node.properties.src = markdownImageUrl(node.properties.src, documentPath)
+        const from = node.position?.start.offset, to = node.position?.end.offset
+        const markup = from === undefined || to === undefined ? '' : source.slice(from, to)
+        node.properties.dataMarkdownImage = markup
+        const size = markup.startsWith('![') && typeof node.properties.alt === 'string' ? /^(.*)\|(\d+)(?:x\d+)?$/s.exec(node.properties.alt) : null
+        if (size) { node.properties.alt = size[1]; node.properties.width = Math.max(24, Math.min(10000, Number(size[2]))) }
+      }
       if ('children' in node) node.children.forEach(visit)
     }
     visit(tree)
@@ -87,9 +96,12 @@ export function MdContent({ source, documentPath, onWiki, onTerm, terms, onCheck
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, resolveImages(documentPath), [rehypeSanitize, schema], ...(onChecklistToggle ? [bindChecklist(items.length === renderedItems.length ? renderedItems : [])] : [])]}
+      rehypePlugins={[rehypeRaw, resolveImages(rendered, documentPath), [rehypeSanitize, schema], ...(onChecklistToggle ? [bindChecklist(items.length === renderedItems.length ? renderedItems : [])] : [])]}
       urlTransform={(url, key, node) => key === 'src' && node.tagName === 'img' ? url : (INTERNAL.test(url) ? url : defaultUrlTransform(url))}
       components={{
+        img: ({ node: _node, ...props }) => <img {...props} tabIndex={0} role="button" title="클릭해서 크게 보기"
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); showImagePreview(event.currentTarget) }}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showImagePreview(event.currentTarget) } }} />,
         input: ({ node, checked, ...props }) => {
           const index = node?.properties['data-checklist-index']
           const item = typeof index === 'number' ? items[index] : undefined

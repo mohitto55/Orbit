@@ -51,6 +51,7 @@ for (const markup of ['![도식](assets/flow.svg)', '<img src="assets/flow.svg" 
     const image = editor.getByAltText('도식')
     await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(180)
     await image.click()
+    await editor.getByRole('button', { name: '설명·경로 편집', exact: true }).click()
     await expect(editor.locator('.cm-content')).toContainText(markup)
     for (let i = 0; i < markup.indexOf('도식'); i++) await orbit.page.keyboard.press('ArrowRight')
     await orbit.page.keyboard.insertText('새 ')

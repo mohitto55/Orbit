@@ -2,13 +2,15 @@ import { useEffect, useId, useRef, useState, type DragEvent, type ClipboardEvent
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Annotation, Compartment, EditorState, Facet, StateEffect, StateField, Transaction, type Range } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, keymap, placeholder, type DecorationSet } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory, redo, undo } from '@codemirror/commands'
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { deleteMarkupBackward, insertNewlineContinueMarkupCommand, markdown } from '@codemirror/lang-markdown'
 import { GFM } from '@lezer/markdown'
 import { Markdown } from './Markdown'
 import { api } from './api'
 import { errorToast } from './ui'
+import { addImageControls } from './imageControls'
+import { resizeImageMarkup } from './markdownImages'
 
 const focusChanged = StateEffect.define<boolean>()
 const externalChange = Annotation.define<boolean>()
@@ -70,9 +72,9 @@ class TaskBox extends WidgetType {
 
 /** 표·이미지도 같은 문서 안에 표시하며 클릭한 위치에서 원문 편집으로 이어진다. */
 class MarkdownBlock extends WidgetType {
-  constructor(readonly from: number, readonly source: string, readonly block: boolean, readonly cells: number[][], readonly documentPath: string, readonly references: string) { super() }
+  constructor(readonly from: number, readonly to: number, readonly source: string, readonly block: boolean, readonly cells: number[][], readonly documentPath: string, readonly references: string) { super() }
   eq(other: MarkdownBlock) {
-    return this.from === other.from && this.source === other.source && this.block === other.block && this.documentPath === other.documentPath && this.references === other.references
+    return this.from === other.from && this.to === other.to && this.source === other.source && this.block === other.block && this.documentPath === other.documentPath && this.references === other.references
       && this.cells.length === other.cells.length && this.cells.every((row, i) => row.length === other.cells[i].length && row.every((position, j) => position === other.cells[i][j]))
   }
   toDOM(view: EditorView) {
@@ -91,15 +93,39 @@ class MarkdownBlock extends WidgetType {
       view.focus()
     })
     dom.addEventListener('click', (event) => event.preventDefault())
+    let imageEnd = 0
+    const original = view.state.doc.sliceString(this.from, this.to)
     for (const img of dom.querySelectorAll('img')) {
-      img.title = '클릭해서 이미지 경로·설명 수정'
+      const markup = img.dataset.markdownImage ?? '', offset = markup ? original.indexOf(markup, imageEnd) : -1
+      const from = this.from + Math.max(0, offset), to = from + markup.length
+      if (offset >= 0) imageEnd = offset + markup.length
+      const edit = () => { view.dispatch({ selection: { anchor: from }, effects: focusChanged.of(true) }); view.focus() }
+      const keepSelected = (action: () => void) => {
+        const imageIndex = [...view.dom.querySelectorAll<HTMLImageElement>('img')].indexOf(img)
+        action(); view.requestMeasure()
+        const next = view.dom.querySelectorAll<HTMLImageElement>('img')[imageIndex]?.closest<HTMLElement>('.md-image-frame')
+        next?.classList.add('selected'); next?.focus({ preventScroll: true })
+      }
+      const resize = offset < 0 || view.state.readOnly ? undefined : (width: number | null) => {
+        if (view.state.readOnly || view.state.doc.sliceString(from, to) !== markup) return
+        const insert = resizeImageMarkup(markup, width, this.cells.length > 0)
+        if (insert === markup) return
+        keepSelected(() => view.dispatch({ changes: { from, to, insert }, annotations: [Transaction.userEvent.of('input.resize'), isolateHistory.of('full')] }))
+      }
+      const frame = addImageControls(img, view.state.readOnly ? undefined : edit, resize, () => view.requestMeasure())
+      frame.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey || view.state.readOnly) return
+        const key = event.key.toLowerCase()
+        if (key !== 'z' && key !== 'y') return
+        event.preventDefault(); event.stopPropagation()
+        keepSelected(() => { (key === 'y' || event.shiftKey ? redo : undo)(view) })
+      })
       img.addEventListener('load', () => view.requestMeasure(), { once: true })
       img.addEventListener('error', () => {
-        img.hidden = true
         const message = document.createElement('span')
         message.className = 'cm-md-image-error'
         message.textContent = `이미지를 불러올 수 없습니다${img.alt ? ` (${img.alt})` : ''} · 클릭해서 경로 수정`
-        img.after(message)
+        frame.replaceWith(message)
         view.requestMeasure()
       }, { once: true })
     }
@@ -154,7 +180,7 @@ function present(state: EditorState, focused: boolean): Presentation {
           // leaves later lines' `> ` prefixes inside the standalone Markdown.
           if (row.name === 'TableHeader' || row.name === 'TableDelimiter' || row.name === 'TableRow') rows.push(state.doc.sliceString(row.from, row.to))
         }
-        replace(from, to, new MarkdownBlock(from, name === 'Table' ? rows.join('\n') : source(), name !== 'Image', cells, state.facet(documentLocation), references), name !== 'Image')
+        replace(from, to, new MarkdownBlock(from, to, name === 'Table' ? rows.join('\n') : source(), name !== 'Image', cells, state.facet(documentLocation), references), name !== 'Image')
         return false
       }
       if (name === 'Table') {
