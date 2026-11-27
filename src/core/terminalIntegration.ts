@@ -104,16 +104,22 @@ function stalled(event) {
   try { if (JSON.parse(fs.readFileSync(target, 'utf8')).requestId === capture.requestId) return; } catch {}
   let output = '';
   try {
+    // 이번 요청 표식이 있는 프롬프트 줄 뒤의 마지막 답만 쓴다. 표식을 못 찾으면 지난 턴의 답을 쓰지 않도록 마감하지 않는다.
     const lines = fs.readFileSync(event.transcript_path, 'utf8').trim().split('\n');
+    let start = -1;
+    // 표식은 last-prompt·api-request 기록 줄에도 남는다. 사용자 프롬프트(type: user) 줄만 시작점으로 삼는다.
     for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('orbit-request:' + capture.requestId)) continue;
+      try { if (JSON.parse(lines[i]).type === 'user') { start = i; break; } } catch {}
+    }
+    if (start < 0) return;
+    for (let i = lines.length - 1; i > start; i--) {
       let row; try { row = JSON.parse(lines[i]); } catch { continue; }
-      // 문자열 본문의 user 줄은 사용자가 보낸 프롬프트다 (도구 결과는 배열). 그 앞으로는 지난 턴이다.
-      if (row.type === 'user' && typeof row.message?.content === 'string') break;
       if (row.type !== 'assistant' || !Array.isArray(row.message?.content)) continue;
       const text = row.message.content.filter(c => c && c.type === 'text').map(c => c.text).join('');
       if (text.trim()) { output = text; break; }
     }
-  } catch {}
+  } catch { return; }
   const pending = target + '.' + process.pid + '.tmp';
   fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, output: output.slice(0, 4 * 1024 * 1024) }));
   fs.renameSync(pending, target);
@@ -429,6 +435,46 @@ export function beginOutputCapture(dir: string, prompt: string, sessionId?: stri
   writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, claudePromptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}), ...(messages ? { messages } : {}) }))
   return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
 }
+/** 이번 수집 요청을 Claude가 받았다면(UserPromptSubmit 훅이 확인) 그 세션 ID */
+export function submittedClaudeSession(dir: string): string | undefined {
+  try {
+    const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { submitted?: unknown }
+    return typeof capture.submitted === 'string' ? capture.submitted : undefined
+  } catch { return undefined }
+}
+
+/**
+ * Stop 훅 없이 끝난 Claude 턴을 대화 기록으로 마감한다 (anthropics/claude-code#29881: 도구 결과 뒤 멈추면 Stop이 오지 않는다).
+ * 이번 요청의 프롬프트 뒤에 나온 마지막 답을 결과로 남기고 완료 신호를 쓴다. 이미 결과가 있으면 아무것도 하지 않는다.
+ */
+export function recoverClaudeTurn(dir: string, transcript: string): boolean {
+  try {
+    const capture = JSON.parse(readFileSync(path.join(dir, 'capture.json'), 'utf8')) as { requestId: string; submitted?: string }
+    if (!capture.submitted) return false
+    const target = path.join(dir, 'agent-output.json')
+    try { if ((JSON.parse(readFileSync(target, 'utf8')) as { requestId?: string }).requestId === capture.requestId) return false } catch { /* 아직 결과 없음 */ }
+    // 이번 요청 표식이 있는 프롬프트 줄 뒤의 마지막 답만 쓴다. 표식을 못 찾으면 지난 턴의 답을 쓰지 않도록 마감하지 않는다.
+    const lines = readFileSync(transcript, 'utf8').trim().split('\n')
+    // 표식은 last-prompt·api-request 기록 줄에도 남는다. 사용자 프롬프트(type: user) 줄만 시작점으로 삼는다.
+    const isPrompt = (line: string) => { try { return line.includes(`orbit-request:${capture.requestId}`) && (JSON.parse(line) as { type?: string }).type === 'user' } catch { return false } }
+    let start = lines.length - 1
+    while (start >= 0 && !isPrompt(lines[start])) start--
+    if (start < 0) return false
+    let output = ''
+    for (let i = lines.length - 1; i > start; i--) {
+      let row: { type?: string; message?: { content?: unknown } }
+      try { row = JSON.parse(lines[i]) } catch { continue }
+      if (row.type !== 'assistant' || !Array.isArray(row.message?.content)) continue
+      const text = (row.message!.content as { type?: string; text?: string }[]).filter((c) => c?.type === 'text').map((c) => c.text ?? '').join('')
+      if (text.trim()) { output = text; break }
+    }
+    writeFileSync(`${target}.tmp`, JSON.stringify({ requestId: capture.requestId, output: output.slice(0, 4 * 1024 * 1024) }))
+    renameSync(`${target}.tmp`, target)
+    writeFileSync(signalFile(dir, 'done'), 'done\n', { flag: 'a' })
+    return true
+  } catch { return false }
+}
+
 /** 새 Codex 탭은 첫 요청을 보낸 뒤에야 화면 제목으로 세션 ID 접두어를 알 수 있다. 알게 되면 진행 중인 수집에 넣어 다른 스레드의 완료를 거른다. */
 export function bindCaptureSession(dir: string, sessionPrefix: string): void {
   try {

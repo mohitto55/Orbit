@@ -155,7 +155,7 @@ it('Claude가 도구 결과 뒤 글 없이 멈춰 Stop이 없어도, 입력 대�
   send('stall', idle)
   expect(readAgentOutput(dir)).toBeUndefined()
   send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt })
-  await fs.appendFile(transcript, line({ type: 'user', message: { role: 'user', content: prompt } }) + line({ type: 'assistant', message: { content: [{ type: 'text', text: 'NEW_ANSWER' }, { type: 'tool_use', id: 't', name: 'Read', input: {} }] } }) + line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'file' }] } }))
+  await fs.appendFile(transcript, line({ type: 'user', message: { role: 'user', content: prompt } }) + line({ type: 'assistant', message: { content: [{ type: 'text', text: 'NEW_ANSWER' }, { type: 'tool_use', id: 't', name: 'Read', input: {} }] } }) + line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'file' }] } }) + line({ type: 'last-prompt', lastPrompt: prompt }))
   send('stall', { ...idle, notification_type: 'permission_prompt' })
   send('stall', { ...idle, session_id: 'other' })
   expect(readAgentOutput(dir)).toBeUndefined()

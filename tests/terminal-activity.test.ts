@@ -3,6 +3,7 @@ import path from 'path'
 import type { IPty } from 'node-pty'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
+import { encodeClaudeProjectDir } from '../src/core/drift'
 import { tempDir } from './helpers'
 
 const workspaces: TerminalWorkspace[] = []
@@ -42,7 +43,7 @@ async function setup() {
   const settings = { name: 'activity', driftIntervalDays: 7, reminderTime: '09:00' }
   const state = (id: string) => workspace.state().tabs.find((tab) => tab.id === id)!
   const signal = async (id: string, name: string) => fs.writeFile(path.join(`${file}.sessions`, id, `agent.${name}`), 'signal\n')
-  return { workspace, create, file, settings, ptys, state, signal, events }
+  return { workspace, create, file, settings, ptys, state, signal, events, dir }
 }
 
 it('[TE-F03-AC1] [TE-F03-AC2] Codex의 상태 제목을 조각별로 받아 작업 중·완료를 알리고 일반 출력이나 중복 알림은 무시한다', async () => {
@@ -259,4 +260,42 @@ it('Claude 승인 알림과 Codex Waiting 제목을 승인 대기로 알리고, 
   ptys[1].emit(title('Working'))
   expect(waiting).toHaveBeenLastCalledWith(codex.id, false)
   expect(waiting).toHaveBeenCalledTimes(4)
+})
+
+it('Claude가 이번 요청을 받은 뒤 제목이 턴 끝(✳)으로 바뀌고 Stop 결과가 없으면 대화 기록의 답으로 마감하고, 승인 대기 중에는 기다린다', async () => {
+  const { workspace, settings, ptys, events, file, dir, signal } = await setup()
+  const tab = workspace.create('claude', settings)
+  const session = workspace.state().tabs[0].sessionId!
+  const integration = path.join(`${file}.sessions`, tab.id)
+  const transcript = path.join(dir, 'claude', 'projects', encodeClaudeProjectDir(dir), `${session}.jsonl`)
+  await fs.mkdir(path.dirname(transcript), { recursive: true })
+  const title = (value: string) => ptys[0].emit(`\x1b]0;${value} Claude Code\x07`)
+  const run = async (answer: string) => {
+    title('✳')
+    const prompt = workspace.beginOutputCapture(tab.id, 'TASK')
+    workspace.submit(tab.id, prompt)
+    const capture = JSON.parse(await fs.readFile(path.join(integration, 'capture.json'), 'utf8'))
+    await fs.writeFile(path.join(integration, 'capture.json'), JSON.stringify({ ...capture, submitted: session }))
+    await signal(tab.id, 'working')
+    const row = (value: object) => JSON.stringify(value) + '\n'
+    await fs.appendFile(transcript, row({ type: 'user', message: { content: prompt } }) + row({ type: 'assistant', message: { content: [{ type: 'text', text: answer }, { type: 'tool_use', id: 't', name: 'Read', input: {} }] } }) + row({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } }) + row({ type: 'last-prompt', lastPrompt: prompt }))
+    title('◐'); title('✳')
+  }
+  await run('FIRST_ANSWER')
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(events.onAgentDone).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(events.onAgentDone).toHaveBeenCalledWith(tab.id)
+  expect(workspace.readAgentOutput(tab.id)).toBe('FIRST_ANSWER')
+  workspace.endOutputCapture(tab.id)
+
+  events.onAgentDone.mockClear()
+  await run('SECOND_ANSWER')
+  await signal(tab.id, 'waiting')
+  await vi.advanceTimersByTimeAsync(20000)
+  expect(events.onAgentDone).not.toHaveBeenCalled()
+  title('◑'); title('✳')
+  await signal(tab.id, 'working')
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(workspace.readAgentOutput(tab.id)).toBe('SECOND_ANSWER')
 })

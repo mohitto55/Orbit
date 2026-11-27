@@ -5,7 +5,7 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { beginOutputCapture, bindCaptureSession, captureCodexResult, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
+import { beginOutputCapture, bindCaptureSession, captureCodexResult, recoverClaudeTurn, submittedClaudeSession, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
 import { messageRoot, readMessageLog, writeMessageScope, type MessageBinding, type MessageScope } from './sessionMessages'
 import { CodexCaptureReader } from './codexCapture'
 import { effortProblem, modelProblem, type AgentOptions } from './agentModel'
@@ -84,6 +84,8 @@ async function findCodexSessionFile(projectDir: string, tabId: string, root = pr
 /** 프롬프트를 보낸 뒤 작업 시작 신호를 기다리는 간격과 Enter 재전송 횟수 */
 const SUBMIT_CHECK_MS = 4000
 const SUBMIT_RETRIES = 3
+/** Claude 제목이 턴 끝으로 바뀐 뒤 Stop 훅 결과를 기다리는 시간 */
+const CLAUDE_STOP_GRACE_MS = 8000
 
 /** 탭 배치·이름·세션 ID·최근 터미널 출력을 저장한다. CLI 대화 본문은 가져오지 않는다. */
 export class TerminalWorkspace {
@@ -106,6 +108,8 @@ export class TerminalWorkspace {
   private codexFiles = new Map<string, { id: string; file: string }>()
   private captures = new Map<string, { since: number; requestId: string; promptHash: string; reader?: CodexCaptureReader }>()
   private readingCaptures = false
+  /** Claude 제목이 턴 끝(✳)으로 바뀐 시각. 다시 일하면 지운다. */
+  private claudeIdleAt = new Map<string, number>()
   /** 보냈지만 에이전트가 받았다는 신호(작업 시작)를 아직 못 본 프롬프트 */
   private pendingSubmits = new Map<string, { at: number; tries: number }>()
 
@@ -128,6 +132,12 @@ export class TerminalWorkspace {
             for (const match of matches) {
               const title = match[1]
               if (tab.kind === 'shell' && !this.commands.has(id) && /^orbit:shell:ready(?::\d+)?$/.test(title)) this.finishActivity(tab)
+              if (tab.kind === 'claude') {
+                // Claude는 일하는 동안 제목 앞에 스피너(◐◑◒◓ 등)를, 턴이 끝나면 ✳를 붙인다. 훅과 무관한 자체 신호다.
+                const glyph = /^(\S)\s/.exec(title)?.[1]
+                if (glyph === '✳') { if (!this.claudeIdleAt.has(id)) this.claudeIdleAt.set(id, Date.now()) }
+                else if (glyph && !/[\p{L}\p{N}]/u.test(glyph)) this.claudeIdleAt.delete(id)
+              }
               if (tab.kind === 'codex') {
                 const prefix = title.match(/\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{1,12})(?:\.\.\.|\s|$)/i)?.[1]
                 if (prefix && prefix !== tab.codexPrefix) { tab.codexPrefix = prefix; this.nextBind = 0; this.save() }
@@ -207,6 +217,7 @@ export class TerminalWorkspace {
         }
       } catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
       this.checkSubmits()
+      this.checkClaudeTurns()
       void this.bindCodex().catch((e: unknown) => this.events.onError?.(`세션 ID 연결 실패: ${String(e)}`))
       void this.readCaptures().catch((e: unknown) => this.events.onError?.(`자동화 응답 확인 실패: ${String(e)}`))
     }, 500)
@@ -292,6 +303,7 @@ export class TerminalWorkspace {
     this.codexFiles.delete(tab.id)
     this.captures.delete(tab.id)
     this.pendingSubmits.delete(tab.id)
+    this.claudeIdleAt.delete(tab.id)
     this.waiting.delete(tab.id)
     this.codexStatusTabs.delete(tab.id)
     this.shellPastes.delete(tab.id)
@@ -357,6 +369,24 @@ export class TerminalWorkspace {
   endOutputCapture(id: string): void { this.captures.delete(id); this.pendingSubmits.delete(id); endOutputCapture(this.integrationDir(id)) }
 
   private acceptSubmit(id: string): void { this.pendingSubmits.delete(id) }
+
+  /**
+   * Claude가 이번 요청을 받은 뒤 제목이 턴 끝(✳)으로 바뀌었는데 Stop 훅 결과가 오지 않으면(claude-code#29881)
+   * 대화 기록의 마지막 답으로 마감한다. 승인·선택을 기다리는 중이면 턴이 끝난 게 아니므로 기다린다.
+   * 정상이라면 Stop 훅이 1~3초 안에 오므로 여유를 둔다.
+   */
+  private checkClaudeTurns(now = Date.now()): void {
+    for (const [id, at] of this.claudeIdleAt) {
+      if (now - at < CLAUDE_STOP_GRACE_MS) continue
+      const tab = this.tabs.get(id)
+      if (!tab || tab.kind !== 'claude' || !this.captures.has(id) || this.waiting.has(id)) continue
+      this.claudeIdleAt.delete(id)
+      const dir = this.integrationDir(id), session = submittedClaudeSession(dir)
+      if (!session || this.readAgentOutput(id) !== undefined) continue
+      const home = tab.launch?.home || tab.accountHome || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+      recoverClaudeTurn(dir, path.join(home, 'projects', encodeClaudeProjectDir(tab.launch?.cwd ?? this.ctx.projectDir), `${session}.jsonl`))
+    }
+  }
 
   private waiting = new Set<string>()
   private setWaiting(id: string, waiting: boolean): void {
@@ -669,6 +699,8 @@ export class TerminalWorkspace {
     const tab = this.tabs.get(id)
     this.manager.submit(id, text, tab?.kind)
     if (tab && tab.kind !== 'shell') this.pendingSubmits.set(id, { at: Date.now(), tries: 0 })
+    // 보내기 전의 턴 끝 제목(시작 화면 등)으로 이번 요청을 마감하지 않는다. 일을 시작한 뒤 다시 ✳가 와야 한다.
+    this.claudeIdleAt.delete(id)
     if (tab) this.setActivity(tab, 'working')
   }
   runCommand(id: string, command: string): void {
