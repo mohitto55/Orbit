@@ -68,6 +68,7 @@ test('새 Codex 스킬을 선택한 위치에 만들고 검색·재열기한다'
   await blurEditor(orbit.page)
   await orbit.page.getByRole('button', { name: '저장', exact: true }).click()
   const file = path.join(orbit.ctx.projectDir, '.codex/skills/new-codex-skill/SKILL.md')
+  await expect(orbit.page.getByRole('button', { name: 'new-codex-skill 프로젝트 · Codex', exact: true })).toBeVisible()
   await expect.poll(async () => (await readMd(file)).content.trim()).toBe('# 새 기준\n\n- [ ] 완료')
   await openSkills(orbit)
   await orbit.page.getByRole('searchbox', { name: '스킬 검색' }).fill('.codex/skills')
