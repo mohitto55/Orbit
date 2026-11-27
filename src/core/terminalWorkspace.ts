@@ -694,7 +694,7 @@ export class TerminalWorkspace {
     this.syncLaunch(tab)
     return this.info(tab)
   }
-  whenReady(id: string): Promise<void> { return this.manager.whenReady(id) }
+  whenReady(id: string, onChoice?: () => void): Promise<void> { return this.manager.whenReady(id, undefined, undefined, onChoice) }
   submit(id: string, text: string): void {
     const tab = this.tabs.get(id)
     this.manager.submit(id, text, tab?.kind)

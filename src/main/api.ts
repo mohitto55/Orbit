@@ -109,7 +109,7 @@ export function createApi(deps: ApiDeps) {
     },
     hasTerminal: (id) => !!terminals?.has(id),
     getTerminal: (id) => terminals?.get(id),
-    whenReady: async (id) => (await terms()).whenReady(id),
+    whenReady: async (id, onChoice) => (await terms()).whenReady(id, onChoice),
     submit: (id, text) => terminals?.submit(id, text),
     setModel: async (id, model) => {
       const c = need(), settings = await ws.readSettings(c), workspace = await terms()

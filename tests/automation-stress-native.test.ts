@@ -182,7 +182,7 @@ it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $
       }
       return info
     }, hasTerminal: (id) => workspace.has(id), getTerminal: (id) => workspace.get(id),
-    whenReady: (id) => workspace.whenReady(id), submit: (id, text) => { stamp(`${id.slice(5, 13)} submit ${text.length}자`); workspace.submit(id, text) }, runCommand: (id, text) => workspace.runCommand(id, text),
+    whenReady: (id, onChoice) => workspace.whenReady(id, onChoice), submit: (id, text) => { stamp(`${id.slice(5, 13)} submit ${text.length}자`); workspace.submit(id, text) }, runCommand: (id, text) => workspace.runCommand(id, text),
     beginOutputCapture: (id, text, schema, messages) => workspace.beginOutputCapture(id, text, schema, messages), readAgentOutput: (id) => workspace.readAgentOutput(id), endOutputCapture: (id) => workspace.endOutputCapture(id),
     syncMessageRun: (id, scope) => workspace.syncMessageRun(id, scope), completeTasks: async () => {}, emit: (st) => stamp(`run ${st.status} ${Object.entries(st.nodes).map(([k, v]) => `${k}:${v.status}${v.message ? `(${v.message})` : ''}`).join(' ')}`)
   })
@@ -199,6 +199,8 @@ it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $
       // 프롬프트는 사람이 안내 창에 답한 뒤에만 보낸다
       expect(at('submit'), events.join('\n')).toBeGreaterThan(at('user answers dialog'))
       expect(events.some((e) => e.includes('입력 준비'))).toBe(true)
+      // 기다리는 이유(확인 창)를 노드에 보여준다
+      expect(events.some((e) => e.includes('확인 창'))).toBe(true)
     }
   } finally {
     await fs.writeFile(path.join(root, 'diagnostics.json'), JSON.stringify({ events, log, runs: runner.list() }, null, 2))

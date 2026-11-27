@@ -243,13 +243,16 @@ export class TerminalManager {
    * 엉뚱한 선택지(예: 업데이트 실행)를 고르게 된다.
    * 신호가 없는 일반 셸만 출력이 잠시 멈추면 준비된 것으로 본다.
    */
-  async whenReady(id: string, quietMs = 1500, maxMs?: number): Promise<void> {
+  async whenReady(id: string, quietMs = 1500, maxMs?: number, onChoice?: () => void): Promise<void> {
     const start = this.now()
+    let toldChoice = false
     for (;;) {
       const t = this.terms.get(id)
       if (!t) throw new Error(`터미널이 닫혔습니다: ${id}`)
       const quiet = this.now() - t.lastData
       const needsSignal = t.info.kind !== 'shell' && t.signals
+      // 선택 창이 떠 있으면 사람이 답해야 한다는 것을 한 번 알린다
+      if (needsSignal && !toldChoice && onChoice && choiceOpen(t.output)) { toldChoice = true; onChoice() }
       if (needsSignal ? t.ready && quiet >= 700 && !choiceOpen(t.output) : t.sawData && quiet >= quietMs) return
       // CLI 시작(MCP 서버 기동 포함)은 느릴 수 있어 신호를 기다릴 때는 더 길게 본다.
       if (this.now() - start > (maxMs ?? (needsSignal ? 120000 : 30000))) {

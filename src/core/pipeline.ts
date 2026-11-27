@@ -1267,7 +1267,8 @@ export interface RunnerDeps {
   createTerminal: (kind: TerminalKind, label: string, session?: string, model?: string, title?: string, accountId?: string) => Promise<TerminalInfo & { reused?: boolean }>
   hasTerminal: (termId: string) => boolean
   getTerminal: (termId: string) => TerminalInfo | undefined
-  whenReady: (termId: string) => Promise<void>
+  /** onChoice: CLI가 폴더 신뢰·설정 같은 선택 창을 띄워 사람의 답을 기다릴 때 */
+  whenReady: (termId: string, onChoice?: () => void) => Promise<void>
   submit: (termId: string, text: string) => void
   runCommand: (termId: string, command: string) => void
   setModel?: (termId: string, model: string) => Promise<void>
@@ -1513,7 +1514,10 @@ export class PipelineRunner {
         // CLI가 입력창을 띄울 때까지 기다린다. 시작 안내 창이 떠 있으면 여기서 멈춰 있는 이유를 보여준다.
         st.message = '터미널에서 CLI가 입력 준비를 마치기를 기다리는 중'
         this.publish(run)
-        await this.deps.whenReady(termId)
+        await this.deps.whenReady(termId, () => {
+          st.message = '터미널에 CLI 확인 창(폴더 신뢰·설정 등)이 떠 있습니다. 터미널에서 답하면 이어서 실행합니다'
+          this.publish(run)
+        })
         delete st.message
       }
       if (run.status !== 'running' || st.status !== 'starting') return
