@@ -69,8 +69,10 @@ export class ProjectWindows {
           if (name === 'createProject') await next.api.createProject(canonical, title)
           else await next.api.openProject(canonical)
           if (this.stopped) throw new Error('앱을 종료하는 중입니다')
+          // 새 폴더는 생성 후 실경로가 생긴다. /var 별칭·Windows 짧은 경로도 같은 실행기를 사용한다.
+          const createdPath = await fs.realpath(canonical)
+          this.projects.set(process.platform === 'win32' ? createdPath.toLowerCase() : createdPath, next)
         } catch (error) { await next.close(); throw error }
-        this.projects.set(key, next)
       }
       if (this.windows.get(id) !== next) { await this.detach(id); this.windows.set(id, next); next.members.add(id) }
       return next.api.currentProject()

@@ -22,9 +22,12 @@ async function fixture() {
 }
 
 it('같은 프로젝트를 여러 창에서 열어도 예약을 한 번만 실행하고 한 창을 닫아도 유지한다', async () => {
-  const f = await fixture(), folder = path.join(f.dir, 'project')
+  const f = await fixture(), parent = path.join(f.dir, 'actual'), alias = path.join(f.dir, 'alias')
+  await fs.mkdir(parent)
+  await fs.symlink(parent, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const folder = path.join(alias, 'project')
   await f.windows.invoke(1, 'createProject', [folder])
-  await Promise.all([f.windows.invoke(2, 'openProject', [folder]), f.windows.invoke(3, 'openProject', [folder])])
+  await Promise.all([f.windows.invoke(2, 'openProject', [path.join(parent, 'project')]), f.windows.invoke(3, 'openProject', [folder])])
   expect(f.windows.all()).toHaveLength(1); expect(f.watch).toHaveBeenCalledTimes(1)
   const graph = await f.windows.invoke(1, 'savePipeline', [{ title: '공유 예약', nodes: [{ id: 'start', kind: 'start', terminal: 'new', text: '' }, { id: 'print', kind: 'print', terminal: 'new', text: '공유 출력' }], edges: [{ from: 'start', to: 'print' }] }]) as Pipeline
   await f.windows.invoke(1, 'savePipelineSchedule', [{ title: '한 번', enabled: true, timing: { kind: 'once', at: new Date(Date.now() + 1000).toISOString() }, request: { pipelineId: graph.id } }])
