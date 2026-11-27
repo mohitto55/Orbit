@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { api, on } from './api'
+import { useState } from 'react'
+import { useAccounts } from './AccountStatus'
+import { api } from './api'
 import { RunDrawer } from './Automation'
 import { AGENT_LABELS, AGENT_PROVIDERS, accountBlock, type AccountView, type AgentAccountInput, type AgentProvider } from '../../core/agentAccounts'
 import { Empty, errorToast, toast } from './ui'
@@ -30,14 +31,8 @@ function AccountEditor({ account, onClose }: { account?: AccountView; onClose: (
 }
 
 export function AgentAccounts({ onTerminal }: { onTerminal: (id: string) => void }) {
-  const [rows, setRows] = useState<AccountView[]>([]), [error, setError] = useState(''), [loading, setLoading] = useState(true)
+  const { rows, error, loading } = useAccounts()
   const [editing, setEditing] = useState<AccountView | 'new'>(), [busy, setBusy] = useState<string>()
-  useEffect(() => {
-    let alive = true
-    const load = () => { void api.listAgentAccounts().then((data) => { if (alive) { setRows(data); setError('') } }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)) }).finally(() => { if (alive) setLoading(false) }) }
-    load(); const off = on('accounts-changed', load), timer = setInterval(load, 10_000)
-    return () => { alive = false; off(); clearInterval(timer) }
-  }, [])
   const act = async (row: AccountView, action: 'refresh' | 'open' | 'remove') => {
     if (busy) return
     if (action === 'remove' && !await api.confirmAction(`“${row.label}” 계정 등록을 해제할까요? CLI 로그인과 세션 파일은 유지합니다.`)) return
@@ -50,13 +45,13 @@ export function AgentAccounts({ onTerminal }: { onTerminal: (id: string) => void
   }
   return <section className="account-list" aria-label="계정과 쿼터">
     <div className="row between"><p className="small muted">이 컴퓨터의 계정 설정 · 그래프와 예약에서 사용할 계정을 각각 선택할 수 있습니다.</p><button className="primary" onClick={() => setEditing('new')}>계정 등록</button></div>
-    <p className="small muted">Codex는 ‘새로고침’과 예약 실행 전에 사용량을 조회합니다. Claude는 Orbit 터미널의 첫 응답 이후 사용량이 표시됩니다. 초기화 시각이 지났거나 오래된 수치는 미확인으로 표시합니다.</p>
+    <p className="small muted">Claude·Codex 사용량을 1분마다 자동으로 조회합니다. 계정 전환은 새 터미널·새 작업에 즉시 적용됩니다. 실행 중인 작업과 계정을 지정해 저장한 예약은 기존 계정을 유지합니다.</p>
     {error && <p role="alert">{error}</p>}
     {loading ? <Empty>계정을 불러오는 중…</Empty> : <div className="schedule-cards">{rows.map((row) => {
       const observation = row.observation, block = accountBlock(row, observation), quotaAt = observation?.quotaCheckedAt ?? observation?.checkedAt
       const fresh = quotaAt && Date.now() - Date.parse(quotaAt) < 15 * 60_000 && Date.parse(quotaAt) <= Date.now() + 60_000
       return <article className="schedule-card account-card" key={row.id} aria-label={row.label}>
-        <div className="row between"><h3>{row.label}</h3><span className="small muted">{AGENT_LABELS[row.provider]}</span></div>
+        <div className="row between"><h3>{row.label}</h3><span className="small muted">{AGENT_LABELS[row.provider]}{row.selected ? ' · 현재 선택' : ''}</span></div>
         <p>{observation?.email ?? (observation?.loggedIn === true ? '로그인됨' : observation?.loggedIn === false ? '로그인 필요' : '로그인 상태 미확인')}{observation?.plan ? ` · ${observation.plan}` : ''}</p>
         <p className="small muted account-path">{row.configDir}</p>
         {observation?.windows.length ? observation.windows.map((window) => {
@@ -65,9 +60,10 @@ export function AgentAccounts({ onTerminal }: { onTerminal: (id: string) => void
           return <div className="account-quota" key={window.id}><div className="row between"><span>{window.label}</span><b>{current ? `잔여 ${remaining.toFixed(0)}%` : '현재 잔여량 미확인'}</b></div>{current && <progress aria-label={`${row.label} ${window.label} 잔여량`} value={remaining} max={100} className={remaining <= row.minimumRemainingPercent ? 'quota-low' : ''} />}<div className="small muted">{window.resetsAt ? `초기화: ${new Date(window.resetsAt).toLocaleString()}` : '초기화 시각 미제공'}{!current ? ` · 마지막 확인 당시 ${remaining.toFixed(0)}%` : ''}</div></div>
         }) : <p className="small muted">사용량 미확인</p>}
         {observation?.message && <p className="small muted">{observation.message}</p>}
+        {observation?.retryAt && <p className="small muted">다시 확인: {new Date(observation.retryAt).toLocaleString()}</p>}
         {block && <p className="small run-status waiting">{block.message}</p>}
         <p className="small muted">계정 확인: {observation ? new Date(observation.checkedAt).toLocaleString() : '아직 조회하지 않음'}{observation?.quotaCheckedAt ? ` · 사용량 확인: ${new Date(observation.quotaCheckedAt).toLocaleString()}` : ''}</p>
-        <div className="row"><button disabled={!!busy} onClick={() => void act(row, 'refresh')}>{busy === row.id ? '처리 중…' : '새로고침'}</button><button onClick={() => setEditing(row)}>계정 설정</button><button disabled={!!busy} onClick={() => void act(row, 'open')}>로그인 / 터미널 열기</button>{!row.builtin && <button className="ghost danger" disabled={!!busy} onClick={() => void act(row, 'remove')}>등록 해제</button>}</div>
+        <div className="row"><button disabled={!!busy || !row.enabled || row.selected} onClick={() => void api.selectAgentAccount(row.provider, row.id).catch(errorToast)}>{row.selected ? '현재 선택' : '이 계정으로 전환'}</button><button disabled={!!busy} onClick={() => void act(row, 'refresh')}>{busy === row.id ? '처리 중…' : '새로고침'}</button><button onClick={() => setEditing(row)}>계정 설정</button><button disabled={!!busy} onClick={() => void act(row, 'open')}>로그인 / 터미널 열기</button>{!row.builtin && <button className="ghost danger" disabled={!!busy || row.selected} onClick={() => void act(row, 'remove')}>등록 해제</button>}</div>
       </article>
     })}</div>}
     {editing && <AccountEditor account={editing === 'new' ? undefined : editing} onClose={() => setEditing(undefined)} />}

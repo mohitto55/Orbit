@@ -349,9 +349,11 @@ function TaskEditor({
   })
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }))
   const badRange = !!f.start && !!f.end && f.start > f.end
-  const canSave = !!f.title.trim() && !!f.type && !!f.horizon && !badRange
+  const [attaching, setAttaching] = useState(false)
+  const canSave = !!f.title.trim() && !!f.type && !!f.horizon && !badRange && !attaching
 
   const save = async () => {
+    if (!canSave) return
     const links = f.links.split(',').map((l) => l.trim()).filter(Boolean)
     const title = f.title.trim()
     try {
@@ -444,7 +446,7 @@ function TaskEditor({
         <input value={f.links} onChange={(e) => set('links', e.target.value)} />
       </div>
       <div className="field">
-        <LiveMarkdownEditor label="세부 내용" value={f.body} onChange={(body) => set('body', body)} documentPath={task?.file ?? inbox?.file} />
+        <LiveMarkdownEditor label="세부 내용" value={f.body} onChange={(body) => set('body', body)} documentPath={task?.file ?? inbox?.file ?? 'tasks/new.md'} onAttachmentBusyChange={setAttaching} />
         <span className="small muted">변경 내용과 완료 조건의 체크는 저장을 누르면 반영됩니다.</span>
       </div>
       <div className="row between">

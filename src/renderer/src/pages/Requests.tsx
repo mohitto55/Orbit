@@ -157,6 +157,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
   const [log, setLog] = useState('')
   const [view, setView] = useState<'diff' | 'full' | 'edit'>('diff')
   const [edited, setEdited] = useState('')
+  const [attaching, setAttaching] = useState(false)
   const [summary, setSummary] = useState(`변경 요청 반영: ${requestTitle(request).slice(0, 60)}`)
   const [size, setSize] = useState<'minor' | 'major'>('minor')
   const logRef = useRef<HTMLPreElement>(null)
@@ -193,6 +194,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
   }
 
   const saveEdit = async () => {
+    if (attaching) return
     try {
       show(await api.requestSaveDraft(request.id, edited))
       toast('다듬은 수정안을 요청 파일에 저장했습니다')
@@ -212,6 +214,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
   }
 
   const apply = async () => {
+    if (attaching) return
     try {
       const r = await api.saveDomain(request.domain, { content: edited }, { size, summary, source: 'review' })
       await api.requestResolve(request.id, 'done', 'AI 수정안 적용')
@@ -287,12 +290,12 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
                 </button>
               </div>
             </div>
-            {view === 'edit' ? <LiveMarkdownEditor value={edited} onChange={setEdited} documentPath={draft.documentPath} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
+            {view === 'edit' ? <LiveMarkdownEditor value={edited} onChange={setEdited} documentPath={draft.documentPath} onAttachmentBusyChange={setAttaching} /> : <DiffTable diff={view === 'full' ? draft.fullDiff : draft.diff} onExpand={() => setView('full')} />}
           </div>
           {dirty && (
             <div className="row">
               <span className="small muted grow">비교는 저장된 수정안 기준입니다. 다듬은 내용을 저장하면 비교도 갱신됩니다.</span>
-              <button className="small" onClick={saveEdit}>
+              <button className="small" onClick={saveEdit} disabled={attaching}>
                 다듬은 내용 저장
               </button>
             </div>
@@ -303,7 +306,7 @@ function DraftPanel({ request, onChanged, onApplied }: { request: Request; onCha
               <option value="major">큰 변경</option>
             </select>
             <input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="변경 요약" />
-            <button className="primary" onClick={apply} disabled={!summary.trim()}>
+            <button className="primary" onClick={apply} disabled={!summary.trim() || attaching}>
               적용
             </button>
             <button onClick={make} disabled={drafting}>

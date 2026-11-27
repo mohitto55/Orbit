@@ -69,6 +69,7 @@ export default function Start({ onOpen }: { onOpen: (p: Project) => void }) {
             프로젝트 폴더 열기
           </button>
           <button disabled={busy || removing} onClick={() => create()}>새 프로젝트 만들기</button>
+          <button onClick={() => void api.newWindow().catch(errorToast)}>새 창</button>
         </div>
         {busy && <p role="status">프로젝트를 여는 중…</p>}
         {projects.length > 0 && (

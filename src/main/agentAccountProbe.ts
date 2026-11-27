@@ -2,6 +2,7 @@ import spawn from 'cross-spawn'
 import { execFile, type ChildProcess } from 'child_process'
 import { createInterface } from 'readline'
 import { accountEnvironment, type AccountObservation, type AgentAccount, type QuotaWindow } from '../core/agentAccounts'
+import { queryClaudeUsage, UsageQueryError, type UsageFetch } from './claudeUsage'
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const shortText = (value: unknown) => typeof value === 'string' ? value.slice(0, 200) : undefined
@@ -41,7 +42,7 @@ export function parseCodexAccount(accountValue: unknown, quotaValue: unknown, ch
 
 export function parseClaudeAccount(value: unknown, checkedAt = new Date().toISOString()): AccountObservation {
   const data = object(value)
-  return { checkedAt, loggedIn: typeof data.loggedIn === 'boolean' ? data.loggedIn : null, email: shortText(data.email), plan: shortText(data.subscriptionType), authMethod: shortText(data.authMethod), windows: [], message: '사용량은 이 계정으로 연 Orbit Claude 터미널에서 응답한 뒤 갱신됩니다' }
+  return { checkedAt, loggedIn: typeof data.loggedIn === 'boolean' ? data.loggedIn : null, email: shortText(data.email), plan: shortText(data.subscriptionType), authMethod: shortText(data.authMethod), windows: [], message: '이 인증 방식에서 조회 가능한 사용량이 없습니다' }
 }
 
 function terminate(child: ChildProcess): void {
@@ -52,8 +53,8 @@ function terminate(child: ChildProcess): void {
 }
 
 export interface AccountProbeCommand { file: string; args: string[] }
-/** CLI의 공개 계정 인터페이스만 사용한다. 자격 증명 파일과 모델 호출에는 접근하지 않는다. */
-export async function probeAgentAccount(account: AgentAccount, command?: AccountProbeCommand): Promise<AccountObservation> {
+/** CLI로 로그인 상태를 읽고 제공자의 사용량을 조회한다. 모델 응답은 생성하지 않는다. */
+export async function probeAgentAccount(account: AgentAccount, command?: AccountProbeCommand, fetcher: UsageFetch = fetch): Promise<AccountObservation> {
   const invocation = command ?? { file: account.provider, args: account.provider === 'codex' ? ['app-server', '--listen', 'stdio://'] : ['auth', 'status', '--json'] }
   const child = spawn(invocation.file, invocation.args, { env: accountEnvironment(account, process.env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   // 일부 CLI는 종료 중 stderr를 쓰므로 항상 소비하되 계정 응답·토큰을 로그에 남기지 않는다.
@@ -68,7 +69,13 @@ export async function probeAgentAccount(account: AgentAccount, command?: Account
         child.once('error', () => { clearTimeout(timer); reject(new Error('Claude CLI를 실행할 수 없습니다')) })
         child.once('close', () => { clearTimeout(timer); resolve(data) })
       })
-      try { return parseClaudeAccount(JSON.parse(raw), checkedAt) } catch { throw new Error('Claude 로그인 상태를 읽을 수 없습니다. CLI 버전을 확인하세요') }
+      let observation: AccountObservation
+      try { observation = parseClaudeAccount(JSON.parse(raw), checkedAt) } catch { throw new Error('Claude 로그인 상태를 읽을 수 없습니다. CLI 버전을 확인하세요') }
+      if (observation.loggedIn && observation.authMethod !== 'api_key') {
+        try { observation.windows = await queryClaudeUsage(account, fetcher); observation.quotaCheckedAt = new Date().toISOString(); observation.message = observation.windows.length ? undefined : '이 계정에서 조회 가능한 사용량이 없습니다' }
+        catch (error) { observation.message = error instanceof UsageQueryError ? error.message : 'Claude 사용량을 조회할 수 없습니다'; if (error instanceof UsageQueryError) observation.retryAt = error.retryAt }
+      }
+      return observation
     } finally { terminate(child) }
   }
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()

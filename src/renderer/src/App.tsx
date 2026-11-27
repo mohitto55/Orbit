@@ -16,8 +16,10 @@ import UpdateButton from './UpdatePanel'
 import { Logo } from './Logo'
 import Automation from './pages/Automation'
 import { AutomationProvider } from './Automation'
+import { AccountsProvider, AccountStatus } from './AccountStatus'
+import { AgentAccounts } from './AgentAccounts'
 
-export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'automation' | 'settings'
+export type Page = 'dashboard' | 'domains' | 'reviews' | 'tasks' | 'verification' | 'drift' | 'knowledge' | 'graph' | 'terminal' | 'automation' | 'accounts' | 'settings'
 
 const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData) => number }[] = [
   { id: 'dashboard', label: '대시보드', group: '작업' },
@@ -30,6 +32,7 @@ const NAV: { id: Page; label: string; group?: string; badge?: (d: DashboardData)
   { id: 'graph', label: '관계도' },
   { id: 'automation', label: '자동화', group: '도구' },
   { id: 'terminal', label: '터미널' },
+  { id: 'accounts', label: '계정·사용량' },
   { id: 'settings', label: '설정' }
 ]
 
@@ -41,6 +44,10 @@ export interface PageProps {
 }
 
 export default function App() {
+  return <AccountsProvider><Application /></AccountsProvider>
+}
+
+function Application() {
   const [project, setProject] = useState<Project | null>(null)
   const [page, setPage] = useState<Page>(() => {
     const saved = localStorage.getItem('orbit:last-page')
@@ -69,15 +76,19 @@ export default function App() {
     const offTests = on('test-done', () => setRefreshKey((k) => k + 1))
     const offCapture = on('quick-capture', () => setCapture(true))
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyN') {
+        e.preventDefault(); e.stopPropagation()
+        if (!e.repeat) void api.newWindow().catch(errorToast)
+      }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'Space') setCapture(true)
     }
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       offFiles()
       offError()
       offTests()
       offCapture()
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [])
 
@@ -126,11 +137,12 @@ export default function App() {
           })}
         </nav>
         <div className="side-foot">
+          <AccountStatus onManage={() => go('accounts')} />
           <UpdateButton />
           <button className="ghost" onClick={() => setCapture(true)} title="Ctrl+Shift+Space">
             + 할 일 추가
           </button>
-          <button
+          <div className="row"><button className="ghost" onClick={() => void api.newWindow().catch(errorToast)} title="Ctrl+Shift+N">새 창</button><button
             className="ghost"
             onClick={async () => {
               await api.closeProject()
@@ -139,7 +151,7 @@ export default function App() {
             }}
           >
             프로젝트 닫기
-          </button>
+          </button></div>
         </div>
       </aside>
       <main className="main" key={project.projectDir}>
@@ -153,6 +165,7 @@ export default function App() {
         <PageView visible={page === 'knowledge'}><KnowledgePage {...props} /></PageView>
         <PageView visible={page === 'graph'}><GraphPage {...props} /></PageView>
         <PageView visible={page === 'settings'}><Settings {...props} onSaved={() => api.currentProject().then(setProject)} /></PageView>
+        <PageView visible={page === 'accounts'}><div className="page"><h2>계정·사용량</h2><AgentAccounts onTerminal={(id) => go('terminal', id)} /></div></PageView>
         <PageView visible={page === 'automation'}><Automation {...props} focus={page === 'automation' ? focus : undefined} /></PageView>
         <Terminals visible={page === 'terminal'} focus={page === 'terminal' ? focus : undefined} onGraphs={() => go('automation', 'graphs')} />
         </AutomationProvider>

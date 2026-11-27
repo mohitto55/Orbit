@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
+import os from 'os'
 import { createHash } from 'crypto'
 import * as ws from '../core/workspace'
 import * as dm from '../core/domain'
@@ -30,6 +31,8 @@ import { PipelineHistory, prepareExecutions, type PipelineRunRequest, type RunFi
 import { PipelineScheduler, type ScheduleTrigger } from '../core/pipelineScheduler'
 import type { ScheduleInput } from '../core/automationSchedule'
 import { AgentAccountStore } from './agentAccountStore'
+import { importDocumentImages, type DocumentImageInput } from './documentImages'
+import { SKILL_LOCATIONS } from '../core/skillLocations'
 import { AGENT_PROVIDERS, defaultAccountId, type AccountObservation, type AgentAccount, type AgentAccountInput, type AgentProvider } from '../core/agentAccounts'
 
 export interface ApiDeps {
@@ -39,6 +42,7 @@ export interface ApiDeps {
   onProjectOpened: (ctx: ws.Ctx) => void
   scheduleNow?: () => number
   accountProbe?: (account: AgentAccount) => Promise<AccountObservation>
+  accounts?: AgentAccountStore
 }
 
 export function createApi(deps: ApiDeps) {
@@ -54,7 +58,7 @@ export function createApi(deps: ApiDeps) {
   let history: PipelineHistory | null = null
   let scheduler: PipelineScheduler | null = null
   let projectRevision = 0
-  const accounts = new AgentAccountStore(path.join(path.dirname(deps.recentFile), 'agent-accounts'), () => deps.send('accounts-changed', null), deps.accountProbe)
+  const accounts = deps.accounts ?? new AgentAccountStore(path.join(path.dirname(deps.recentFile), 'agent-accounts'), () => deps.send('accounts-changed', null), deps.accountProbe)
 
   /** node-pty는 필요할 때 불러온다. 이 OS용 바이너리가 없으면 터미널만 쓸 수 없고 나머지는 동작한다. */
   async function terms(): Promise<TerminalWorkspace> {
@@ -247,7 +251,7 @@ export function createApi(deps: ApiDeps) {
   async function prepareGraphRequest(request: PipelineRunRequest) {
     const c = need()
     if (request.accountIds !== undefined && (!request.accountIds || typeof request.accountIds !== 'object' || Array.isArray(request.accountIds) || Object.entries(request.accountIds).some(([kind, id]) => !AGENT_PROVIDERS.includes(kind as AgentProvider) || typeof id !== 'string' || !id))) throw new Error('실행 계정을 다시 선택하세요')
-    const accountIds = { claude: defaultAccountId('claude'), codex: defaultAccountId('codex'), ...request.accountIds }
+    const accountIds = { ...await accounts.selection(), ...request.accountIds }
     const library = await pl.listPipelines(c), graph = library.find((p) => p.id === request.pipelineId)
     if (!graph) throw new Error('작업 그래프를 찾을 수 없습니다')
     if (graph.template) throw new Error('함수는 작업 그래프에서 호출하세요')
@@ -292,6 +296,7 @@ export function createApi(deps: ApiDeps) {
   }
 
   return {
+    importDocumentImages: (files: DocumentImageInput[], document: string) => importDocumentImages(need(), files, document, SKILL_LOCATIONS.map((location) => path.join(os.homedir(), `.${location}`, 'skills'))),
     // Workspace
     async recentProjects() {
       const out: string[] = []
@@ -599,12 +604,16 @@ export function createApi(deps: ApiDeps) {
     graph: () => kg.buildGraph(need()),
 
     // 연동: 내장 터미널 (IN-F09)
-    async termCreate(kind: TerminalKind, cols?: number, rows?: number) {
+    async termCreate(kind: TerminalKind, cols?: number, rows?: number, accountId?: string) {
       const c = need()
+      const account = kind !== 'shell' ? await accounts.resolve(kind, accountId) : undefined
+      if (account && !account.enabled) throw new Error('사용 중지된 계정입니다. 다른 계정을 선택하세요')
       const settings = await ws.readSettings(c)
       const manager = await terms()
       if (ctx !== c) throw new Error('프로젝트가 변경되었습니다')
-      return manager.create(kind, settings, cols, rows)
+      const info = manager.create(kind, settings, cols, rows, account ? { accountId: account.id, accountHome: account.builtin ? undefined : account.configDir } : {})
+      deps.send('term-created', info)
+      return info
     },
     async termState() {
       return (await terms()).state()
@@ -653,6 +662,9 @@ export function createApi(deps: ApiDeps) {
 
     // 연동: 터미널 작업 그래프 (IN-F11)
     listAgentAccounts: () => accounts.list(),
+    recheckAccountSchedules: () => scheduler?.recheckBlocked(),
+    selectAgentAccount: (provider: AgentProvider, id: string) => accountUpdated(accounts.select(provider, id)),
+    refreshAgentAccounts: (force = false) => force ? accountUpdated(accounts.refreshAll(true)) : accounts.refreshAll(false),
     saveAgentAccount: (input: AgentAccountInput) => accountUpdated(accounts.save(input)),
     removeAgentAccount: (id: string) => accountUpdated(accounts.remove(id)),
     refreshAgentAccount: (id: string) => accountUpdated(accounts.refresh(id)),

@@ -8,24 +8,29 @@ import { readMd } from '../../src/core/md'
 
 export type Orbit = { app: ElectronApplication; page: Page; ctx: Ctx; directory: string; isolatedHome: string }
 
-export const test = base.extend<{ orbit: Orbit }>({
-  orbit: async ({}, use, testInfo) => {
+export const test = base.extend<{ orbit: Orbit; accountState: unknown }>({
+  accountState: [undefined, { option: true }],
+  orbit: async ({ accountState }, use, testInfo) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'orbit-ui-'))
     const profile = path.join(directory, 'profile')
     const isolatedHome = path.join(directory, 'home')
     await fs.mkdir(profile)
     await fs.mkdir(isolatedHome)
+    if (accountState) { await fs.mkdir(path.join(profile, 'agent-accounts')); await fs.writeFile(path.join(profile, 'agent-accounts/accounts.json'), JSON.stringify(accountState)) }
     const ctx = await createProject(path.join(directory, 'project'), 'Markdown UI QA')
     const bootstrap = path.join(directory, 'launch.cjs')
     // Only the test process receives this profile. Launch the production entry point,
     // preload, renderer and IPC without exposing a test API in the shipped app.
     await fs.writeFile(bootstrap, `const { app } = require('electron');\napp.setPath('appData', ${JSON.stringify(profile)});\napp.setPath('userData', ${JSON.stringify(profile)});\napp.setPath('home', ${JSON.stringify(isolatedHome)});\nrequire(${JSON.stringify(path.resolve('out/main/index.js'))});\n`)
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE' && entry[0] !== 'ELECTRON_RENDERER_URL'))
-    const app = await _electron.launch({ args: [bootstrap, '--no-sandbox'], env: { ...env, HOME: isolatedHome, USERPROFILE: isolatedHome } })
+    const app = await _electron.launch({ args: [bootstrap, '--no-sandbox'], env: { ...env, HOME: isolatedHome, USERPROFILE: isolatedHome, CODEX_HOME: path.join(isolatedHome, '.codex'), CLAUDE_CONFIG_DIR: path.join(isolatedHome, '.claude'), OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_AUTH_TOKEN: '' } })
     const page = await app.firstWindow()
     const errors: string[] = []
-    page.on('pageerror', (error) => errors.push(error.stack ?? error.message))
-    page.on('console', (message) => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text()) })
+    const captureErrors = (window: Page) => {
+      window.on('pageerror', (error) => errors.push(error.stack ?? error.message))
+      window.on('console', (message) => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text()) })
+    }
+    captureErrors(page); app.on('window', captureErrors)
     await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true })
     try {
       await page.evaluate((dir) => window.orbit.invoke('openProject', dir), ctx.projectDir)

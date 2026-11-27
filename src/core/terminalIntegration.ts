@@ -39,11 +39,13 @@ function matchesRequest(text, capture) {
   return (!marker || marker[1] === capture.requestId) && promptHash(text) === capture.promptHash;
 }
 function matchesClaudeRequest(text, capture) {
-  if (matchesRequest(text, capture)) return true;
+  // Claude는 붙여넣은 탭을 공백 4칸으로 바꾼다. 원문과 그 변형만 허용한다.
+  const matches = value => matchesRequest(value, capture) || (capture.claudePromptHash && matchesRequest(value, { ...capture, promptHash: capture.claudePromptHash }));
+  if (matches(text)) return true;
   if (typeof text !== 'string') return false;
   // Claude의 긴 붙여넣기 포장만 벗긴다. 본문·요청 ID 검증과 원문 안의 태그는 유지한다.
   const pasted = /^\s*<pasted_content id="([\w-]+)">\r?\n([\s\S]*)\r?\n<\/pasted_content id="\1">\s*$/.exec(text);
-  return !!pasted && matchesRequest(pasted[2], capture);
+  return !!pasted && matches(pasted[2]);
 }
 function captureRequest() {
   try {
@@ -381,8 +383,9 @@ export function beginOutputCapture(dir: string, prompt: string, sessionId?: stri
   endOutputCapture(dir)
   for (const signal of ['working', 'done', 'idle'] as const) rmSync(signalFile(dir, signal), { force: true })
   const promptHash = capturePromptHash(prompt)
+  const claudePromptHash = prompt.includes('\t') ? capturePromptHash(prompt.replace(/\t/g, '    ')) : undefined
   const requestId = randomUUID()
-  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}), ...(messages ? { messages } : {}) }))
+  writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, claudePromptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}), ...(messages ? { messages } : {}) }))
   return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
 }
 export function readAgentError(dir: string): string | undefined {

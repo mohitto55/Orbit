@@ -33,8 +33,9 @@ export interface AccountObservation {
   windows: QuotaWindow[]
   ordinaryUsageAllowed?: boolean
   message?: string
+  retryAt?: string
 }
-export interface AccountView extends AgentAccount { observation?: AccountObservation }
+export interface AccountView extends AgentAccount { observation?: AccountObservation; selected?: boolean }
 export interface AccountBlock { message: string; retryAt?: string }
 export const defaultAccountId = (provider: AgentProvider) => `default-${provider}`
 

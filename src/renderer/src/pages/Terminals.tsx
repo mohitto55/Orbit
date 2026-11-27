@@ -9,6 +9,7 @@ import type { TerminalGroup, TerminalLayout, TerminalOrderPosition } from '../..
 import { terminalFilePastes } from '../../../core/terminalFiles'
 import { AgentOptionsFields } from '../AgentOptionsFields'
 import type { AgentOptions } from '../../../core/agentModel'
+import { useAccounts, remainingQuota } from '../AccountStatus'
 
 interface Output { id: string; data: string; sequence: number }
 type Editing = { kind: 'tab'; id: string } | { kind: 'new-group' } | { kind: 'group'; id: string }
@@ -57,6 +58,8 @@ export default function Terminals({ visible, focus, onGraphs }: { visible: boole
   const shownTabs = tabs.filter((tab) => activeGroup === 'all' || (activeGroup === 'ungrouped' ? !tab.groupId : tab.groupId === activeGroup))
   const selectedGroup = groups.find((g) => g.id === activeGroup)
   const activeTab = tabs.find((tab) => tab.id === active)
+  const { rows: accounts } = useAccounts()
+  const activeAccount = accounts.find((row) => row.id === activeTab?.accountId)
   const canDropFiles = visible && view === 'terms' && !busy && !editing && !configuring && !!activeTab && activeTab.exited === undefined
 
   useEffect(() => {
@@ -244,6 +247,17 @@ export default function Terminals({ visible, focus, onGraphs }: { visible: boole
       setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, mergeActivity(snapshot, infos.get(snapshot.id))])
       setActive((a) => a ?? snapshot.id)
     })
+    const offLayout = on('term-layout', (layout: TerminalLayout) => {
+      for (const [id, x] of xterms) if (!layout.tabs.some((tab) => tab.id === id)) { x.term.dispose(); x.host.remove(); xterms.delete(id); snapshots.delete(id); pending.delete(id) }
+      applyLayout(layout)
+    })
+    const offRestart = on('term-restarted', (snapshot: TerminalSnapshot) => {
+      const old = xterms.get(snapshot.id), display = old?.host.style.display
+      old?.term.dispose(); old?.host.remove(); xterms.delete(snapshot.id)
+      snapshots.delete(snapshot.id); pending.delete(snapshot.id); remember(snapshot)
+      if (old) { attach(snapshot); const current = xterms.get(snapshot.id); if (current) current.host.style.display = display ?? 'none'; fitTab(snapshot.id) }
+      setTabs((all) => all.map((tab) => tab.id === snapshot.id ? mergeActivity(snapshot, tab) : tab))
+    })
     void api.termState().then((state) => {
       if (!alive) return
       for (const tab of state.tabs) remember(tab)
@@ -261,7 +275,7 @@ export default function Terminals({ visible, focus, onGraphs }: { visible: boole
     return () => {
       alive = false
       mounted.current = false
-      offData(); offExit(); offError(); offInfo(); offCreated()
+      offData(); offExit(); offError(); offInfo(); offCreated(); offLayout(); offRestart()
       query.removeEventListener('change', onTheme)
       for (const x of xterms.values()) { x.term.dispose(); x.host.remove() }
       xterms.clear(); pending.clear(); snapshots.clear()
@@ -341,7 +355,7 @@ export default function Terminals({ visible, focus, onGraphs }: { visible: boole
       const snapshot = await api.termCreate(kind)
       if (!mounted.current) return
       remember(snapshot)
-      setTabs((all) => [...all, snapshot])
+      setTabs((all) => all.some((tab) => tab.id === snapshot.id) ? all : [...all, snapshot])
       setActive(snapshot.id)
     } catch (e) { errorToast(e) }
     finally { if (mounted.current) setOpening(false) }
@@ -446,6 +460,7 @@ export default function Terminals({ visible, focus, onGraphs }: { visible: boole
         </div>}
       </div>
       <div className="term-group-tools">
+        {activeAccount && <span className="small" title={activeAccount.configDir}>현재 세션: {activeAccount.observation?.email ?? activeAccount.label} · {remainingQuota(activeAccount)}</span>}
         <span className="small muted">탭·그룹을 끌어 정리하세요. 사진·파일은 아래 터미널에 놓아 추가할 수 있습니다.</span>
         {activeTab && activeTab.kind !== 'shell' && <button disabled={busy} aria-label="세션 모델·Effort 설정" onClick={() => setConfiguring({ id: activeTab.id, title: activeTab.title, kind: activeTab.kind as 'claude' | 'codex', value: { model: activeTab.model, effort: activeTab.effort } })}>
           Model: {activeTab.model ?? '기본값'} · Effort: {activeTab.effort ?? '기본값'}

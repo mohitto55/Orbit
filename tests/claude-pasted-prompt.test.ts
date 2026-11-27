@@ -8,6 +8,24 @@ import { tempDir } from './helpers'
 const sessionId = '11111111-2222-3333-4444-555555555555'
 const pasted = (text: string) => `\n\n<pasted_content id="595f">\n${text}\n</pasted_content id="595f">\n`
 
+it.each([false, true])('탭이 공백 네 칸으로 변환된 Claude 요청도 본문·요청 ID·세션을 검증한다 (포장: %s)', async (wrapped) => {
+  const dir = await tempDir('orbit-claude-tabs-'), integration = prepareTerminalIntegration(dir, 'claude', dir)
+  const prompt = '- 상위\n\t- 하위\n\t\t- 손자\n\n첫 줄\n둘째 줄'
+  const previous = beginOutputCapture(dir, prompt, sessionId), current = beginOutputCapture(dir, prompt, sessionId)
+  expect(current.startsWith(prompt)).toBe(true)
+  const pack = (text: string) => wrapped ? pasted(text) : text
+  const send = (action: string, event: object) => execFileSync(process.execPath, [integration.env.ORBIT_BRIDGE, action], { env: { ...process.env, ...integration.env }, input: JSON.stringify(event) })
+  const stop = { hook_event_name: 'Stop', session_id: sessionId, last_assistant_message: '완료' }
+  for (const wrong of [previous.replace(/\t/g, '    '), current.replace(/\t/g, '  '), current.replace(/\t/g, '    ').replace('하위', '다른 본문')]) {
+    send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: pack(wrong) })
+    send('done', stop); expect(readAgentOutput(dir)).toBeUndefined()
+  }
+  send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: 'other', prompt: pack(current.replace(/\t/g, '    ')) })
+  send('done', stop); expect(readAgentOutput(dir)).toBeUndefined()
+  send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: pack(current.replace(/\t/g, '    ')) })
+  send('done', stop); expect(readAgentOutput(dir)).toBe('완료')
+})
+
 it.each(['\n', '\r\n'])('Claude의 긴 붙여넣기 입력(%j)은 요청 본문·ID·세션이 일치할 때만 완료한다', async (newline) => {
   const dir = await tempDir('orbit-claude-paste-'), integration = prepareTerminalIntegration(dir, 'claude', dir)
   const prompt = '할 일 사전 검수·구현…\n' + '요구사항과 기존 검수 결과\n'.repeat(30000)

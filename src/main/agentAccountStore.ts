@@ -10,6 +10,7 @@ export class AgentAccountStore {
   readonly quotaDir: string
   private saved: AgentAccount[] = []
   private observations: Record<string, AccountObservation> = {}
+  private selected: AccountSelection = {}
   private loading?: Promise<void>
   private queue: Promise<unknown> = Promise.resolve()
   private refreshing = new Map<string, Promise<AccountView>>()
@@ -22,7 +23,7 @@ export class AgentAccountStore {
   private load(): Promise<void> {
     return this.loading ??= (async () => {
       try {
-        const data: { version?: unknown; accounts?: AgentAccount[]; observations?: Record<string, AccountObservation> } = JSON.parse(await fs.readFile(path.join(this.root, 'accounts.json'), 'utf8'))
+        const data: { version?: unknown; accounts?: AgentAccount[]; observations?: Record<string, AccountObservation>; selected?: AccountSelection } = JSON.parse(await fs.readFile(path.join(this.root, 'accounts.json'), 'utf8'))
         if (data.version !== 1 || !Array.isArray(data.accounts)) throw new Error('계정 설정 파일 형식을 확인하세요')
         const ids = new Set<string>()
         for (const account of data.accounts) {
@@ -32,6 +33,7 @@ export class AgentAccountStore {
         if (data.observations !== undefined && (!data.observations || typeof data.observations !== 'object' || Array.isArray(data.observations) || Object.values(data.observations).some((item) => !item || !Number.isFinite(Date.parse(item.checkedAt)) || ![true, false, null].includes(item.loggedIn) || !Array.isArray(item.windows) || item.windows.some((window) => !window || typeof window.id !== 'string' || typeof window.label !== 'string' || !Number.isFinite(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100)))) throw new Error('저장된 계정 사용량 형식을 확인하세요')
         this.saved = data.accounts
         this.observations = data.observations ?? {}
+        this.selected = Object.fromEntries(AGENT_PROVIDERS.flatMap((kind) => typeof data.selected?.[kind] === 'string' ? [[kind, data.selected[kind]]] : []))
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     })()
   }
@@ -49,7 +51,7 @@ export class AgentAccountStore {
   private async persist(): Promise<void> {
     await fs.mkdir(this.root, { recursive: true })
     const file = path.join(this.root, 'accounts.json'), temp = `${file}.${randomUUID()}.tmp`
-    try { await fs.writeFile(temp, JSON.stringify({ version: 1, accounts: this.saved, observations: this.observations })); await fs.rename(temp, file) }
+    try { await fs.writeFile(temp, JSON.stringify({ version: 1, accounts: this.saved, observations: this.observations, selected: this.selected })); await fs.rename(temp, file) }
     finally { await fs.rm(temp, { force: true }) }
     this.changed()
   }
@@ -70,7 +72,7 @@ export class AgentAccountStore {
         }
       } catch { /* 아직 CLI 사용량이 전달되지 않았다. */ }
     }
-    return structuredClone({ ...account, observation })
+    return structuredClone({ ...account, observation, selected: account.id === (this.selected[account.provider] ?? defaultAccountId(account.provider)) })
   }
 
   async list(): Promise<AccountView[]> {
@@ -78,8 +80,31 @@ export class AgentAccountStore {
     return Promise.all(this.accounts().map((account) => this.view(account)))
   }
 
-  async resolve(provider: AgentProvider, id = defaultAccountId(provider)): Promise<AgentAccount> {
+  async selection(): Promise<AccountSelection> { await this.load(); await this.queue; return { claude: defaultAccountId('claude'), codex: defaultAccountId('codex'), ...this.selected } }
+
+  select(provider: AgentProvider, id: string): Promise<void> {
+    return this.serial(async () => {
+      const account = this.accounts().find((row) => row.id === id && row.provider === provider)
+      if (!account || !account.enabled) throw new Error('사용 가능한 계정을 선택하세요')
+      const previous = this.selected; this.selected = { ...previous, [provider]: id }
+      try { await this.persist() } catch (error) { this.selected = previous; throw error }
+    })
+  }
+
+  async refreshAll(force = false): Promise<AccountView[]> {
+    const rows = await this.list()
+    await Promise.all(AGENT_PROVIDERS.map(async (provider) => {
+      for (const account of rows.filter((row) => row.provider === provider && row.enabled)) {
+        if (Date.parse(account.observation?.retryAt ?? '') > Date.now()) continue
+        if (force || !account.observation || Date.now() - Date.parse(account.observation.checkedAt) >= 60_000) await this.refresh(account.id)
+      }
+    }))
+    return this.list()
+  }
+
+  async resolve(provider: AgentProvider, id?: string): Promise<AgentAccount> {
     await this.load(); await this.queue
+    id ??= this.selected[provider] ?? defaultAccountId(provider)
     const account = this.accounts().find((row) => row.id === id)
     if (!account || account.provider !== provider) throw new Error(`${AGENT_LABELS[provider]} 계정을 다시 선택하세요`)
     return structuredClone(account)
@@ -107,6 +132,7 @@ export class AgentAccountStore {
     return this.serial(async () => {
       const account = this.accounts().find((row) => row.id === id)
       if (!account || account.builtin) throw new Error('기본 계정은 등록 해제할 수 없습니다. 사용을 중지할 수 있습니다')
+      if (this.selected[account.provider] === id) throw new Error('다른 계정으로 전환한 뒤 등록을 해제하세요')
       const old = this.saved; this.saved = this.saved.filter((row) => row.id !== id)
       try { await this.persist() } catch (error) { this.saved = old; throw error }
       // CLI 자격 증명과 세션 폴더는 계정 등록 해제로 지우지 않는다.
@@ -120,6 +146,7 @@ export class AgentAccountStore {
       await this.load(); await this.queue
       const account = this.accounts().find((row) => row.id === id)
       if (!account) throw new Error('계정을 찾을 수 없습니다')
+      if (Date.parse(this.observations[id]?.retryAt ?? '') > Date.now()) return this.view(account)
       let observation: AccountObservation
       try { observation = await this.probe(account) }
       catch (error) { observation = { ...(this.observations[id] ?? { loggedIn: null, windows: [] }), checkedAt: new Date().toISOString(), message: error instanceof Error ? error.message : '계정 상태를 조회할 수 없습니다' } }
@@ -127,7 +154,7 @@ export class AgentAccountStore {
         if (!this.accounts().some((row) => row.id === id)) return
         const previous = this.observations[id]
         const identityChanged = !!previous?.email && previous.email !== observation.email && observation.loggedIn === true
-        if (account.provider === 'claude') {
+        if (account.provider === 'claude' && !observation.quotaCheckedAt) {
           observation.quotaCheckedAt = identityChanged ? observation.checkedAt : previous?.quotaCheckedAt
           observation.windows = identityChanged ? [] : previous?.windows ?? []
         } else if (!identityChanged && !observation.quotaCheckedAt && previous?.quotaCheckedAt) {
@@ -147,7 +174,7 @@ export class AgentAccountStore {
     for (const provider of [...new Set(providers)]) {
       const account = await this.resolve(provider, selection[provider])
       let view = await this.view(account)
-      if (refresh && account.provider === 'codex' && (!view.observation || Date.now() - Date.parse(view.observation.checkedAt) > 60_000)) view = await this.refresh(account.id)
+      if (refresh && (!view.observation || Date.now() - Date.parse(view.observation.checkedAt) > 60_000)) view = await this.refresh(account.id)
       const block = accountBlock(view, view.observation)
       if (block) return block
     }

@@ -67,6 +67,7 @@ export default function KnowledgePage({ refreshKey }: PageProps) {
 
 function Editor({ draft, setDraft, onSave, items }: { draft: Draft; setDraft: (d: Draft) => void; onSave: () => void; items: Knowledge[] }) {
   const [local, setLocal] = useState(draft)
+  const [attaching, setAttaching] = useState(false)
   useEffect(() => setLocal(draft), [draft])
   const set = (p: Partial<Draft>) => {
     const next = { ...local, ...p }
@@ -115,9 +116,9 @@ function Editor({ draft, setDraft, onSave, items }: { draft: Draft; setDraft: (d
       </div>
       {current?.supersededBy && <div className="banner">이 결정은 {current.supersededBy}로 대체되었습니다</div>}
       {current?.sources.length ? <div className="small muted">근거: {current.sources.join(', ')}</div> : null}
-      <LiveMarkdownEditor label="본문" value={local.content} onChange={(v) => set({ content: v })} documentPath={current?.file} />
+      <LiveMarkdownEditor label="본문" value={local.content} onChange={(v) => set({ content: v })} documentPath={current?.file ?? 'knowledge/new.md'} onAttachmentBusyChange={setAttaching} />
       <div className="row end">
-        <button className="primary" disabled={!local.title.trim()} onClick={onSave}>
+        <button className="primary" disabled={!local.title.trim() || attaching} onClick={onSave}>
           저장
         </button>
       </div>

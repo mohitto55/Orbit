@@ -5,22 +5,27 @@ import type { AddressInfo } from 'net'
 import { spawn } from 'node-pty'
 import { expect, it, vi } from 'vitest'
 import { TerminalWorkspace } from '../src/core/terminalWorkspace'
-import { PipelineRunner } from '../src/core/pipeline'
+import { PipelineRunner, taskText } from '../src/core/pipeline'
 import type { TerminalActivity } from '../src/core/terminal'
 import { tempDir } from './helpers'
 
 it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each([
   { kind: 'codex', mode: 'manual' }, { kind: 'claude', mode: 'manual' }, { kind: 'shell', mode: 'manual' },
-  { kind: 'codex', mode: 'automation' }, { kind: 'codex', mode: 'missing-notify' }
+  { kind: 'codex', mode: 'automation' }, { kind: 'codex', mode: 'missing-notify' },
+  { kind: 'codex', mode: 'task-format' }, { kind: 'claude', mode: 'task-format' }
 ] as const)('[TE-F03-AC1] 실제 $kind 터미널에서 $mode 작업의 시작·종료·읽음 상태를 감지한다', async ({ kind, mode }) => {
   const root = await tempDir(`orbit-activity-${kind}-`)
   const codexHome = path.join(root, 'codex')
   await fs.mkdir(codexHome)
   const cwd = await fs.realpath(root)
+  const requests: unknown[] = []
+  const texts = (value: unknown): string[] => typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(texts) : value && typeof value === 'object' ? Object.values(value).flatMap(texts) : []
   // 로컬 고정 응답만 사용한다. 실제 모델이나 사용자 계정으로 요청하지 않는다.
   const server = createServer((request, response) => {
-    request.resume()
+    let body = ''
+    request.on('data', (chunk: Buffer) => { body += chunk.toString() })
     request.on('end', () => {
+      if (body) { try { requests.push(JSON.parse(body)) } catch { /* 모델 외의 요청 */ } }
       if (!request.url?.includes('responses') && !request.url?.includes('messages')) {
         response.writeHead(200, { 'Content-Type': 'application/json' })
         response.end('{}')
@@ -85,7 +90,13 @@ it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each([
     await workspace.whenReady(tab.id)
     expect(workspace.state().tabs[0].activity).toBe('idle')
     activity.length = 0
-    if (mode !== 'manual') {
+    if (mode === 'task-format') {
+      const prompt = taskText({ id: 'task-format', title: '서식 보존', body: '- 상위 불릿\n\t- 하위 불릿\n\t\t- 손자 불릿\n\n첫 문장\n둘째 문장\n\n\n마지막 문장' })
+      runner.start({ id: 'format', title: 'Task 원문 전달', file: '', nodes: [{ id: 'work', kind, text: prompt, terminal: 'new', terminalInput: { tabId: tab.id } }], edges: [] })
+      const received = kind === 'claude' ? prompt.replace(/\t/g, '    ') : prompt
+      await vi.waitFor(() => expect(texts(requests).some((text) => text.includes(received))).toBe(true), { timeout: 20000 })
+      await vi.waitFor(() => expect(runner.list()[0].status).toBe('done'), { timeout: 15000 })
+    } else if (mode !== 'manual') {
       await vi.waitFor(() => expect(output).toContain('orbit-probe'), { timeout: 15000 })
       if (mode === 'missing-notify') await fs.writeFile(path.join(`${path.join(root, 'workspace.json')}.sessions`, tab.id, process.platform === 'win32' ? 'notify.ps1' : 'notify.sh'), process.platform === 'win32' ? '# notify intentionally omitted\n' : '#!/bin/sh\nexit 0\n')
       runner.start({ id: 'sequential', title: '연속 실행', file: '', nodes: ['first', 'second'].map((id) => ({ id, kind: 'codex', text: '한글·구현…검증 — 같은 요청', terminal: 'new', terminalInput: { tabId: tab.id } })), edges: [{ from: 'first', to: 'second' }] })
@@ -111,6 +122,7 @@ it.skipIf(!process.env.ORBIT_ACTIVITY_SMOKE).each([
     await fs.writeFile(path.join(root, 'terminal-output.txt'), output)
     await fs.writeFile(path.join(root, 'activity.json'), JSON.stringify(activity))
     await fs.writeFile(path.join(root, 'runs.json'), JSON.stringify(runner.list()))
+    if (mode === 'task-format') await fs.writeFile(path.join(root, 'requests.json'), JSON.stringify(requests))
     console.info('Terminal activity diagnostics:', root)
     workspace.suspend()
     vi.unstubAllEnvs()

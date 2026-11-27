@@ -14,6 +14,7 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
   const [description, setDescription] = useState(skill?.description ?? '')
   const [body, setBody] = useState(skill?.body ?? '')
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [attaching, setAttaching] = useState(false)
   const saving = useRef(false)
   const dirty = name !== (skill?.name ?? '') || scope !== (skill?.scope ?? 'project') || location !== (skill?.location ?? 'claude') || description !== (skill?.description ?? '') || body !== (skill?.body ?? '')
   const close = async () => {
@@ -22,7 +23,7 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
     catch (e) { errorToast(e) }
   }
   const save = async (addNode: boolean) => {
-    if (saving.current) return
+    if (saving.current || attaching) return
     saving.current = true; setBusy(true); setError('')
     try {
       const result = await api.saveSkill({ id: skill?.id, scope, location, name, description, body })
@@ -41,11 +42,11 @@ export function SkillEditor({ skill, canAdd, onClose, onSaved }: { skill?: Skill
       {skill && <span className="small muted">{skill.file}</span>}
     </div>
     <div className="field"><label htmlFor="skill-description">설명</label><input id="skill-description" value={description} disabled={busy} placeholder="언제 사용하는 스킬인지 적어 주세요" onChange={(e) => setDescription(e.target.value)} /></div>
-    <fieldset className="skill-body" disabled={busy}><LiveMarkdownEditor value={body} onChange={setBody} label="스킬 본문" disabled={busy} documentPath={skill?.file} /></fieldset>
+    <fieldset className="skill-body" disabled={busy}><LiveMarkdownEditor value={body} onChange={setBody} label="스킬 본문" disabled={busy} documentPath={skill?.file} onAttachmentBusyChange={setAttaching} /></fieldset>
     {error && <p role="alert" className="pipe-value-error">{error}</p>}
     <footer className="row between"><button disabled={busy} onClick={close}>취소</button><div className="row">
-      <button disabled={busy || !name.trim() || !body.trim()} className={canAdd ? '' : 'primary'} onClick={() => void save(false)}>{busy ? '저장 중…' : '저장'}</button>
-      {canAdd && <button className="primary" disabled={busy || !name.trim() || !body.trim()} onClick={() => void save(true)}>저장하고 노드 추가</button>}
+      <button disabled={busy || attaching || !name.trim() || !body.trim()} className={canAdd ? '' : 'primary'} onClick={() => void save(false)}>{busy ? '저장 중…' : '저장'}</button>
+      {canAdd && <button className="primary" disabled={busy || attaching || !name.trim() || !body.trim()} onClick={() => void save(true)}>저장하고 노드 추가</button>}
     </div></footer>
   </RunDrawer>
 }

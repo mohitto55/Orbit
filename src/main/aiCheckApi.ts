@@ -8,6 +8,8 @@ import { decideFinding, lastCheckAt, listAiChecks, runAiCheck, type AgentRunner,
 import { resolveRequest } from '../core/drift'
 import { lineDiff } from '../core/diff'
 import { clearDraft, parseDraft, readDraft, requestDraftInput, writeDraft } from '../core/requestDraft'
+import { accountEnvironment } from '../core/agentAccounts'
+import type { AgentAccountStore } from './agentAccountStore'
 
 const TIMEOUT_MS = 10 * 60 * 1000
 
@@ -15,9 +17,9 @@ const TIMEOUT_MS = 10 * 60 * 1000
  * Claude Code / Codex를 비대화 모드로 실행해 최종 응답을 받는다.
  * 요청문은 길어서 명령줄 인자가 아니라 표준 입력으로 넘긴다.
  */
-export const runAgent: AgentRunner = (agent, prompt, cwd, onOutput) =>
+export const runAgent = (agent: CheckAgent, prompt: string, cwd: string, onOutput: (chunk: string) => void, environment = process.env): Promise<string> =>
   new Promise((resolve, reject) => {
-    const env = cleanEnv(process.env)
+    const env = cleanEnv(environment)
     const lastMsg = path.join(os.tmpdir(), `orbit-codex-${Date.now()}.txt`)
     const [cmd, args] =
       agent === 'claude'
@@ -80,7 +82,13 @@ async function draftView(ctx: Ctx, id: string) {
   }
 }
 
-export function createAiCheckApi(deps: { send: (channel: string, payload: unknown) => void; getCtx: () => Promise<Ctx | null> }) {
+export function createAiCheckApi(deps: { send: (channel: string, payload: unknown) => void; getCtx: () => Promise<Ctx | null>; accounts?: AgentAccountStore }) {
+  const runner: AgentRunner = async (agent, prompt, cwd, output) => {
+    const account = await deps.accounts?.resolve(agent)
+    const block = account && await deps.accounts?.check([agent], { [agent]: account.id }, true)
+    if (block) throw new Error(block.message)
+    return runAgent(agent, prompt, cwd, output, account ? accountEnvironment(account, process.env) : process.env)
+  }
   let running = false
   let drafting = false
   const need = async () => {
@@ -95,7 +103,7 @@ export function createAiCheckApi(deps: { send: (channel: string, payload: unknow
       running = true
       try {
         const ctx = await need()
-        return await runAiCheck(ctx, agent, runAgent, (chunk) => deps.send('aicheck-output', chunk))
+        return await runAiCheck(ctx, agent, runner, (chunk) => deps.send('aicheck-output', chunk))
       } finally {
         running = false
       }
@@ -118,7 +126,7 @@ export function createAiCheckApi(deps: { send: (channel: string, payload: unknow
       try {
         const ctx = await need()
         const { request, domain, prompt } = await requestDraftInput(ctx, id)
-        const out = await runAgent(agent, prompt, ctx.projectDir, (chunk) => deps.send('request-draft-output', chunk))
+        const out = await runner(agent, prompt, ctx.projectDir, (chunk) => deps.send('request-draft-output', chunk))
         await writeDraft(request.file, { agent, base: domain.version, content: parseDraft(out) })
         return draftView(ctx, id)
       } finally {

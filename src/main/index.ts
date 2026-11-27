@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, protocol, session, shell, net } from 'electron'
 import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
-import chokidar, { type FSWatcher } from 'chokidar'
-import { createApi } from './api'
-import { createAiCheckApi } from './aiCheckApi'
+import chokidar from 'chokidar'
+import { ProjectWindows } from './projectWindows'
+import { AgentAccountStore } from './agentAccountStore'
+import { probeAgentAccount } from './agentAccountProbe'
 import { createUpdater } from './updater'
 import { createTheme } from './theme'
 import { createDialogApi } from './dialogs'
@@ -14,7 +15,9 @@ import { SKILL_LOCATIONS } from '../core/skillLocations'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'orbit-image', privileges: { standard: true, secure: true } }])
 
-let win: BrowserWindow | null = null
+const windows = new Map<number, BrowserWindow>()
+const windowSlots = new Map<number, number>()
+const focusedWindow = () => BrowserWindow.getFocusedWindow() ?? [...windows.values()].at(-1) ?? null
 
 /** 앱 이름을 Girsktop → Orbit으로 바꾸면서 설정 위치가 바뀌었다. 예전 최근 프로젝트·업데이트 설정을 한 번 옮겨온다. */
 function migrateOldSettings() {
@@ -34,19 +37,17 @@ function migrateOldSettings() {
   }
 }
 migrateOldSettings()
-// 한 프로필의 예약을 여러 앱 프로세스가 동시에 실행하지 않게 한다.
+// 실행기를 하나만 두고 다시 실행할 때마다 독립된 창을 연다.
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', () => { if (win?.isMinimized()) win.restore(); win?.show(); win?.focus() })
-let watcher: FSWatcher | null = null
+app.on('second-instance', () => { void app.whenReady().then(createWindow) })
 
 function send(channel: string, payload: unknown) {
-  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload)
+  for (const win of windows.values()) if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload)
 }
 
-function watch(ctx: Ctx) {
-  void watcher?.close()
+function watch(ctx: Ctx, changed: () => void) {
   let timer: NodeJS.Timeout | null = null
-  watcher = chokidar.watch(ctx.dataRoot, {
+  const watcher = chokidar.watch(ctx.dataRoot, {
     ignoreInitial: true,
     ignored: (p: string) => p.includes(`${path.sep}.cache`)
   })
@@ -54,34 +55,33 @@ function watch(ctx: Ctx) {
   watcher.on('all', (_e, file) => {
     if (!file.endsWith('.md')) return
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => send('files-changed', null), 300)
+    timer = setTimeout(changed, 300)
   })
+  return () => { if (timer) clearTimeout(timer); void watcher.close().catch((error: unknown) => console.error('Orbit 파일 감시 종료 실패:', error)) }
 }
 
-const api = createApi({
-  send,
+const accounts = new AgentAccountStore(path.join(app.getPath('userData'), 'agent-accounts'), () => {
+  send('accounts-changed', null)
+  // 다른 창에서 로그인·정책·사용량이 바뀌어도 대기 중인 예약에 적용한다.
+  for (const api of projects.all()) void api.recheckAccountSchedules()?.catch((error: unknown) => console.error('계정 변경 후 예약 확인 실패:', error))
+}, (account) => probeAgentAccount(account, undefined, net.fetch))
+const projects = new ProjectWindows({
+  send: (id, channel, payload) => { const win = windows.get(id); if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload) },
   pickFolder: async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory', 'createDirectory'] })
+    const r = await dialog.showOpenDialog(focusedWindow()!, { properties: ['openDirectory', 'createDirectory'] })
     return r.canceled ? null : r.filePaths[0]
   },
   recentFile: path.join(app.getPath('userData'), 'recent.json'),
-  onProjectOpened: watch
-})
-
-const aiCheckApi = createAiCheckApi({
-  send,
-  getCtx: async () => {
-    const p = await api.currentProject()
-    return p ? { projectDir: p.projectDir, dataRoot: p.dataRoot } : null
-  }
+  watch, accounts
 })
 
 const updater = createUpdater({ send, userData: app.getPath('userData'), isPackaged: app.isPackaged, version: app.getVersion(), beforeInstall: cleanup })
 
 const theme = createTheme({ userData: app.getPath('userData') })
-const dialogs = createDialogApi(() => win)
+const dialogs = createDialogApi(focusedWindow)
 
-for (const [name, fn] of Object.entries({ ...api, ...aiCheckApi, ...updater.api, ...theme.api, ...dialogs })) {
+for (const name of projects.methods) ipcMain.handle(`api:${name}`, (event, ...args) => projects.invoke(event.sender.id, name, args))
+for (const [name, fn] of Object.entries({ ...updater.api, ...theme.api, ...dialogs, newWindow: () => { createWindow() } })) {
   ipcMain.handle(`api:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))
 }
 
@@ -94,20 +94,26 @@ function notifyOnce(kind: string, title: string, body: string) {
 
 async function checkReminders() {
   try {
-    const project = await api.currentProject()
-    if (!project) return
-    const d = await api.dashboard()
-    if (d.inbox > 0 && afterTime(d.settings.reminderTime)) notifyOnce('inbox', 'Inbox 정리', `분류하지 않은 할 일이 ${d.inbox}개 있습니다`)
-    if (d.dueTasks.length > 0) notifyOnce('due', '할 일 시기 도래', `${d.dueTasks.length}개의 Task가 지금 할 때입니다`)
-    if (d.driftDue) notifyOnce('drift', '도메인 검토 요청', `검토하지 않은 작업 대화가 ${d.pendingSessions}개 있습니다`)
-    if (d.pendingReviews > 0) notifyOnce('review', '확인 필요', `확인을 기다리는 항목이 ${d.pendingReviews}개 있습니다`)
+    for (const api of projects.all()) {
+      const project = await api.currentProject()
+      if (!project) continue
+      const d = await api.dashboard()
+      if (d.inbox > 0 && afterTime(d.settings.reminderTime)) notifyOnce('inbox', 'Inbox 정리', `분류하지 않은 할 일이 ${d.inbox}개 있습니다`)
+      if (d.dueTasks.length > 0) notifyOnce('due', '할 일 시기 도래', `${d.dueTasks.length}개의 Task가 지금 할 때입니다`)
+      if (d.driftDue) notifyOnce('drift', '도메인 검토 요청', `검토하지 않은 작업 대화가 ${d.pendingSessions}개 있습니다`)
+      if (d.pendingReviews > 0) notifyOnce('review', '확인 필요', `확인을 기다리는 항목이 ${d.pendingReviews}개 있습니다`)
+    }
   } catch {
     // 알림 실패는 무시한다
   }
 }
 
 function createWindow() {
-  win = new BrowserWindow({
+  // 창마다 이미지 경로와 화면 설정을 분리하되 다시 열어도 설정을 보존한다.
+  let slot = 0
+  while ([...windowSlots.values()].includes(slot)) slot++
+  const windowSession = slot === 0 ? session.defaultSession : session.fromPartition(`persist:orbit-window-${slot}`)
+  const win = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 960,
@@ -118,23 +124,29 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
+      session: windowSession,
       sandbox: false
     }
   })
-  win.on('ready-to-show', () => win?.show())
-  win.on('closed', () => { win = null })
+  const id = win.webContents.id
+  windows.set(id, win); windowSlots.set(id, slot); projects.register(id)
+  windowSession.protocol.handle('orbit-image', async (request) => documentImageResponse(request.url, await projects.current(id), SKILL_LOCATIONS.map((location) => path.join(app.getPath('home'), `.${location}`, 'skills'))))
+  win.on('ready-to-show', () => win.show())
+  win.on('closed', () => { windows.delete(id); windowSlots.delete(id); windowSession.protocol.unhandle('orbit-image'); void projects.closeWindow(id).catch((error: unknown) => console.error('창 종료 실패:', error)) })
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  return win
 }
 
 /** 개발용 스모크 확인: ORBIT_SMOKE=<프로젝트 폴더> 로 실행하면 열고, 화면을 캡처하고, 종료한다. */
-async function smoke(dir: string, out?: string) {
+async function smoke(win: BrowserWindow, dir: string, out?: string) {
   try {
-    await api.openProject(dir)
+    await projects.invoke(win.webContents.id, 'openProject', [dir])
+    const api = projects.all()[0]
     if (process.env.ORBIT_SMOKE_RUNTESTS) {
       const run = await api.runTests()
       console.log('SMOKE_RUN', JSON.stringify({ total: run.total, passed: run.passed, failed: run.failed, error: run.error }))
@@ -169,20 +181,20 @@ async function smoke(dir: string, out?: string) {
 }
 
 app.whenReady().then(async () => {
-  protocol.handle('orbit-image', async (request) => documentImageResponse(request.url, await api.currentProject(), SKILL_LOCATIONS.map((location) => path.join(app.getPath('home'), `.${location}`, 'skills'))))
   await theme.load()
-  createWindow()
+  const win = createWindow()
   if (process.env.ORBIT_SMOKE) {
-    win!.webContents.once('did-finish-load', () => void smoke(process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))
+    win.webContents.once('did-finish-load', () => void smoke(win, process.env.ORBIT_SMOKE!, process.env.ORBIT_SMOKE_PNG))
     return
   }
   // TK-F01: 어디서나 할 일 추가
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    const win = focusedWindow()
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
-    send('quick-capture', null)
+    win.webContents.send('quick-capture', null)
   })
   setInterval(checkReminders, 10 * 60 * 1000)
   setTimeout(checkReminders, 15 * 1000)
@@ -198,9 +210,7 @@ function cleanup() {
   cleanedUp = true
   globalShortcut.unregisterAll()
   // 종료 중 저장/PTY 오류가 Electron 오류 대화상자를 띄워 숨은 앱을 남기지 않게 한다.
-  try { api.killAllTerminals() } catch (error) { console.error('Orbit 종료 정리 실패:', error) }
-  void watcher?.close().catch((error: unknown) => console.error('Orbit 파일 감시 종료 실패:', error))
-  watcher = null
+  projects.shutdown()
 }
 app.on('before-quit', cleanup)
 app.on('will-quit', cleanup)

@@ -1,5 +1,3 @@
-import { promises as fs } from 'node:fs'
-import path from 'node:path'
 import { test, expect, type Orbit } from './fixtures'
 import { savePipeline } from '../../src/core/pipelineStore'
 import { localDateTime } from '../../src/core/automationSchedule'
@@ -84,10 +82,9 @@ test('계정을 등록하고 쿼터 정책을 저장한 뒤 예약의 실행 계
   await expect(orbit.page.getByLabel('Codex 실행 계정', { exact: true }).locator('option:checked')).toHaveText('업무 Codex')
 })
 
+test.describe('저장된 사용량', () => {
+test.use({ accountState: async ({}, use: (state: unknown) => Promise<void>) => { await use({ version: 1, accounts: [], observations: { 'default-codex': { checkedAt: new Date().toISOString(), quotaCheckedAt: new Date().toISOString(), loggedIn: true, email: 'qa@example.test', plan: 'pro', windows: [{ id: 'week', label: '7일', usedPercent: 95, resetsAt: new Date(Date.now() + 3600_000).toISOString() }] } } }) } })
 test('잔여 쿼터와 초기화 시각을 표시하고 정책 변경을 즉시 반영한다', async ({ orbit }) => {
-  const folder = path.join(orbit.directory, 'profile/agent-accounts')
-  await fs.mkdir(folder, { recursive: true })
-  await fs.writeFile(path.join(folder, 'accounts.json'), JSON.stringify({ version: 1, accounts: [], observations: { 'default-codex': { checkedAt: new Date().toISOString(), quotaCheckedAt: new Date().toISOString(), loggedIn: true, email: 'qa@example.test', plan: 'pro', windows: [{ id: 'week', label: '7일', usedPercent: 95, resetsAt: new Date(Date.now() + 3600_000).toISOString() }] } } }))
   await openTab(orbit, '계정·쿼터')
   const card = orbit.page.getByRole('article', { name: 'Codex · 기본 계정', exact: true })
   await expect(card).toContainText('잔여 5%'); await expect(card).toContainText('초기화:')
@@ -96,4 +93,5 @@ test('잔여 쿼터와 초기화 시각을 표시하고 정책 변경을 즉시 
   await orbit.page.getByRole('button', { name: '계정 저장', exact: true }).click()
   await expect(card).toContainText('잔여 사용량이 설정한 10% 이하')
   await orbit.page.reload(); await openTab(orbit, '계정·쿼터'); await expect(card).toContainText('잔여 5%')
+})
 })

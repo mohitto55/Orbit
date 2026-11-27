@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { test, expect, blurEditor, expectNoOverflow, replaceDocument, type Orbit } from './fixtures'
 import { integrationSource } from './markdown-cases'
 import { createDomain, saveDomain, listDomains } from '../../src/core/domain'
@@ -98,7 +99,14 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
     await editor.locator('.cm-content').focus()
     await orbit.page.keyboard.press('ControlOrMeta+End')
     await orbit.page.keyboard.insertText('\n\n저장 검증 한글')
+    const picture = '<svg xmlns="http://www.w3.org/2000/svg" width="45" height="30"><rect width="45" height="30"/></svg>'
+    await editor.locator('.cm-content').evaluate((node, picture) => {
+      const data = new DataTransfer(); data.items.add(new File([picture], '첨부.svg', { type: 'image/svg+xml' }))
+      node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    }, picture)
+    await expect(editor).toHaveAttribute('aria-busy', 'false')
     await blurEditor(orbit.page)
+    await expect.poll(() => editor.getByAltText('첨부.svg').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(45)
     await expect.poll(() => editor.getByAltText('도식').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(160)
     if (kind === 'request') await orbit.page.getByRole('button', { name: '다듬은 내용 저장', exact: true }).click()
     else {
@@ -108,7 +116,9 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
         await orbit.page.locator('.modal').getByRole('button', { name: '저장', exact: true }).click()
       }
     }
-    const expected = integrationSource.replace('- [ ]', '- [x]') + '\n\n저장 검증 한글'
+    const imageDocument = kind === 'request' ? path.join(orbit.ctx.dataRoot, 'domains/markdown-qa/domain.md') : file
+    const source = path.relative(path.dirname(imageDocument), path.join(orbit.ctx.dataRoot, 'assets', createHash('sha256').update(picture).digest('hex') + '.svg')).split(path.sep).join('/')
+    const expected = integrationSource.replace('- [ ]', '- [x]') + `\n\n저장 검증 한글\n\n![첨부.svg](${source})`
     await expect.poll(async () => (kind === 'request' ? (await readDraft(file))!.content : (await readMd(file)).content).trim()).toBe(expected)
     editor = await openDocument(orbit, kind)
     await expect(editor.locator('.cm-md-task-box').first()).toBeChecked()
@@ -117,6 +127,7 @@ for (const kind of ['role', 'design', 'system', 'knowledge', 'skill', 'request']
     await blurEditor(orbit.page)
     await expect(editor.locator('.cm-content')).toContainText('저장 검증 한글')
     await expect.poll(() => editor.getByAltText('도식').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(160)
+    await expect.poll(() => editor.getByAltText('첨부.svg').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(45)
     await expectNoOverflow(editor)
   })
 }

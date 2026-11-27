@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState, type DragEvent, type ClipboardEvent } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Annotation, Compartment, EditorState, Facet, StateEffect, StateField, Transaction, type Range } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, keymap, placeholder, type DecorationSet } from '@codemirror/view'
@@ -7,11 +7,22 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { deleteMarkupBackward, insertNewlineContinueMarkupCommand, markdown } from '@codemirror/lang-markdown'
 import { GFM } from '@lezer/markdown'
 import { Markdown } from './Markdown'
+import { api } from './api'
+import { errorToast } from './ui'
 
 const focusChanged = StateEffect.define<boolean>()
 const externalChange = Annotation.define<boolean>()
 const wikiNavigation = Facet.define<(target: string) => void>()
 const documentLocation = Facet.define<string, string>({ combine: (values) => values[0] ?? '' })
+const attachmentAt = StateEffect.define<number | null>()
+const attachmentPosition = StateField.define<number | null>({
+  create: () => null,
+  update: (position, tr) => {
+    if (tr.annotation(externalChange)) return null
+    const effect = tr.effects.find((item) => item.is(attachmentAt))
+    return effect ? effect.value : position === null ? null : tr.changes.mapPos(position, 1)
+  }
+})
 
 function followWiki(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false
@@ -233,17 +244,50 @@ function liveMarkdown() {
   ]
 }
 
-export function LiveMarkdownEditor({ value, onChange, onWiki, documentPath = '', label = '본문', disabled = false }: { value: string; onChange: (value: string) => void; onWiki?: (target: string) => void; documentPath?: string; label?: string; disabled?: boolean }) {
+export function LiveMarkdownEditor({ value, onChange, onWiki, documentPath = '', label = '본문', disabled = false, onAttachmentBusyChange }: { value: string; onChange: (value: string) => void; onWiki?: (target: string) => void; documentPath?: string; label?: string; disabled?: boolean; onAttachmentBusyChange?: (busy: boolean) => void }) {
   const id = useId(), host = useRef<HTMLDivElement>(null), editor = useRef<EditorView | null>(null)
   const change = useRef(onChange); change.current = onChange
   const wiki = useRef(onWiki); wiki.current = onWiki
   const editability = useRef(new Compartment())
   const location = useRef(new Compartment())
+  const [dragging, setDragging] = useState(false), [attaching, setAttaching] = useState(false)
+  const uploading = useRef(false), busyChange = useRef(onAttachmentBusyChange); busyChange.current = onAttachmentBusyChange
+  const attach = async (files: File[], at?: number) => {
+    const view = editor.current
+    if (!view || view.state.readOnly || uploading.current) return
+    const document = view.state.facet(documentLocation)
+    uploading.current = true; setAttaching(true); busyChange.current?.(true)
+    view.dispatch({ effects: attachmentAt.of(at ?? view.state.selection.main.head) })
+    try {
+      if (files.length > 20 || files.some((file) => file.size > 20 * 1024 * 1024) || files.reduce((size, file) => size + file.size, 0) > 100 * 1024 * 1024) throw new Error('사진은 한 번에 20개, 한 장 20MB, 합계 100MB까지 첨부할 수 있습니다')
+      const images = await Promise.all(files.map(async (file) => ({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })))
+      const markdown = await api.importDocumentImages(images, document)
+      if (editor.current !== view || view.state.readOnly || view.state.facet(documentLocation) !== document) return
+      const from = view.state.field(attachmentPosition)
+      if (from === null) return
+      const before = view.state.doc.sliceString(0, from), after = view.state.doc.sliceString(from)
+      const insert = (before ? before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n' : '') + markdown + (after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n')
+      view.dispatch({ changes: { from, insert }, selection: { anchor: from + insert.length }, effects: attachmentAt.of(null), annotations: [Transaction.userEvent.of('input.paste'), isolateHistory.of('full')] })
+      view.focus()
+    } catch (e) { if (editor.current === view) errorToast(e) }
+    finally { uploading.current = false; busyChange.current?.(false); if (editor.current === view) { setAttaching(false); view.dispatch({ effects: attachmentAt.of(null) }) } }
+  }
+  const drop = (event: DragEvent) => {
+    if (!event.dataTransfer.files.length) return
+    event.preventDefault(); event.stopPropagation(); setDragging(false)
+    const at = editor.current?.posAtCoords({ x: event.clientX, y: event.clientY }) ?? undefined
+    void attach(Array.from(event.dataTransfer.files), at)
+  }
+  const paste = (event: ClipboardEvent) => {
+    if (!event.clipboardData.files.length) return
+    event.preventDefault(); event.stopPropagation()
+    void attach(Array.from(event.clipboardData.files))
+  }
   useEffect(() => {
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({ doc: value, extensions: [
-        liveMarkdown(),
+        liveMarkdown(), attachmentPosition,
         editability.current.of([EditorState.readOnly.of(disabled), EditorView.editable.of(!disabled)]),
         location.current.of(documentLocation.of(documentPath)),
         wikiNavigation.of((target) => wiki.current?.(target)),
@@ -270,5 +314,11 @@ export function LiveMarkdownEditor({ value, onChange, onWiki, documentPath = '',
   useEffect(() => {
     editor.current?.dispatch({ effects: location.current.reconfigure(documentLocation.of(documentPath)) })
   }, [documentPath])
-  return <div className="live-markdown" aria-disabled={disabled || undefined}><label htmlFor={id} className="small muted">{label}</label><div className="live-markdown-host" ref={host} /></div>
+  return <div className={`live-markdown${dragging ? ' image-drop' : ''}`} aria-disabled={disabled || undefined} aria-busy={attaching}
+    onDropCapture={drop} onPasteCapture={paste}
+    onDragOverCapture={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = disabled || attaching ? 'none' : 'copy'; setDragging(!disabled && !attaching) } }}
+    onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }}>
+    <label htmlFor={id} className="small muted">{label}</label><div className="live-markdown-host" ref={host} />
+    {!disabled && <div className="small muted" role={attaching ? 'status' : undefined}>{attaching ? '사진 첨부 중…' : documentPath ? '사진을 끌어 놓거나 붙여넣으세요.' : '사진을 첨부하려면 먼저 문서를 저장하세요.'}</div>}
+  </div>
 }

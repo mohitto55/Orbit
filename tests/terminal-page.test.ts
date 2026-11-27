@@ -589,3 +589,13 @@ it('일반 셸의 Enter 조합은 셸이 처리한다', async () => {
   await act(async () => listeners.get('term-info')?.(second))
   expect(handler(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }))).toBe(true)
 })
+
+it('다른 창에서 재시작한 터미널은 이전 출력 순번을 버리고 새 출력을 표시한다', async () => {
+  saved = [{ ...first, exited: 0 }]; active = first.id
+  await mount()
+  const before = disposals.mock.calls.length
+  await act(async () => listeners.get('term-restarted')?.({ ...first, output: '재시작 화면', sequence: 0 }))
+  await act(async () => listeners.get('term-data')?.({ id: first.id, data: '새 프로세스 출력', sequence: 1 }))
+  expect(disposals.mock.calls.length).toBe(before + 1)
+  expect(writes).toContain('재시작 화면'); expect(writes).toContain('새 프로세스 출력')
+})

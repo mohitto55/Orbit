@@ -50,11 +50,13 @@ export default function DesignPanel({ folder, system, refreshKey, onChanged }: {
 
 function DesignEditor({ design, onSaved }: { design: DesignWithStale; onSaved: () => void }) {
   const [content, setContent] = useState(design.content)
+  const [attaching, setAttaching] = useState(false)
   const [history, setHistory] = useState(false)
   useEffect(() => setContent(design.content), [design.content])
   const sections = [...design.content.matchAll(/\{#([a-z0-9-]+)\}/g)].map((m) => m[1])
 
   const save = async () => {
+    if (attaching) return
     const change = await askChange(`${design.title} 저장`)
     if (!change) return
     let changed: string[] = []
@@ -102,9 +104,9 @@ function DesignEditor({ design, onSaved }: { design: DesignWithStale; onSaved: (
         <History target={design.id} />
       ) : (
         <>
-          <LiveMarkdownEditor label="설계 본문" value={content} onChange={setContent} documentPath={design.file} />
+          <LiveMarkdownEditor label="설계 본문" value={content} onChange={setContent} documentPath={design.file} onAttachmentBusyChange={setAttaching} />
           <div className="row end">
-            <button className="primary" disabled={content === design.content} onClick={save}>
+            <button className="primary" disabled={content === design.content || attaching} onClick={save}>
               저장
             </button>
           </div>

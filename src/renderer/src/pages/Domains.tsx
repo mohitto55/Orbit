@@ -384,7 +384,9 @@ function CreateDomain({ domains, onClose, onCreated }: { domains: Domain[]; onCl
   const [parent, setParent] = useState('')
   const [type, setType] = useState<SubdomainType>('Supporting')
   const [role, setRole] = useState('')
+  const [attaching, setAttaching] = useState(false)
   const submit = async () => {
+    if (attaching) return
     try {
       onCreated(await api.createDomain({ title, folder: folder || undefined, parent: parent || undefined, subdomainType: type, role }))
       toast('도메인을 만들었습니다')
@@ -423,10 +425,10 @@ function CreateDomain({ domains, onClose, onCreated }: { domains: Domain[]; onCl
           </select>
         </div>
       </div>
-      <LiveMarkdownEditor label="역할" value={role} onChange={setRole} />
+      <LiveMarkdownEditor label="역할" value={role} onChange={setRole} documentPath="domains/new/domain.md" onAttachmentBusyChange={setAttaching} />
       <div className="row end">
         <button onClick={onClose}>취소</button>
-        <button className="primary" disabled={!title.trim()} onClick={submit}>
+        <button className="primary" disabled={!title.trim() || attaching} onClick={submit}>
           만들기
         </button>
       </div>
@@ -440,11 +442,13 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
   const [type, setType] = useState<SubdomainType>(domain.subdomainType)
   const [status, setStatus] = useState(domain.status)
   const [content, setContent] = useState(domain.content)
+  const [attaching, setAttaching] = useState(false)
   const dirty = title !== domain.title || parent !== (domain.parent ?? '') || type !== domain.subdomainType || status !== domain.status || content !== domain.content
   const moved = parent !== (domain.parent ?? '')
   const options = useMemo(() => domains.filter((d) => d.id !== domain.id), [domains, domain.id])
 
   const save = async () => {
+    if (attaching) return
     const change = await askChange(moved ? '도메인 저장 (이동은 큰 변경으로 기록됩니다)' : '도메인 저장', moved ? 'major' : 'minor')
     if (!change) return
     try {
@@ -501,12 +505,12 @@ function RoleEditor({ domain, domains, onSaved, onWiki }: { domain: Domain; doma
           </select>
         </div>
       </div>
-      <LiveMarkdownEditor label="역할 · 용어 · 모델 · 하지 않는 것" value={content} onChange={setContent} onWiki={onWiki} documentPath={domain.file} />
+      <LiveMarkdownEditor label="역할 · 용어 · 모델 · 하지 않는 것" value={content} onChange={setContent} onWiki={onWiki} documentPath={domain.file} onAttachmentBusyChange={setAttaching} />
       <div className="row between">
         <button className="danger ghost" onClick={remove}>
           삭제
         </button>
-        <button className="primary" disabled={!dirty} onClick={save}>
+        <button className="primary" disabled={!dirty || attaching} onClick={save}>
           저장
         </button>
       </div>

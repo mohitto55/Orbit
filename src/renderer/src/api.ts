@@ -33,7 +33,7 @@ export const api = new Proxy(
           throw new Error(cleanError(e))
         })
   }
-) as Promisify<Api & AiCheckApi & UpdaterApi & ThemeApi & DialogApi>
+) as Promisify<Api & AiCheckApi & UpdaterApi & ThemeApi & DialogApi & { newWindow: () => void }>
 
 export const on = (channel: string, cb: (payload: any) => void) => window.orbit.on(channel, cb)
 

@@ -8,7 +8,7 @@ import { Empty, errorToast, toast } from './ui'
 import { PipelineValue } from './PipelineValue'
 import { SourcePicker } from './SourcePicker'
 import { localDateTime, parseLocalDateTime, type PipelineSchedule, type ScheduleTiming } from '../../core/automationSchedule'
-import { AGENT_LABELS, AGENT_PROVIDERS, defaultAccountId, type AccountSelection, type AccountView } from '../../core/agentAccounts'
+import { AGENT_LABELS, AGENT_PROVIDERS, defaultAccountId, type AgentProvider, type AccountSelection, type AccountView } from '../../core/agentAccounts'
 
 type Selection = { sources: SourceRef[]; pipelineId?: string; schedule?: PipelineSchedule | 'new' }
 interface AutomationActions {
@@ -120,12 +120,13 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
   const count = target && !isListShape(target.type) ? selectedSources.length : 1
   const value = (id: string, type: string) => values[id] ?? entry?.values?.[id] ?? (type === 'boolean' ? 'false' : type === 'number' ? '0' : '')
   const changeGraph = (id: string) => { setGraphId(id); setPort(''); setValues({}); setError('') }
+  const selectedAccount = (provider: AgentProvider) => accountIds[provider] ?? accounts.find((row) => row.provider === provider && row.selected)?.id ?? defaultAccountId(provider)
   const start = async () => {
     if (!graph || busy) return
     setBusy(true); setError('')
     try {
       const bound = Object.fromEntries(params.filter((p) => p.id !== target?.id).map((p) => [p.id, value(p.id, p.type)]))
-      const request = { pipelineId: graph.id, values: bound, ...(target ? { selection: { port: target.id, sources: selectedSources } } : {}), terminalIds, allowNew, maxConcurrent: maxConcurrent ? Number(maxConcurrent) : undefined, accountIds: { claude: accountIds.claude ?? defaultAccountId('claude'), codex: accountIds.codex ?? defaultAccountId('codex') } }
+      const request = { pipelineId: graph.id, values: bound, ...(target ? { selection: { port: target.id, sources: selectedSources } } : {}), terminalIds, allowNew, maxConcurrent: maxConcurrent ? Number(maxConcurrent) : undefined, accountIds: { claude: selectedAccount('claude'), codex: selectedAccount('codex') } }
       if (scheduling) {
         const timing: ScheduleTiming = timingKind === 'daily' ? { kind: 'daily', time: dailyTime } : timingKind === 'interval' ? { kind: 'interval', every: Number(every), unit } : { kind: 'once', at: parseLocalDateTime(onceAt) }
         await api.savePipelineSchedule({ id: saved?.id, title: scheduleTitle.trim() || graph.title, enabled: scheduleEnabled, timing, request })
@@ -168,7 +169,7 @@ function RunPanel({ selection, onClose, onGraphs }: { selection: Selection; onCl
         </div>
       })}
       {graph && <details className="run-environment" open={tabs.length === 0 || undefined}><summary>실행 환경 · {terminalIds.length ? `추가 터미널 ${terminalIds.length}개 선택` : '추가 터미널 선택 안 함'}</summary>
-        {AGENT_PROVIDERS.map((provider) => <div className="field" key={provider}><label htmlFor={`run-account-${provider}`}>{AGENT_LABELS[provider]} 실행 계정</label><select id={`run-account-${provider}`} value={accountIds[provider] ?? defaultAccountId(provider)} onChange={(e) => setAccountIds({ ...accountIds, [provider]: e.target.value })}>
+        {AGENT_PROVIDERS.map((provider) => <div className="field" key={provider}><label htmlFor={`run-account-${provider}`}>{AGENT_LABELS[provider]} 실행 계정</label><select id={`run-account-${provider}`} value={selectedAccount(provider)} onChange={(e) => setAccountIds({ ...accountIds, [provider]: e.target.value })}>
           {!accounts.some((account) => account.id === (accountIds[provider] ?? defaultAccountId(provider))) && <option value={accountIds[provider] ?? defaultAccountId(provider)}>{accountIds[provider] ? '등록 해제된 계정 · 다시 선택하세요' : '기본 계정'}</option>}
           {accounts.filter((account) => account.provider === provider).map((account) => <option key={account.id} value={account.id} disabled={!account.enabled}>{account.label}{account.enabled ? '' : ' · 사용 중지'}</option>)}
         </select></div>)}
