@@ -82,6 +82,9 @@ it('CLI JSON에서 계정·쿼터 필드만 읽고 0%와 null을 구분한다', 
   expect(response.windows).toMatchObject([{ usedPercent: 0, label: 'codex · 5시간' }])
   expect(JSON.stringify(response)).not.toContain('do-not-copy')
   expect(parseCodexAccount({ account: null }, undefined)).toMatchObject({ loggedIn: false, windows: [] })
+  // 직접 지정한 모델 공급자는 OpenAI 로그인이 필요 없다 (codex app-server가 requiresOpenaiAuth: false로 알린다)
+  expect(parseCodexAccount({ account: null, requiresOpenaiAuth: false }, undefined)).toMatchObject({ loggedIn: null })
+  expect(parseCodexAccount({ account: null, requiresOpenaiAuth: true }, undefined)).toMatchObject({ loggedIn: false })
   expect(parseClaudeAccount({ loggedIn: true, email: 'test@example.test', subscriptionType: 'max', token: 'do-not-copy' })).toMatchObject({ loggedIn: true, plan: 'max', windows: [] })
 })
 

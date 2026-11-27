@@ -113,6 +113,12 @@ const SCENARIOS: { name: string; graph: (kind: Kind) => Pipeline; check: (kind: 
     check: (_k, run) => expect(run.nodes.a.output).toBe('완료 a')
   },
   {
+    // Claude가 멈춰 Stop 훅이 오지 않는 경우(claude-code#29881)를 Stop 훅을 빼서 재현한다. 입력 대기 알림(약 60초)으로 완료해야 한다.
+    name: 'stop-missing',
+    graph: (kind) => ({ id: 'g', title: 'g', file: '', nodes: [node('a', kind, 'Stop 없는 작업 NODE=a')], edges: [] }),
+    check: (_k, run) => expect(run.nodes.a.output).toBe('완료 a')
+  },
+  {
     name: 'parallel-new-tabs',
     graph: (kind) => ({ id: 'g', title: 'g', file: '', nodes: [node('a', kind, '병렬 NODE=a'), node('b', kind, '병렬 NODE=b'), node('c', kind, '합치기 {{a}} {{b}} NODE=c')], edges: [{ from: 'a', to: 'c' }, { from: 'b', to: 'c' }] }),
     check: (_k, run) => expect(['a', 'b', 'c'].map((id) => run.nodes[id].output)).toEqual(['완료 a', '완료 b', '완료 c'])
@@ -121,7 +127,7 @@ const SCENARIOS: { name: string; graph: (kind: Kind) => Pipeline; check: (kind: 
 
 const only = process.env.ORBIT_AUTOMATION_SCENARIO?.split(',')
 const kinds = (process.env.ORBIT_AUTOMATION_KINDS?.split(',') ?? ['claude', 'codex']) as Kind[]
-const cases = kinds.flatMap((kind) => SCENARIOS.filter((s) => !only || only.includes(s.name)).map((s) => ({ kind, scenario: s.name })))
+const cases = kinds.flatMap((kind) => SCENARIOS.filter((s) => (!only || only.includes(s.name)) && (s.name !== 'stop-missing' || kind === 'claude')).map((s) => ({ kind, scenario: s.name })))
 
 it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $scenario 그래프를 끝까지 완료한다', async ({ kind, scenario }) => {
   const s = SCENARIOS.find((x) => x.name === scenario)!
@@ -164,7 +170,18 @@ it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $
     onExit(id, code) { stamp(`${id.slice(5, 13)} exit ${code}`) }
   })
   const runner = new PipelineRunner({
-    createTerminal: (k, label) => workspace.open(k, settings, { title: label }), hasTerminal: (id) => workspace.has(id), getTerminal: (id) => workspace.get(id),
+    createTerminal: async (k, label) => {
+      const info = await workspace.open(k, settings, { title: label })
+      if (scenario === 'stop-missing') {
+        // 셸이 뜨고 Claude가 설정을 읽기 전에 Stop 훅만 뺀다
+        const file = path.join(`${path.join(root, 'workspace.json')}.sessions`, info.id, 'claude-settings.json')
+        const config = JSON.parse(await fs.readFile(file, 'utf8'))
+        delete config.hooks.Stop
+        await fs.writeFile(file, JSON.stringify(config))
+        stamp(`${info.id.slice(5, 13)} Stop hook removed`)
+      }
+      return info
+    }, hasTerminal: (id) => workspace.has(id), getTerminal: (id) => workspace.get(id),
     whenReady: (id) => workspace.whenReady(id), submit: (id, text) => { stamp(`${id.slice(5, 13)} submit ${text.length}자`); workspace.submit(id, text) }, runCommand: (id, text) => workspace.runCommand(id, text),
     beginOutputCapture: (id, text, schema, messages) => workspace.beginOutputCapture(id, text, schema, messages), readAgentOutput: (id) => workspace.readAgentOutput(id), endOutputCapture: (id) => workspace.endOutputCapture(id),
     syncMessageRun: (id, scope) => workspace.syncMessageRun(id, scope), completeTasks: async () => {}, emit: (st) => stamp(`run ${st.status} ${Object.entries(st.nodes).map(([k, v]) => `${k}:${v.status}${v.message ? `(${v.message})` : ''}`).join(' ')}`)
@@ -172,7 +189,7 @@ it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $
   try {
     const g = s.graph(kind)
     runner.start({ ...g, ...expandPipeline(g, {}) })
-    await vi.waitFor(() => expect(runner.list()[0].status).not.toBe('running'), { timeout: 90000, interval: 250 })
+    await vi.waitFor(() => expect(runner.list()[0].status).not.toBe('running'), { timeout: scenario === 'stop-missing' ? 150000 : 90000, interval: 250 })
     const run = runner.list()[0]
     expect(run.status, JSON.stringify(run.nodes)).toBe('done')
     s.check(kind, run)
@@ -189,4 +206,4 @@ it.skipIf(!process.env.ORBIT_AUTOMATION_SMOKE).each(cases)('실제 $kind에서 $
     await fs.writeFile(path.join(root, 'output.txt'), Object.entries(output).map(([k, v]) => `===== ${k}\n${v}`).join('\n'))
     console.info(`[${kind}/${scenario}] diagnostics:`, root)
   }
-}, 120000)
+}, 200000)

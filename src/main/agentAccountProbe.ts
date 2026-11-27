@@ -35,7 +35,9 @@ export function parseCodexAccount(accountValue: unknown, quotaValue: unknown, ch
       windows.push(...quota(`${id}:${key}`, `${shortText(bucket.limitName) ?? id} · ${duration}`, window))
     }
   }
-  return { checkedAt, ...(windows.length || typeof response.ordinaryUsageAllowed === 'boolean' ? { quotaCheckedAt: checkedAt } : {}), loggedIn: typeof account.type === 'string', email: shortText(account.email), plan: shortText(account.planType), authMethod: shortText(account.type), windows,
+  // 직접 지정한 모델 공급자(requires_openai_auth = false)는 OpenAI 로그인이 없어도 실행된다. 로그인 안 됨으로 막지 않는다.
+  const loggedIn = typeof account.type === 'string' ? true : object(accountValue).requiresOpenaiAuth === false ? null : false
+  return { checkedAt, ...(windows.length || typeof response.ordinaryUsageAllowed === 'boolean' ? { quotaCheckedAt: checkedAt } : {}), loggedIn, email: shortText(account.email), plan: shortText(account.planType), authMethod: shortText(account.type), windows,
     ...(typeof response.ordinaryUsageAllowed === 'boolean' ? { ordinaryUsageAllowed: response.ordinaryUsageAllowed } : {}),
     ...(!windows.length ? { message: '이 계정의 사용 한도를 조회할 수 없습니다' } : {}) }
 }
