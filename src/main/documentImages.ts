@@ -21,7 +21,7 @@ export async function documentImageResponse(url: string, ctx: Ctx | null, skillR
     if (request.protocol !== 'orbit-image:' || request.hostname !== 'local' || !source || !ctx) return new Response(null, { status: 404 })
     const base = document ? path.dirname(path.resolve(ctx.dataRoot, document)) : ctx.dataRoot
     const candidate = path.resolve(base, localPath(source)), allowed = [ctx.projectDir, ctx.dataRoot, ...skillRoots]
-    if (!allowed.some((root) => inside(path.resolve(root), candidate))) return new Response(null, { status: 403 })
+    // 짧은 Windows 경로·심볼릭 링크도 최종 실경로로 권한을 확인한다.
     const file = await fs.realpath(candidate)
     const roots = await Promise.all(allowed.map((root) => fs.realpath(root).catch(() => null)))
     const type = imageTypes[path.extname(file).toLowerCase()]

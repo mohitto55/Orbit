@@ -40,6 +40,22 @@ it('없는 이미지, 프로젝트 밖 파일, HTML·스크립트는 이미지 �
   expect((await documentImageResponse(markdownImageUrl('image.png'), null, [outside])).status).toBe(404)
 })
 
+it('프로젝트와 이미지가 서로 다른 경로 별칭이어도 실경로가 같은 이미지만 읽는다', async () => {
+  const ctx = await newProject(), parent = await tempDir(), alias = path.join(parent, 'alias')
+  await fs.symlink(ctx.projectDir, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const aliasRoot = path.join(alias, path.relative(ctx.projectDir, ctx.dataRoot))
+  const image = path.join(ctx.dataRoot, 'image.svg'), aliasImage = path.join(aliasRoot, 'image.svg')
+  await fs.writeFile(image, '<svg/>')
+  for (const source of [aliasImage.replace(/\\/g, '/'), pathToFileURL(aliasImage).href]) {
+    expect((await documentImageResponse(markdownImageUrl(source), ctx, [])).status).toBe(200)
+  }
+  const aliasCtx = { ...ctx, projectDir: alias, dataRoot: aliasRoot }
+  expect((await documentImageResponse(markdownImageUrl(pathToFileURL(image).href), aliasCtx, [])).status).toBe(200)
+  expect((await documentImageResponse(markdownImageUrl('image.svg', path.join(aliasRoot, 'doc.md')), ctx, [])).status).toBe(200)
+  await fs.writeFile(path.join(parent, 'private.svg'), '<svg/>')
+  expect((await documentImageResponse(markdownImageUrl(pathToFileURL(path.join(parent, 'private.svg')).href), aliasCtx, [])).status).toBe(403)
+})
+
 it('공백·#·%가 들어간 문서 폴더와 내 스킬의 이미지도 해당 문서를 기준으로 읽는다', async () => {
   const ctx = await newProject(), skillRoot = await tempDir(), folder = path.join(skillRoot, '한글 # 100%')
   await fs.mkdir(folder)
