@@ -1285,6 +1285,7 @@ export interface RunnerDeps {
 
 /** 프롬프트를 보낸 직후 이전 응답의 끝 신호가 늦게 와도 이 노드가 끝난 것으로 보지 않는 시간 */
 const GRACE_MS = 1500
+const WAITING_MESSAGE = '터미널에서 권한 승인이나 선택을 기다리고 있습니다'
 
 interface Run extends RunState {
   pipe: Pipeline
@@ -1508,7 +1509,13 @@ export class PipelineRunner {
       st.termId = termId
       // 새 탭의 준비를 기다리는 동안에도 다른 노드가 같은 터미널에 먼저 입력하지 못하게 한다.
       this.owner.set(termId, { runId: run.runId, nodeId: node.id })
-      if (needsReady) await this.deps.whenReady(termId)
+      if (needsReady) {
+        // CLI가 입력창을 띄울 때까지 기다린다. 시작 안내 창이 떠 있으면 여기서 멈춰 있는 이유를 보여준다.
+        st.message = '터미널에서 CLI가 입력 준비를 마치기를 기다리는 중'
+        this.publish(run)
+        await this.deps.whenReady(termId)
+        delete st.message
+      }
       if (run.status !== 'running' || st.status !== 'starting') return
       if (isAgent(node) && node.model?.trim() && this.deps.setModel) await this.deps.setModel(termId, node.model.trim())
       if (run.status !== 'running' || st.status !== 'starting') return
@@ -1596,6 +1603,18 @@ export class PipelineRunner {
     } catch (e) {
       return this.finish(termId, false, { output, message: e instanceof Error ? e.message : String(e) }, received)
     }
+  }
+
+  /** 에이전트가 권한 승인·선택을 기다리는 동안 노드에 알린다. 실패가 아니라 사람이 터미널에서 답해야 하는 상태다. */
+  agentWaiting(termId: string, waiting: boolean): RunState | null {
+    const o = this.owner.get(termId)
+    const run = o && this.runs.get(o.runId)
+    const st = run?.nodes[o!.nodeId]
+    if (!run || !st || run.status !== 'running' || st.status !== 'running') return null
+    if (waiting) st.message = WAITING_MESSAGE
+    else if (st.message === WAITING_MESSAGE) delete st.message
+    else return null
+    return this.publish(run)
   }
 
   /** 셸 명령이 끝났을 때. 종료 코드가 0이 아니면 실패로 두고 뒤 작업은 건너뛴다. 출력은 데이터 출력으로 넘긴다. */

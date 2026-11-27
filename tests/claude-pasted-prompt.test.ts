@@ -16,13 +16,14 @@ it.each([false, true])('탭이 공백 네 칸으로 변환된 Claude 요청도 �
   const pack = (text: string) => wrapped ? pasted(text) : text
   const send = (action: string, event: object) => execFileSync(process.execPath, [integration.env.ORBIT_BRIDGE, action], { env: { ...process.env, ...integration.env }, input: JSON.stringify(event) })
   const stop = { hook_event_name: 'Stop', session_id: sessionId, last_assistant_message: '완료' }
-  for (const wrong of [previous.replace(/\t/g, '    '), current.replace(/\t/g, '  '), current.replace(/\t/g, '    ').replace('하위', '다른 본문')]) {
+  // 공백 변형(탭 → 공백 2·4칸)은 같은 요청이다. 이전 요청 ID, 바뀐 본문, 앞에 다른 글이 붙은 요청은 거부한다.
+  for (const wrong of [previous.replace(/\t/g, '    '), current.replace(/\t/g, '    ').replace('하위', '다른 본문'), `다른 요청 ${current}`]) {
     send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: pack(wrong) })
     send('done', stop); expect(readAgentOutput(dir)).toBeUndefined()
   }
   send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: 'other', prompt: pack(current.replace(/\t/g, '    ')) })
   send('done', stop); expect(readAgentOutput(dir)).toBeUndefined()
-  send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: pack(current.replace(/\t/g, '    ')) })
+  send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt: pack(current.replace(/\t/g, '  ')) })
   send('done', stop); expect(readAgentOutput(dir)).toBe('완료')
 })
 

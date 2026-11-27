@@ -35,6 +35,8 @@ export interface TerminalEvents {
   onAgentDone?: (id: string) => void
   /** 취소·CLI 종료·실패는 성공한 응답과 구분한다. */
   onAgentError?: (id: string, message: string) => void
+  /** 에이전트가 권한 승인·사용자 선택을 기다리기 시작했거나(true) 다시 일을 시작했을 때(false) */
+  onAgentWaiting?: (id: string, waiting: boolean) => void
   /** runCommand로 보낸 셸 명령이 끝났을 때 (출력은 시작·끝 표시 사이의 글) */
   onCommandDone?: (id: string, code: number, output: string) => void
 }
@@ -103,6 +105,21 @@ const BEGIN = '__ORBIT_BEGIN__'
 const OUTPUT_MAX = 100_000
 
 type Spawn = typeof import('node-pty').spawn
+
+/** 선택 창(폴더 신뢰·샌드박스 설정·업데이트 등)의 안내 문구. 공백을 뺀 소문자로 비교한다. */
+const CHOICE_MARKERS = ['entertoconfirm', 'esctocancel', 'enterselect', 'escback', 'entercontinue', 'entertocontinue', 'escskip', 'pressentertocontinue', 'inputdisabled']
+/** 에이전트 입력창이 다시 그려졌다는 문구 */
+const COMPOSER_MARKERS = ['forshortcuts', 'foragents', 'shift+tabtocycle', 'askcodextodoanything']
+/**
+ * 최근 화면에서 선택 창 문구가 입력창 문구보다 뒤에 나왔으면 선택 창이 떠 있다고 본다.
+ * Codex는 입력창을 그리고 준비 제목을 보낸 뒤에도 샌드박스 설정 같은 선택 창을 띄운다.
+ * 그 위에 프롬프트와 Enter를 보내면 엉뚱한 선택지가 골라진다.
+ */
+export function choiceOpen(output: string): boolean {
+  const screen = output.slice(-8000).replace(ANSI, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\s+/g, '').toLowerCase()
+  const last = (markers: string[]) => Math.max(...markers.map((m) => screen.lastIndexOf(m)))
+  return last(CHOICE_MARKERS) > last(COMPOSER_MARKERS)
+}
 
 interface Term {
   submitTimer?: NodeJS.Timeout
@@ -213,25 +230,33 @@ export class TerminalManager {
     t.pty.write(`${markedCommand(line)}\r`)
   }
 
-  /** Claude Code의 SessionStart 훅이 입력 준비를 알렸다 */
+  /** 에이전트가 입력을 받을 수 있다고 알렸다 (Claude Code SessionStart 훅, Codex 상태 제목) */
   markReady(id: string): void {
     const t = this.terms.get(id)
     if (t) t.ready = true
   }
 
   /**
-   * 입력을 받을 준비가 될 때까지 기다린다: 출력이 잠시 멈추면 준비된 것으로 본다.
-   * 훅을 붙인 Claude Code는 SessionStart 신호를 받은 뒤에 출력이 멈춰야 한다.
+   * 입력을 받을 준비가 될 때까지 기다린다.
+   * Orbit이 띄운 Claude Code·Codex는 에이전트가 직접 보낸 준비 신호가 있어야 한다.
+   * 출력이 멈춘 것만으로 판단하면 업데이트·폴더 신뢰·로그인 안내 창에 프롬프트와 Enter가 들어가
+   * 엉뚱한 선택지(예: 업데이트 실행)를 고르게 된다.
+   * 신호가 없는 일반 셸만 출력이 잠시 멈추면 준비된 것으로 본다.
    */
-  async whenReady(id: string, quietMs = 1500, maxMs = 30000): Promise<void> {
+  async whenReady(id: string, quietMs = 1500, maxMs?: number): Promise<void> {
     const start = this.now()
     for (;;) {
       const t = this.terms.get(id)
       if (!t) throw new Error(`터미널이 닫혔습니다: ${id}`)
       const quiet = this.now() - t.lastData
-      const needsSignal = t.info.kind === 'claude' && t.signals
-      if (needsSignal ? t.ready && quiet >= 700 : t.sawData && quiet >= quietMs) return
-      if (this.now() - start > maxMs) throw new Error('터미널 입력 준비를 확인하지 못했습니다. CLI 로그인·승인 화면을 확인하세요')
+      const needsSignal = t.info.kind !== 'shell' && t.signals
+      if (needsSignal ? t.ready && quiet >= 700 && !choiceOpen(t.output) : t.sawData && quiet >= quietMs) return
+      // CLI 시작(MCP 서버 기동 포함)은 느릴 수 있어 신호를 기다릴 때는 더 길게 본다.
+      if (this.now() - start > (maxMs ?? (needsSignal ? 120000 : 30000))) {
+        throw new Error(needsSignal
+          ? `${t.info.kind === 'codex' ? 'Codex' : 'Claude Code'} 입력 준비 신호를 받지 못했습니다. 터미널에 로그인·폴더 신뢰·업데이트 안내 화면이 떠 있는지 확인하세요`
+          : '터미널 입력 준비를 확인하지 못했습니다. CLI 로그인·승인 화면을 확인하세요')
+      }
       await new Promise((r) => setTimeout(r, 100))
     }
   }

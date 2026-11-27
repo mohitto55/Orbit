@@ -5,7 +5,7 @@ import path from 'path'
 import { TerminalManager, terminalCommand, validateSessionId, type TerminalActivity, type TerminalEvents, type TerminalInfo, type TerminalKind, type TerminalSnapshot } from './terminal'
 import { encodeClaudeProjectDir } from './drift'
 import { codexMetadataFiles, readCodexMetadata, sameProjectPath } from './sessionMetadata'
-import { beginOutputCapture, captureCodexResult, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
+import { beginOutputCapture, bindCaptureSession, captureCodexResult, capturePromptHash, endOutputCapture, readAgentError, readAgentOutput, freezeTerminalIntegration, prepareTerminalIntegration, readCliLaunch, resumeOptions, shellQuote, takeAgentSignals, withTerminalModel, withTerminalEffort, type CliLaunch } from './terminalIntegration'
 import { messageRoot, readMessageLog, writeMessageScope, type MessageBinding, type MessageScope } from './sessionMessages'
 import { CodexCaptureReader } from './codexCapture'
 import { effortProblem, modelProblem, type AgentOptions } from './agentModel'
@@ -81,6 +81,10 @@ async function findCodexSessionFile(projectDir: string, tabId: string, root = pr
   }
   return latest
 }
+/** 프롬프트를 보낸 뒤 작업 시작 신호를 기다리는 간격과 Enter 재전송 횟수 */
+const SUBMIT_CHECK_MS = 4000
+const SUBMIT_RETRIES = 3
+
 /** 탭 배치·이름·세션 ID·최근 터미널 출력을 저장한다. CLI 대화 본문은 가져오지 않는다. */
 export class TerminalWorkspace {
   private tabs = new Map<string, SavedTab>()
@@ -102,6 +106,8 @@ export class TerminalWorkspace {
   private codexFiles = new Map<string, { id: string; file: string }>()
   private captures = new Map<string, { since: number; requestId: string; promptHash: string; reader?: CodexCaptureReader }>()
   private readingCaptures = false
+  /** 보냈지만 에이전트가 받았다는 신호(작업 시작)를 아직 못 본 프롬프트 */
+  private pendingSubmits = new Map<string, { at: number; tries: number }>()
 
   constructor(private file: string, private ctx: Ctx, spawn: typeof import('node-pty').spawn, private events: TerminalEvents, private accounts: { quotaDir?: string; identify?: (kind: AgentProvider, home: string) => string } = {}) {
     this.manager = new TerminalManager(spawn, {
@@ -125,9 +131,14 @@ export class TerminalWorkspace {
               if (tab.kind === 'codex') {
                 const prefix = title.match(/\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{1,12})(?:\.\.\.|\s|$)/i)?.[1]
                 if (prefix && prefix !== tab.codexPrefix) { tab.codexPrefix = prefix; this.nextBind = 0; this.save() }
+                if (prefix && this.captures.has(id)) bindCaptureSession(this.integrationDir(id), prefix)
                 // Windows ConPTY도 전달하는 OSC 제목의 상태만 읽는다. 방 이름은 바꾸지 않는다.
                 const status = title.match(/(?:^|[|·]\s*)(Working|Thinking|Waiting|Ready)$/)?.[1]
                 if (status) {
+                  // 상태 제목은 입력창이 뜬 뒤에만 나온다 (시작 안내 창에서는 나오지 않는다)
+                  this.manager.markReady(id)
+                  if (status !== 'Ready') this.acceptSubmit(id)
+                  this.setWaiting(id, status === 'Waiting')
                   this.codexStatusTabs.add(id)
                   if (status === 'Ready') {
                     if (!this.captures.has(id) || this.readAgentOutput(id) !== undefined) this.finishActivity(tab)
@@ -178,6 +189,8 @@ export class TerminalWorkspace {
             // 완료 콜백이 다음 노드를 시작하면 이전 요청에서 읽은 나머지 신호는 폐기한다.
             if (this.captures.get(tab.id) !== capture) break
             if (signal === 'ready') this.manager.markReady(tab.id)
+            if (signal !== 'ready') this.acceptSubmit(tab.id)
+            if (signal !== 'ready') this.setWaiting(tab.id, signal === 'waiting')
             if (signal === 'working') this.setActivity(tab, 'working')
             if (signal === 'idle') {
               this.setActivity(tab, 'idle')
@@ -193,6 +206,7 @@ export class TerminalWorkspace {
           }
         }
       } catch (e) { this.events.onError?.(`세션 상태 저장 실패: ${String(e)}`) }
+      this.checkSubmits()
       void this.bindCodex().catch((e: unknown) => this.events.onError?.(`세션 ID 연결 실패: ${String(e)}`))
       void this.readCaptures().catch((e: unknown) => this.events.onError?.(`자동화 응답 확인 실패: ${String(e)}`))
     }, 500)
@@ -277,6 +291,8 @@ export class TerminalWorkspace {
   private launch(tab: SavedTab, settings: ProjectSettings, restoring: boolean, sequence = 0): void {
     this.codexFiles.delete(tab.id)
     this.captures.delete(tab.id)
+    this.pendingSubmits.delete(tab.id)
+    this.waiting.delete(tab.id)
     this.codexStatusTabs.delete(tab.id)
     this.shellPastes.delete(tab.id)
     this.commands.delete(tab.id)
@@ -303,7 +319,8 @@ export class TerminalWorkspace {
     if (command && tab.launch) command += resumeOptions(tab.launch.args, command).map((arg) => ` ${shellQuote(arg)}`).join('')
     // 공유 데몬의 환경·저장 위치가 다른 탭에 섞이지 않도록 각 TUI를 독립 실행한다.
     if (tab.kind === 'codex' && command && !/(^|\s)--no-daemon(?:\s|$)/.test(command)) command += ' --no-daemon'
-    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id','status']")} -c ${shellQuote(integration.codexNotify)} -c ${shellQuote(integration.codexMcp)}`
+    // 시작 업데이트 안내 창은 자동화 입력을 가로채 업데이트를 실행시킬 수 있어 Orbit이 띄우는 Codex에서는 끈다.
+    if (tab.kind === 'codex' && command) command += ` -c ${shellQuote("tui.terminal_title=['session-id','status']")} -c check_for_update_on_startup=false -c ${shellQuote(integration.codexNotify)} -c ${shellQuote(integration.codexMcp)}`
     // 그래프의 출력 구조는 orbit MCP 서버의 submit_output 도구로 받는다
     if (tab.kind === 'claude' && command) command += ` --settings ${shellQuote(integration.claudeSettings)} --mcp-config ${shellQuote(integration.claudeMcp)}`
     // 새 셸의 준비 상태가 기존 launch 인자를 지우지 않도록 시작 이벤트 전에는 비교만 한다.
@@ -311,7 +328,7 @@ export class TerminalWorkspace {
     tab.launch = readCliLaunch(this.integrationDir(tab.id))
     if (tab.launch && previousLaunch) tab.launch = { ...tab.launch, args: previousLaunch.args, home: previousLaunch.home }
     this.manager.create(tab.kind, cwd, tab.cols, tab.rows, settings, tab.sessionId, tab.title, {
-      id: tab.id, command: command ?? undefined, output: tab.output, sequence, init: integration.init, signals: tab.kind === 'claude' && !!command,
+      id: tab.id, command: command ?? undefined, output: tab.output, sequence, init: integration.init, signals: tab.kind !== 'shell' && !!command,
       unsetEnv: tab.accountId && !tab.accountId.startsWith('default-') ? ACCOUNT_CREDENTIAL_ENV : undefined,
       env: { ...integration.env, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: `orbit-${tab.id}`, ...(tab.kind !== 'shell' && (tab.accountHome || tab.launch?.home) ? { [tab.kind === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: home } : {}) }
     })
@@ -337,7 +354,37 @@ export class TerminalWorkspace {
     return tagged
   }
   readAgentOutput(id: string): string | undefined { return readAgentOutput(this.integrationDir(id)) }
-  endOutputCapture(id: string): void { this.captures.delete(id); endOutputCapture(this.integrationDir(id)) }
+  endOutputCapture(id: string): void { this.captures.delete(id); this.pendingSubmits.delete(id); endOutputCapture(this.integrationDir(id)) }
+
+  private acceptSubmit(id: string): void { this.pendingSubmits.delete(id) }
+
+  private waiting = new Set<string>()
+  private setWaiting(id: string, waiting: boolean): void {
+    if (this.waiting.has(id) === waiting) return
+    if (waiting) this.waiting.add(id)
+    else this.waiting.delete(id)
+    this.events.onAgentWaiting?.(id, waiting)
+  }
+
+  /**
+   * 붙여 넣은 프롬프트의 Enter가 입력창에 먹히지 않으면(긴 붙여넣기 처리 중 등) 응답이 영영 오지 않는다.
+   * 에이전트가 작업을 시작했다는 신호가 없으면 Enter만 다시 보낸다. 이미 받은 뒤라면 빈 입력이라 아무 일도 없다.
+   * 끝내 시작하지 않으면 무한히 기다리지 않고 실패로 알린다.
+   */
+  private checkSubmits(now = Date.now()): void {
+    for (const [id, pending] of this.pendingSubmits) {
+      const tab = this.tabs.get(id)
+      if (!tab || !this.manager.has(id) || tab.kind === 'shell') { this.pendingSubmits.delete(id); continue }
+      const elapsed = now - pending.at
+      if (pending.tries < SUBMIT_RETRIES && elapsed > SUBMIT_CHECK_MS * (pending.tries + 1)) {
+        pending.tries++
+        this.manager.write(id, tab.kind === 'codex' ? '\x05\r' : '\r')
+      } else if (pending.tries >= SUBMIT_RETRIES && elapsed > SUBMIT_CHECK_MS * (SUBMIT_RETRIES + 2)) {
+        this.pendingSubmits.delete(id)
+        this.events.onAgentError?.(id, '프롬프트를 보냈지만 에이전트가 작업을 시작하지 않았습니다. 터미널 입력창에 글이 남아 있거나 안내 화면이 떠 있는지 확인하세요')
+      }
+    }
+  }
 
   private async readCaptures(): Promise<void> {
     if (this.readingCaptures || this.stopped) return
@@ -351,6 +398,7 @@ export class TerminalWorkspace {
         for (const event of events) {
           if (this.stopped || this.captures.get(id) !== capture) break
           if (event.promptHash !== capture.promptHash || (event.requestId && event.requestId !== capture.requestId)) continue
+          this.acceptSubmit(id)
           if (event.activity === 'working') { this.setActivity(tab, 'working'); continue }
           if (!captureCodexResult(this.integrationDir(id), session.id, event.promptHash, event.at, { output: event.output, error: event.error }, event.requestId)) continue
           if (event.activity === 'idle') this.setActivity(tab, 'idle')
@@ -435,6 +483,8 @@ export class TerminalWorkspace {
   }
 
   private finishActivity(tab: SavedTab): void {
+    this.acceptSubmit(tab.id)
+    this.setWaiting(tab.id, false)
     if (tab.activity === 'working') this.setActivity(tab, 'completed')
   }
 
@@ -618,6 +668,7 @@ export class TerminalWorkspace {
   submit(id: string, text: string): void {
     const tab = this.tabs.get(id)
     this.manager.submit(id, text, tab?.kind)
+    if (tab && tab.kind !== 'shell') this.pendingSubmits.set(id, { at: Date.now(), tries: 0 })
     if (tab) this.setActivity(tab, 'working')
   }
   runCommand(id: string, command: string): void {

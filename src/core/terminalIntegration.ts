@@ -31,12 +31,16 @@ function save(state) {
   fs.renameSync(pending, file);
 }
 function promptHash(text) {
-  return require('node:crypto').createHash('sha256').update(text.replace(/\r\n?/g, '\n').replace(/\n\n<!-- orbit-request:[\w-]+ -->\s*$/, '').replace(/[\p{P}\p{S}]/gu, c => c.codePointAt(0) > 127 ? '' : c).trim()).digest('hex');
+  // capturePromptHash와 같아야 한다: 표식을 떼고 글자·숫자만 비교한다.
+  return require('node:crypto').createHash('sha256').update(text.replace(/<!-- orbit-request:[\w-]+ -->\s*$/, '').normalize('NFC').replace(/[^\p{L}\p{N}]/gu, '')).digest('hex');
 }
 function matchesRequest(text, capture) {
   if (typeof text !== 'string') return false;
+  // 요청 표식이 있으면 이번 요청의 것이어야 한다. 본문은 글자·숫자만 비교해 CLI의 공백·기호 변형은 허용하고,
+  // 제목 생성처럼 우리 프롬프트를 감싼 다른 요청은 거부한다.
   const marker = /<!-- orbit-request:([\w-]+) -->\s*$/.exec(text);
-  return (!marker || marker[1] === capture.requestId) && promptHash(text) === capture.promptHash;
+  if (marker && marker[1] !== capture.requestId) return false;
+  return promptHash(text) === capture.promptHash;
 }
 function matchesClaudeRequest(text, capture) {
   // Claude는 붙여넣은 탭을 공백 4칸으로 바꾼다. 원문과 그 변형만 허용한다.
@@ -62,6 +66,9 @@ function complete(event) {
   const sessionId = codex ? event['thread-id'] : event.session_id;
   const capture = captureRequest();
   const expectedSession = capture?.sessionId || state.sessionId;
+  // Codex는 숨은 제목 생성 스레드도 같은 notify로 agent-turn-complete를 보낸다 (openai/codex#43384).
+  // 어느 스레드가 이 탭의 대화인지 모를 때는 notify를 믿지 않고, 세션 파일 판독(codexCapture)으로 받는다.
+  if (codex && capture && !expectedSession && !capture.sessionPrefix) return;
   if (expectedSession && sessionId !== expectedSession) return;
   if (capture?.sessionPrefix && (typeof sessionId !== 'string' || !sessionId.startsWith(capture.sessionPrefix))) return;
   // 같은 notify를 물려받은 제목 생성·하위 에이전트·이전 요청의 응답은 수집하지 않는다.
@@ -76,12 +83,40 @@ function complete(event) {
     if (capture) {
       const target = path.join(dir, 'agent-output.json');
       const pending = target + '.' + process.pid + '.tmp';
-      const result = typeof output === 'string' && output.length <= 4 * 1024 * 1024
-        ? { output } : { error: '응답은 종료됐지만 최종 응답을 수집하지 못했습니다. CLI 출력을 확인하세요' };
+      // 도구 호출로 턴을 끝내면 마지막 글이 비어 있을 수 있다. 작업은 끝났으므로 빈 응답으로 받는다.
+      const result = typeof output !== 'string' ? { output: '' } : output.length <= 4 * 1024 * 1024
+        ? { output } : { error: '최종 응답이 너무 커서 수집하지 못했습니다. CLI 출력을 확인하세요' };
       fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, ...result }));
       fs.renameSync(pending, target);
     }
   } catch {}
+  fs.appendFileSync(path.join(dir, 'agent.done'), 'done\n');
+}
+// Claude가 도구 결과 뒤에 글 없이 멈추면 Stop 훅이 오지 않는다 (anthropics/claude-code#29881).
+// 입력을 오래 기다린다는 알림(idle_prompt)이 오면 턴은 끝난 것이므로, 대화 기록의 마지막 답으로 완료한다.
+function stalled(event) {
+  const state = read();
+  if (!state || !state.running || state.kind !== 'claude' || event.agent_id) return;
+  if (event.notification_type && event.notification_type !== 'idle_prompt') return;
+  const capture = captureRequest();
+  if (!capture || !capture.submitted || event.session_id !== capture.submitted) return;
+  const dir = path.dirname(file), target = path.join(dir, 'agent-output.json');
+  try { if (JSON.parse(fs.readFileSync(target, 'utf8')).requestId === capture.requestId) return; } catch {}
+  let output = '';
+  try {
+    const lines = fs.readFileSync(event.transcript_path, 'utf8').trim().split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let row; try { row = JSON.parse(lines[i]); } catch { continue; }
+      // 문자열 본문의 user 줄은 사용자가 보낸 프롬프트다 (도구 결과는 배열). 그 앞으로는 지난 턴이다.
+      if (row.type === 'user' && typeof row.message?.content === 'string') break;
+      if (row.type !== 'assistant' || !Array.isArray(row.message?.content)) continue;
+      const text = row.message.content.filter(c => c && c.type === 'text').map(c => c.text).join('');
+      if (text.trim()) { output = text; break; }
+    }
+  } catch {}
+  const pending = target + '.' + process.pid + '.tmp';
+  fs.writeFileSync(pending, JSON.stringify({ requestId: capture.requestId, output: output.slice(0, 4 * 1024 * 1024) }));
+  fs.renameSync(pending, target);
   fs.appendFileSync(path.join(dir, 'agent.done'), 'done\n');
 }
 const action = process.argv[2];
@@ -96,7 +131,7 @@ if (action === 'start') {
 } else if (action === 'stop') {
   const state = read();
   if (state) save({ ...state, running: false });
-} else if (action === 'hook' || action === 'prompt' || action === 'done' || action === 'notify') {
+} else if (action === 'hook' || action === 'prompt' || action === 'done' || action === 'notify' || action === 'stall') {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { if (input.length < 8 * 1024 * 1024) input += chunk; });
@@ -104,6 +139,7 @@ if (action === 'start') {
     try {
       const event = JSON.parse(input.replace(/^\uFEFF/, ''));
       if (action === 'done' || (action === 'notify' && event.type === 'agent-turn-complete')) { complete(event); return; }
+      if (action === 'stall') { stalled(event); return; }
       if (action === 'prompt') {
         const state = read(), capture = captureRequest();
         if (state?.kind !== 'claude' || !state.running || event.hook_event_name !== 'UserPromptSubmit' || event.agent_id) return;
@@ -367,13 +403,18 @@ end
 const slash = (p: string) => p.replace(/\\/g, '/')
 const signalFile = (dir: string, signal: AgentSignal) => path.join(dir, `agent.${signal}`)
 
-/** IN-F10: 입력 준비·작업 시작·응답 끝·중단 신호. */
-export type AgentSignal = 'ready' | 'working' | 'done' | 'idle'
-const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle']
+/** IN-F10: 입력 준비·작업 시작·응답 끝·중단·승인 대기 신호. */
+export type AgentSignal = 'ready' | 'working' | 'done' | 'idle' | 'waiting'
+const AGENT_SIGNALS: AgentSignal[] = ['ready', 'working', 'done', 'idle', 'waiting']
 
-/** Windows ConPTY가 누락시키는 비 ASCII 기호는 비교에서 제외한다. 요청 ID·세션과 나머지 본문은 함께 검증한다. */
+/**
+ * 같은 요청인지 볼 때 본문의 글자·숫자만 비교한다.
+ * CLI와 Windows ConPTY는 붙여넣은 글의 공백·탭·줄바꿈·기호·이모지를 바꾸거나 빠뜨린다 (탭 → 공백 4칸, 비 ASCII 기호 소실 등).
+ * 그런 변형마다 완료를 놓치지 않도록 내용 글자만 본다. 앞뒤에 다른 글이 붙으면(제목 생성 요청 등) 달라진다.
+ * 요청 ID 표식과 세션은 따로 검증한다.
+ */
 export function capturePromptHash(text: string): string {
-  return createHash('sha256').update(text.replace(/\r\n?/g, '\n').replace(/\n\n<!-- orbit-request:[\w-]+ -->\s*$/, '').replace(/[\p{P}\p{S}]/gu, (c) => c.codePointAt(0)! > 127 ? '' : c).trim()).digest('hex')
+  return createHash('sha256').update(text.replace(/<!-- orbit-request:[\w-]+ -->\s*$/, '').normalize('NFC').replace(/[^\p{L}\p{N}]/gu, '')).digest('hex')
 }
 
 /** 그래프가 요청한 한 응답만 수집한다. 일반 터미널 대화는 저장하지 않는다. */
@@ -381,12 +422,23 @@ export function capturePromptHash(text: string): string {
 export function beginOutputCapture(dir: string, prompt: string, sessionId?: string, sessionPrefix?: string, schema?: string, messages?: { root: string; nodeId: string }): string {
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8')) as { generation: string }
   endOutputCapture(dir)
-  for (const signal of ['working', 'done', 'idle'] as const) rmSync(signalFile(dir, signal), { force: true })
+  for (const signal of ['working', 'done', 'idle', 'waiting'] as const) rmSync(signalFile(dir, signal), { force: true })
   const promptHash = capturePromptHash(prompt)
   const claudePromptHash = prompt.includes('\t') ? capturePromptHash(prompt.replace(/\t/g, '    ')) : undefined
   const requestId = randomUUID()
   writeFileSync(path.join(dir, 'capture.json'), JSON.stringify({ generation: state.generation, requestId, promptHash, claudePromptHash, sessionId, sessionPrefix, startedAt: Date.now(), ...(schema ? { schema } : {}), ...(messages ? { messages } : {}) }))
   return `${prompt}\n\n<!-- orbit-request:${requestId} -->`
+}
+/** 새 Codex 탭은 첫 요청을 보낸 뒤에야 화면 제목으로 세션 ID 접두어를 알 수 있다. 알게 되면 진행 중인 수집에 넣어 다른 스레드의 완료를 거른다. */
+export function bindCaptureSession(dir: string, sessionPrefix: string): void {
+  try {
+    const file = path.join(dir, 'capture.json')
+    const capture = JSON.parse(readFileSync(file, 'utf8')) as { sessionId?: string; sessionPrefix?: string }
+    if (capture.sessionId || capture.sessionPrefix) return
+    const pending = `${file}.tmp`
+    writeFileSync(pending, JSON.stringify({ ...capture, sessionPrefix }))
+    renameSync(pending, file)
+  } catch { /* 수집 중이 아니면 할 일이 없다 */ }
 }
 export function readAgentError(dir: string): string | undefined {
   try {
@@ -487,7 +539,7 @@ export function prepareTerminalIntegration(dir: string, kind: TerminalKind, cwd:
   // echo ... >> "파일" 은 bash·cmd·PowerShell 어느 셸로 훅을 돌려도 동작한다
   const echo = (s: AgentSignal) => ({ type: 'command', command: `echo done >> "${slash(signalFile(dir, s))}"` })
   // 결과 제출 도구는 묻지 않고 쓰게 한다 (그래프 실행이 권한 확인에서 멈추지 않도록)
-  writeFileSync(settings, JSON.stringify({ permissions: { allow: [MCP_SUBMIT_TOOL, 'list_peers', 'send_message', 'receive_messages'].map(tool => `mcp__${MCP_SERVER_NAME}__${tool}`) }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], PostToolUse: [{ matcher: '.*', hooks: [messageHook] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
+  writeFileSync(settings, JSON.stringify({ permissions: { allow: [MCP_SUBMIT_TOOL, 'list_peers', 'send_message', 'receive_messages'].map(tool => `mcp__${MCP_SERVER_NAME}__${tool}`) }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('hook') }, echo('ready')] }], UserPromptSubmit: [{ hooks: [echo('working'), { type: 'command', command: hookCommand('prompt') }] }], PostToolUse: [{ matcher: '.*', hooks: [messageHook, echo('working')] }], Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [echo('waiting')] }, { matcher: 'idle_prompt', hooks: [{ type: 'command', command: hookCommand('stall') }] }], Stop: [{ hooks: [{ type: 'command', command: hookCommand('done') }] }], StopFailure: [{ hooks: [echo('idle')] }] } }))
   if (kind === 'claude' && quota) {
     const config = JSON.parse(readFileSync(settings, 'utf8'))
     config.statusLine = prepareQuotaCapture(dir, cwd, quota.home, quota.dir, hookCommand('', path.join(dir, 'quota-status.cjs')))

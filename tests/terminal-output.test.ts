@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { expect, it } from 'vitest'
-import { beginOutputCapture, endOutputCapture, freezeTerminalIntegration, prepareTerminalIntegration, readAgentError, readAgentOutput, takeAgentSignals } from '../src/core/terminalIntegration'
+import { beginOutputCapture, bindCaptureSession, endOutputCapture, freezeTerminalIntegration, prepareTerminalIntegration, readAgentError, readAgentOutput, takeAgentSignals } from '../src/core/terminalIntegration'
 import { tempDir } from './helpers'
 import { AGENT_PORT, expandPipeline, PipelineRunner, type Pipeline } from '../src/core/pipeline'
 
@@ -135,6 +135,49 @@ it.each(['claude', 'codex'] as const)('%s는 Windows에서 기호가 소실돼�
   expect(readAgentOutput(dir)).toBe('둘째 결과')
   const third = beginOutputCapture(dir, prompt, sessionId)
   send(third)
-  expect(readAgentError(dir)).toContain('최종 응답')
+  // 마지막 글이 없어도 턴은 끝났다: 실패가 아니라 빈 응답이다.
+  expect(readAgentError(dir)).toBeUndefined()
+  expect(readAgentOutput(dir)).toBe('')
   expect(takeAgentSignals(dir)).toEqual(['done'])
+})
+
+it('Claude가 도구 결과 뒤 글 없이 멈춰 Stop이 없어도, 입력 대기 알림이 오면 이번 턴의 마지막 답으로 완료한다', async () => {
+  const dir = await tempDir('orbit-claude-stall-'), sessionId = '11111111-2222-3333-4444-555555555555'
+  const integration = prepareTerminalIntegration(dir, 'claude', dir)
+  const settings = JSON.parse(await fs.readFile(integration.claudeSettings, 'utf8'))
+  expect(settings.hooks.Notification.map((h: { matcher: string }) => h.matcher)).toContain('idle_prompt')
+  const send = (action: string, event: Record<string, unknown>) => execFileSync(process.execPath, [integration.env.ORBIT_BRIDGE, action], { env: { ...process.env, ...integration.env }, input: JSON.stringify(event) })
+  const transcript = path.join(dir, 'transcript.jsonl')
+  const line = (row: object) => JSON.stringify(row) + '\n'
+  await fs.writeFile(transcript, line({ type: 'user', message: { role: 'user', content: 'OLD_PROMPT' } }) + line({ type: 'assistant', message: { content: [{ type: 'text', text: 'OLD_ANSWER' }] } }))
+  const prompt = beginOutputCapture(dir, 'NEW_PROMPT', sessionId)
+  const idle = { hook_event_name: 'Notification', notification_type: 'idle_prompt', session_id: sessionId, transcript_path: transcript }
+  send('stall', idle)
+  expect(readAgentOutput(dir)).toBeUndefined()
+  send('prompt', { hook_event_name: 'UserPromptSubmit', session_id: sessionId, prompt })
+  await fs.appendFile(transcript, line({ type: 'user', message: { role: 'user', content: prompt } }) + line({ type: 'assistant', message: { content: [{ type: 'text', text: 'NEW_ANSWER' }, { type: 'tool_use', id: 't', name: 'Read', input: {} }] } }) + line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'file' }] } }))
+  send('stall', { ...idle, notification_type: 'permission_prompt' })
+  send('stall', { ...idle, session_id: 'other' })
+  expect(readAgentOutput(dir)).toBeUndefined()
+  send('stall', idle)
+  expect(takeAgentSignals(dir)).toEqual(['done'])
+  expect(readAgentOutput(dir)).toBe('NEW_ANSWER')
+  send('done', { hook_event_name: 'Stop', session_id: sessionId, last_assistant_message: 'STOP_ANSWER' })
+  takeAgentSignals(dir)
+  send('stall', idle)
+  expect(takeAgentSignals(dir)).toEqual([])
+})
+
+it('새 Codex 탭에서 세션을 모를 때는 제목 생성 스레드의 notify를 받지 않고, 접두어를 알면 그 세션만 받는다', async () => {
+  const dir = await tempDir('orbit-codex-title-thread-'), integration = prepareTerminalIntegration(dir, 'codex', dir)
+  const prompt = beginOutputCapture(dir, 'TASK')
+  const notify = (thread: string, output: string) => execFileSync(process.execPath, [integration.env.ORBIT_BRIDGE, 'notify'], { env: { ...process.env, ...integration.env }, input: JSON.stringify({ type: 'agent-turn-complete', 'thread-id': thread, 'input-messages': [prompt], 'last-assistant-message': output }) })
+  notify('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', '{"title":"TITLE"}')
+  expect(readAgentOutput(dir)).toBeUndefined()
+  expect(takeAgentSignals(dir)).toEqual([])
+  bindCaptureSession(dir, '11111111-2222-3333-4444-5555555')
+  notify('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', '{"title":"TITLE"}')
+  expect(readAgentOutput(dir)).toBeUndefined()
+  notify('11111111-2222-3333-4444-555555555555', 'REAL')
+  expect(readAgentOutput(dir)).toBe('REAL')
 })

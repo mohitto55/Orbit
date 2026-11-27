@@ -65,8 +65,8 @@ export class CodexCaptureReader {
               const output = p.last_agent_message
               events.push({ at, promptHash: this.promptHash, requestId: this.requestId, activity: p.type === 'task_complete' ? 'completed' : 'idle',
                 ...(p.type === 'turn_aborted' ? { error: '터미널에서 작업이 취소되었습니다' }
-                  : typeof output === 'string' && output.length <= 4 * 1024 * 1024 ? { output }
-                    : { error: '응답은 종료됐지만 최종 응답을 수집하지 못했습니다. CLI 출력을 확인하세요' }) })
+                  : typeof output !== 'string' ? { output: '' } : output.length <= 4 * 1024 * 1024 ? { output }
+                    : { error: '최종 응답이 너무 커서 수집하지 못했습니다. CLI 출력을 확인하세요' }) })
               this.turn = this.promptHash = this.requestId = undefined
             }
           }

@@ -80,6 +80,7 @@ export function createApi(deps: ApiDeps) {
         onError: (message) => deps.send('term-error', message),
         onAgentDone: (id) => pipes.agentDone(id),
         onAgentError: (id, message) => pipes.terminalFailed(id, message),
+        onAgentWaiting: (id, waiting) => pipes.agentWaiting(id, waiting),
         onCommandDone: (id, code, output) => pipes.commandDone(id, code, output)
       }, { quotaDir: accounts.quotaDir, identify: (kind, home) => accounts.identify(kind, home) })
       terminals = workspace

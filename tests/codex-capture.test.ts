@@ -37,7 +37,7 @@ it('notify가 없어도 요청 뒤에 확정된 같은 턴만 읽고 한글이 �
   expect(await reader.read()).toEqual([])
 })
 
-it('중단된 턴과 본문 없는 완료는 오류로 마감하고 도구 출력이나 중간 답변으로 완료하지 않는다', async () => {
+it('중단된 턴은 오류로, 본문 없는 완료는 빈 응답으로 마감하고 도구 출력이나 중간 답변으로 완료하지 않는다', async () => {
   const dir = await tempDir('orbit-codex-abort-'), file = path.join(dir, 'session.jsonl'), at = Date.now()
   const reader = new CodexCaptureReader(file, at)
   await fs.writeFile(file, started(at, 'one') + input(at, '첫 요청') + row(at, 'event_msg', { type: 'agent_message', message: '진행 중' }))
@@ -45,5 +45,6 @@ it('중단된 턴과 본문 없는 완료는 오류로 마감하고 도구 출�
   await fs.appendFile(file, row(at + 1, 'event_msg', { type: 'turn_aborted', turn_id: 'one' }))
   expect(await reader.read()).toMatchObject([{ activity: 'idle', error: expect.stringContaining('취소') }])
   await fs.appendFile(file, started(at + 2, 'two') + input(at + 3, '둘째 요청') + row(at + 4, 'event_msg', { type: 'task_complete', turn_id: 'two', last_agent_message: null }))
-  expect(await reader.read()).toMatchObject([{ activity: 'working' }, { activity: 'completed', error: expect.stringContaining('최종 응답') }])
+  // 도구 호출로 턴을 끝내면 마지막 글이 없을 수 있다. 작업은 끝났으므로 빈 응답으로 받는다.
+  expect(await reader.read()).toMatchObject([{ activity: 'working' }, { activity: 'completed', output: '' }])
 })
