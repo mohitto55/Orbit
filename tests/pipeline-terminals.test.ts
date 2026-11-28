@@ -96,6 +96,17 @@ describe('작업 그래프 터미널 입출력', () => {
     expect(pipelineProblems(caller, { library: [saved] }).join('\n')).toContain('Model ID')
   })
 
+  it('같은 글이 여러 선으로 들어오면 프롬프트에 한 번만 넣는다 (긴 글이 다른 입력 안에 통째로 들어 있어도)', () => {
+    const task = '할 일 T-1: 검수\n\n' + '이전 검수 이력 '.repeat(40).trim()
+    const p = graph()
+    p.nodes.push(node('dup', 'text', { text: task }), node('again', 'text', { text: task }), node('wrap', 'text', { text: `추가 지시사항\n\n${task}` }))
+    p.edges.push(wire('dup', 'work'), wire('again', 'work'), wire('wrap', 'work'))
+    expect(nodeInput(p, 'work')).toBe(`첫 작업\n\n연결한 글\n\n추가 지시사항\n\n${task}`)
+    p.nodes.push(node('short', 'text', { text: '연결한 글' }))
+    p.edges.push(wire('short', 'work'))
+    expect(nodeInput(p, 'work').split('연결한 글').length).toBe(2)
+  })
+
   it.each(['claude', 'codex'] as const)('[DM-F02-AC15] %s의 터미널 입력은 새 탭·세션·이어서 설정보다 우선하며 프롬프트에 섞이지 않는다', (kind) => {
     const p = graph(kind), h = runnerHarness([tab(kind)])
     expect(pipelineProblems(p, { terminals: [tab(kind)] })).toEqual([])

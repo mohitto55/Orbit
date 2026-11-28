@@ -84,6 +84,14 @@ async function findCodexSessionFile(projectDir: string, tabId: string, root = pr
 /** 프롬프트를 보낸 뒤 작업 시작 신호를 기다리는 간격과 Enter 재전송 횟수 */
 const SUBMIT_CHECK_MS = 4000
 const SUBMIT_RETRIES = 3
+/** 화면이 이만큼 멈춰 있어야 Enter를 다시 보낸다 */
+const SUBMIT_QUIET_MS = 2000
+/** 실패로 닫기 전에 화면이 멈춰 있어야 하는 시간 */
+const SUBMIT_FAIL_QUIET_MS = 15_000
+/** 시작 신호를 기다리는 최대 시간: 기본 60초 + 1KB당 1초, 최대 15분 */
+export function submitDeadline(size: number): number {
+  return Math.min(15 * 60_000, 60_000 + Math.ceil(size / 1000) * 1000)
+}
 /** Claude 제목이 턴 끝으로 바뀐 뒤 Stop 훅 결과를 기다리는 시간 */
 const CLAUDE_STOP_GRACE_MS = 8000
 
@@ -111,7 +119,9 @@ export class TerminalWorkspace {
   /** Claude 제목이 턴 끝(✳)으로 바뀐 시각. 다시 일하면 지운다. */
   private claudeIdleAt = new Map<string, number>()
   /** 보냈지만 에이전트가 받았다는 신호(작업 시작)를 아직 못 본 프롬프트 */
-  private pendingSubmits = new Map<string, { at: number; tries: number }>()
+  private pendingSubmits = new Map<string, { at: number; tries: number; size: number }>()
+  /** 탭에 마지막으로 출력이 온 시각. 긴 붙여넣기를 처리하는 동안은 화면이 계속 바뀐다. */
+  private lastDataAt = new Map<string, number>()
 
   constructor(private file: string, private ctx: Ctx, spawn: typeof import('node-pty').spawn, private events: TerminalEvents, private accounts: { quotaDir?: string; identify?: (kind: AgentProvider, home: string) => string } = {}) {
     this.manager = new TerminalManager(spawn, {
@@ -119,6 +129,7 @@ export class TerminalWorkspace {
         const tab = this.tabs.get(id)
         if (!tab) return
         tab.output = (tab.output + data).slice(-200000)
+        this.lastDataAt.set(id, Date.now())
         const titles = (this.titleBuffers.get(id) ?? '') + data
         const matches = [...titles.matchAll(/\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)/g)]
         // 완성된 제목은 한 번만 처리한다. 다음 출력에서 이전 작업 상태가 재생되면 안 된다.
@@ -303,6 +314,7 @@ export class TerminalWorkspace {
     this.codexFiles.delete(tab.id)
     this.captures.delete(tab.id)
     this.pendingSubmits.delete(tab.id)
+    this.lastDataAt.delete(tab.id)
     this.claudeIdleAt.delete(tab.id)
     this.waiting.delete(tab.id)
     this.codexStatusTabs.delete(tab.id)
@@ -400,16 +412,21 @@ export class TerminalWorkspace {
    * 붙여 넣은 프롬프트의 Enter가 입력창에 먹히지 않으면(긴 붙여넣기 처리 중 등) 응답이 영영 오지 않는다.
    * 에이전트가 작업을 시작했다는 신호가 없으면 Enter만 다시 보낸다. 이미 받은 뒤라면 빈 입력이라 아무 일도 없다.
    * 끝내 시작하지 않으면 무한히 기다리지 않고 실패로 알린다.
+   * 수백 KB 프롬프트는 CLI가 붙여넣기를 처리하는 데만 1~2분이 걸린다(실제 320KB가 약 2분).
+   * 그래서 화면이 아직 바뀌는 동안에는 Enter를 다시 보내지도, 실패로 닫지도 않고,
+   * 실패까지 기다리는 시간도 프롬프트 길이에 맞춰 늘린다.
    */
   private checkSubmits(now = Date.now()): void {
     for (const [id, pending] of this.pendingSubmits) {
       const tab = this.tabs.get(id)
       if (!tab || !this.manager.has(id) || tab.kind === 'shell') { this.pendingSubmits.delete(id); continue }
       const elapsed = now - pending.at
+      const quiet = now - Math.max(pending.at, this.lastDataAt.get(id) ?? 0)
+      if (quiet < SUBMIT_QUIET_MS) continue
       if (pending.tries < SUBMIT_RETRIES && elapsed > SUBMIT_CHECK_MS * (pending.tries + 1)) {
         pending.tries++
         this.manager.write(id, tab.kind === 'codex' ? '\x05\r' : '\r')
-      } else if (pending.tries >= SUBMIT_RETRIES && elapsed > SUBMIT_CHECK_MS * (SUBMIT_RETRIES + 2)) {
+      } else if (pending.tries >= SUBMIT_RETRIES && elapsed > submitDeadline(pending.size) && quiet >= SUBMIT_FAIL_QUIET_MS) {
         this.pendingSubmits.delete(id)
         this.events.onAgentError?.(id, '프롬프트를 보냈지만 에이전트가 작업을 시작하지 않았습니다. 터미널 입력창에 글이 남아 있거나 안내 화면이 떠 있는지 확인하세요')
       }
@@ -698,7 +715,7 @@ export class TerminalWorkspace {
   submit(id: string, text: string): void {
     const tab = this.tabs.get(id)
     this.manager.submit(id, text, tab?.kind)
-    if (tab && tab.kind !== 'shell') this.pendingSubmits.set(id, { at: Date.now(), tries: 0 })
+    if (tab && tab.kind !== 'shell') this.pendingSubmits.set(id, { at: Date.now(), tries: 0, size: text.length })
     // 보내기 전의 턴 끝 제목(시작 화면 등)으로 이번 요청을 마감하지 않는다. 일을 시작한 뒤 다시 ✳가 와야 한다.
     this.claudeIdleAt.delete(id)
     if (tab) this.setActivity(tab, 'working')

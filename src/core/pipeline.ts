@@ -701,6 +701,8 @@ export function nodeInput(p: Graph, id: string, env: Env = {}): string {
   return [resolveInputs(n.text, p, env), ...incomingData(p, id).filter((e) => !['terminal', 'schema'].includes(edgeShape(p, e, env)) && e.toPort !== AGENT_PORT.terminal && e.toPort !== AGENT_PORT.schema).map((e) => edgeItems(p, e, env).join('\n\n'))]
     .map((t) => t.trim())
     .filter(Boolean)
+    // 같은 글이 여러 선으로 들어오면(예: 같은 Task를 두 입력에 연결) 프롬프트가 두 배로 커진다. 한 번만 넣는다.
+    .filter((t, i, all) => all.indexOf(t) === i && !(t.length >= 200 && all.some((o, j) => j !== i && o.length > t.length && o.includes(t))))
     .join('\n\n')
 }
 

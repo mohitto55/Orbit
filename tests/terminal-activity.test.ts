@@ -238,10 +238,33 @@ it('보낸 프롬프트의 작업 시작 신호가 없으면 Enter만 다시 보
   workspace.submit(stuck.id, 'PROMPT')
   await vi.advanceTimersByTimeAsync(19000)
   expect(vi.mocked(ptys[1].write).mock.calls.filter(([data]: unknown[]) => data === '\x05\r').length).toBe(4)
+  await vi.advanceTimersByTimeAsync(40000)
   expect(events.onAgentError).not.toHaveBeenCalled()
-  await vi.advanceTimersByTimeAsync(2000)
+  await vi.advanceTimersByTimeAsync(3000)
   expect(events.onAgentError).toHaveBeenCalledWith(stuck.id, expect.stringContaining('작업을 시작하지 않았습니다'))
 })
+
+it('수백 KB 프롬프트는 CLI가 붙여넣기를 처리하는 동안(화면이 바뀌는 동안) 실패로 닫지 않고 Enter도 다시 보내지 않는다', async () => {
+  const { workspace, settings, ptys, events } = await setup()
+  const codex = workspace.create('codex', settings)
+  const enters = () => vi.mocked(ptys[0].write).mock.calls.filter(([data]: unknown[]) => data === '\x05\r').length
+  workspace.submit(codex.id, 'x'.repeat(320_000))
+  await vi.advanceTimersByTimeAsync(500)
+  const first = enters()
+  // 실제 사례: 320KB 프롬프트를 보낸 뒤 약 2분 동안 붙여넣기를 처리하며 화면을 그렸다
+  for (let t = 0; t < 120_000; t += 1500) {
+    ptys[0].emit('\x1b[2K pasting')
+    await vi.advanceTimersByTimeAsync(1500)
+  }
+  expect(enters()).toBe(first)
+  expect(events.onAgentError).not.toHaveBeenCalled()
+  // 화면이 멈춘 뒤에도 프롬프트 길이에 맞춘 시간(60초 + 1KB당 1초)까지는 기다린다
+  await vi.advanceTimersByTimeAsync(200_000)
+  expect(events.onAgentError).not.toHaveBeenCalled()
+  ptys[0].emit('\x1b]0;Working\x07')
+  await vi.advanceTimersByTimeAsync(100_000)
+  expect(events.onAgentError).not.toHaveBeenCalled()
+}, 30_000)
 
 it('Claude 승인 알림과 Codex Waiting 제목을 승인 대기로 알리고, 다시 일하면 해제한다', async () => {
   const { workspace, settings, ptys, signal, events } = await setup()
